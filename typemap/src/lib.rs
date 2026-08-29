@@ -74,6 +74,14 @@ impl<T: ?Sized + DynTrait> TypeMap<T> {
         self.values.insert(type_id, value)
     }
 
+    pub fn upsert<U: Any>(&mut self, value: Box<U>) -> &mut U
+        where T: DynTraitFrom<U>,
+    {
+        let type_id = TypeId::of::<U>();
+        let boxed = self.values.entry(type_id).insert_entry(T::dyn_trait_from_box(value)).into_mut();
+        T::as_dyn_any_mut(boxed).downcast_mut().expect("matching type id")
+    }
+
     pub fn has<U: Any>(&self) -> bool {
         self.values.contains_key(&TypeId::of::<U>())
     }

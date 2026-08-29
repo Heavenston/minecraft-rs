@@ -38,9 +38,12 @@ impl Renderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
+                required_features: wgpu::Features::IMMEDIATES,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                required_limits: wgpu::Limits::default(),
+                required_limits: wgpu::Limits {
+                    max_immediate_size: 128,
+                    ..wgpu::Limits::default()
+                },
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
             })
@@ -127,7 +130,7 @@ impl Renderer {
         });
         
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -148,6 +151,9 @@ impl Renderer {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
+            for mut middleware in world.iter_middlewares_in_order(crate::RenderStage::Background) {
+                middleware.render(&mut render_pass);
+            }
         }
 
         // submit will accept anything that implements IntoIter

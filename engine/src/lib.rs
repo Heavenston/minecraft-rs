@@ -6,3 +6,4 @@ mod render_world;
 pub use render_world::*;
 mod inputs_state;
 pub use inputs_state::*;
+pub mod render_middlewares;

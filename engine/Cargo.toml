@@ -8,5 +8,9 @@ wgpu = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 winit = { workspace = true }
-glam = { workspace = true }
+glam = { workspace = true, features = ["bytemuck"] }
+typemap = { workspace = true }
 pollster = "1.0.1"
+itertools = "0.15.0"
+bytemuck = "1.25.2"
+parking_lot = "0.12.5"
