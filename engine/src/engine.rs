@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use winit::{application::ApplicationHandler, event::{KeyEvent, WindowEvent}, event_loop::{ActiveEventLoop, OwnedDisplayHandle}, keyboard::{KeyCode, PhysicalKey}, window::Window};
 
-use crate::Renderer;
+use crate::{InputsState, RenderWorld, Renderer};
 
 pub struct State {
     renderer: Renderer,
@@ -26,25 +26,40 @@ impl State {
     }
 }
 
-pub struct Engine {
+pub struct Ctx<'a> {
+    pub inputs_state: &'a mut InputsState,
+    pub render_world: &'a mut RenderWorld,
+}
+
+pub trait App: 'static {
+    fn update(&mut self, ctx: Ctx<'_>) -> Result<()>;
+}
+
+pub struct Engine<A> {
     #[cfg(target_arch = "wasm32")]
     proxy: Option<winit::event_loop::EventLoopProxy<State>>,
     state: Option<State>,
+    render_world: RenderWorld,
+    inputs_state: InputsState,
+    app: A,
 }
 
-impl Engine {
-    pub fn new(#[cfg(target_arch = "wasm32")] event_loop: &EventLoop<State>) -> Self {
+impl<A: App> Engine<A> {
+    pub fn new(app: A, #[cfg(target_arch = "wasm32")] event_loop: &EventLoop<State>) -> Self {
         #[cfg(target_arch = "wasm32")]
         let proxy = Some(event_loop.create_proxy());
         Self {
             state: None,
             #[cfg(target_arch = "wasm32")]
             proxy,
+            render_world: RenderWorld::default(),
+            inputs_state: InputsState::new(),
+            app,
         }
     }
 }
 
-impl ApplicationHandler<State> for Engine {
+impl<A: App> ApplicationHandler<State> for Engine<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         #[allow(unused_mut)]
         let mut window_attributes = Window::default_attributes();
@@ -119,6 +134,18 @@ impl ApplicationHandler<State> for Engine {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
+                match self.app.update(Ctx {
+                    inputs_state: &mut self.inputs_state,
+                    render_world: &mut self.render_world,
+                }) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        // Log the error and exit gracefully
+                        tracing::error!("{e}");
+                        event_loop.exit();
+                    }
+                }
+                self.inputs_state.clear_just_pressed_keys();
                 match state.render() {
                     Ok(_) => {}
                     Err(e) => {
@@ -133,12 +160,15 @@ impl ApplicationHandler<State> for Engine {
                     KeyEvent {
                         physical_key: PhysicalKey::Code(code),
                         state: key_state,
+                        repeat: false,
                         ..
                     },
                 ..
             } => match (code, key_state.is_pressed()) {
                 (KeyCode::Escape, true) => event_loop.exit(),
-                _ => {}
+                _ => {
+                    self.inputs_state.register_key_event(code, key_state.is_pressed());
+                }
             },
             _ => {}
         }
