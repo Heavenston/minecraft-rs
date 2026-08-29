@@ -1,9 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["engine", "game"]
+members = ["engine", "game", "typemap"]
 
 [workspace.dependencies]
 engine = { path = "./engine" }
+typemap = { path = "./typemap" }
 anyhow = "1.0.104"
 wgpu = "30.0.1"
 tracing = "0.1.44"
