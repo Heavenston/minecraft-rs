@@ -5,3 +5,8 @@ edition = "2024"
 
 [dependencies]
 engine = { workspace = true }
+anyhow = { workspace = true }
+winit = { workspace = true }
+tokio = { version = "1.53.1", features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = "0.3.23"
