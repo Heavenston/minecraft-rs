@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::RenderWorld;
+
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -75,6 +77,10 @@ impl Renderer {
         })
     }
 
+    pub(crate) fn create_world(&self) -> RenderWorld {
+        RenderWorld::new(self.device.clone(), self.queue.clone())
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.surface_config.width = width;
@@ -84,7 +90,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self) -> anyhow::Result<()> {
+    pub fn render(&mut self, world: &RenderWorld) -> anyhow::Result<()> {
         self.window.request_redraw();
 
         // We can't render unless the surface is configured

@@ -7,13 +7,16 @@ use crate::{InputsState, RenderWorld, Renderer};
 
 pub struct State {
     renderer: Renderer,
+    render_world: RenderWorld,
 }
 
 impl State {
     async fn new(display_handle: OwnedDisplayHandle, window: Arc<Window>) -> Result<Self> {
         let renderer = Renderer::new(display_handle, window).await?;
+        let render_world = renderer.create_world();
         Ok(Self {
             renderer,
+            render_world,
         })
     }
 
@@ -22,7 +25,7 @@ impl State {
     }
 
     fn render(&mut self) -> Result<()> {
-        self.renderer.render()
+        self.renderer.render(&self.render_world)
     }
 }
 
@@ -32,14 +35,21 @@ pub struct Ctx<'a> {
 }
 
 pub trait App: 'static {
-    fn update(&mut self, ctx: Ctx<'_>) -> Result<()>;
+    fn resume(&mut self, render_world: &mut RenderWorld) -> Result<()> {
+        let _ = render_world;
+        Ok(())
+    }
+
+    fn update(&mut self, ctx: Ctx<'_>) -> Result<()> {
+        let _ = ctx;
+        Ok(())
+    }
 }
 
 pub struct Engine<A> {
     #[cfg(target_arch = "wasm32")]
     proxy: Option<winit::event_loop::EventLoopProxy<State>>,
     state: Option<State>,
-    render_world: RenderWorld,
     inputs_state: InputsState,
     app: A,
 }
@@ -52,7 +62,6 @@ impl<A: App> Engine<A> {
             state: None,
             #[cfg(target_arch = "wasm32")]
             proxy,
-            render_world: RenderWorld::default(),
             inputs_state: InputsState::new(),
             app,
         }
@@ -82,9 +91,9 @@ impl<A: App> ApplicationHandler<State> for Engine<A> {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // If we are not on web we can use pollster to
-            // await the window creation
-            self.state = Some(pollster::block_on(State::new(event_loop.owned_display_handle(), window)).unwrap());
+            let mut state = pollster::block_on(State::new(event_loop.owned_display_handle(), window)).unwrap();
+            self.app.resume(&mut state.render_world).unwrap();
+            self.state = Some(state);
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -116,6 +125,7 @@ impl<A: App> ApplicationHandler<State> for Engine<A> {
                 event.window.inner_size().height,
             );
         }
+        self.app.resume(&mut event.render_world).unwrap();
         self.state = Some(event);
     }
 
@@ -136,7 +146,7 @@ impl<A: App> ApplicationHandler<State> for Engine<A> {
             WindowEvent::RedrawRequested => {
                 match self.app.update(Ctx {
                     inputs_state: &mut self.inputs_state,
-                    render_world: &mut self.render_world,
+                    render_world: &mut state.render_world,
                 }) {
                     Ok(_) => {}
                     Err(e) => {

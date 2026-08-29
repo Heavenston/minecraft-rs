@@ -7,6 +7,11 @@ struct App {
 }
 
 impl engine::App for App {
+    fn resume(&mut self, render_world: &mut engine::RenderWorld) -> Result<()> {
+        
+        Ok(())
+    }
+
     fn update(&mut self, ctx: engine::Ctx<'_>) -> Result<()> {
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyW) {
             info!("Key W just pressed");

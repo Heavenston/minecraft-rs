@@ -382,6 +382,7 @@ name = "engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "glam",
  "pollster",
  "tracing",
  "wgpu",
@@ -473,6 +474,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "engine",
+ "glam",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -522,6 +524,12 @@ dependencies = [
  "log",
  "xml-rs",
 ]
+
+[[package]]
+name = "glam"
+version = "0.33.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21fef0953c54fd3de2f44b743fbf77e044c81a25faee03636dfccc0d35135e23"
 
 [[package]]
 name = "glow"

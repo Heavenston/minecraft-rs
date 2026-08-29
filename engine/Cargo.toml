@@ -8,4 +8,5 @@ wgpu = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 winit = { workspace = true }
+glam = { workspace = true }
 pollster = "1.0.1"
