@@ -22,6 +22,9 @@ impl State {
 
     fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
+        if width != 0 && height != 0 {
+            self.render_world.set_render_target_size((width, height));
+        }
     }
 
     fn render(&mut self) -> Result<()> {

@@ -5,6 +5,7 @@ use typemap::TypeMap;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RenderStage {
+    None,
     Background,
     Content3D,
     Content2D,
@@ -17,7 +18,7 @@ pub trait ContructibleMiddleware {
 
 pub trait RenderMiddleware: std::any::Any {
     fn prepare(&mut self, world: &RenderWorld) { let _ = world; }
-    fn render(&mut self, render_pass: &mut wgpu::RenderPass<'_>);
+    fn render(&mut self, render_pass: &mut wgpu::RenderPass<'_>) { let _ = render_pass; }
 }
 
 trait RwLockedMiddleware: std::any::Any {
@@ -44,16 +45,24 @@ pub struct RenderWorld {
     recursive_use_middleware: HashSet<TypeId>,
     middlewares: TypeMap<dyn RwLockedMiddleware>,
     middlewares_order: Vec<(RenderStage, TypeId)>,
+
+    surface_format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
 }
 
 impl RenderWorld {
-    pub(crate) fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
+    pub(crate) fn new(device: wgpu::Device, queue: wgpu::Queue, surface_format: wgpu::TextureFormat) -> Self {
         Self {
             device,
             queue,
             recursive_use_middleware: HashSet::new(),
             middlewares: TypeMap::new(),
             middlewares_order: vec![],
+
+            surface_format,
+            width: 0,
+            height: 0,
         }
     }
 
@@ -63,6 +72,19 @@ impl RenderWorld {
 
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue
+    }
+
+    pub fn render_target_format(&self) -> wgpu::TextureFormat {
+        self.surface_format
+    }
+
+    pub(crate) fn set_render_target_size(&mut self, (width, height): (u32, u32)) {
+        self.width = width;
+        self.height = height;
+    }
+
+    pub fn render_target_size(&self) -> (u32, u32) {
+        (self.width, self.height)
     }
 
     fn register_middleware_stage(middlewares_order: &mut Vec<(RenderStage, TypeId)>, stage: RenderStage, tid: TypeId) {

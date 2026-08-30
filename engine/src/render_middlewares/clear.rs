@@ -43,7 +43,7 @@ impl ContructibleMiddleware for Clear {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[
                     Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                        format: world.render_target_format(),
                         blend: None,
                         write_mask: wgpu::ColorWrites::all(),
                     })

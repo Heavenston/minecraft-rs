@@ -81,7 +81,7 @@ impl Renderer {
     }
 
     pub(crate) fn create_world(&self) -> RenderWorld {
-        RenderWorld::new(self.device.clone(), self.queue.clone())
+        RenderWorld::new(self.device.clone(), self.queue.clone(), self.surface_config.format)
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
