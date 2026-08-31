@@ -319,7 +319,14 @@ impl RenderGraph {
             None => {
                 let steps = match self.construct_steps() {
                     Ok(steps) => steps,
-                    Err(e) => panic!("{e:#?}"),
+                    Err(e) => {
+                        if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
+                            std::fs::write(path, format!("{self}")).unwrap();
+                            tracing::error!(output = path, errors = %e.iter().join(", "), "Errors while validating graph, written dot version in given path");
+                        }
+
+                        panic!("{e:#?}")
+                    },
                 };
                 if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
                     self.steps = Some(steps);
