@@ -7,7 +7,6 @@ edition.workspace = true
 [dependencies]
 engine = { workspace = true }
 anyhow = { workspace = true }
-winit = { workspace = true }
 glam = { workspace = true }
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = { workspace = true }

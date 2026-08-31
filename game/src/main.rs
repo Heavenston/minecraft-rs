@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use anyhow::Result;
-use winit::event_loop::EventLoop;
 use tracing::info;
 
 mod chunk;
@@ -38,8 +37,5 @@ impl engine::App for App {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    let event_loop = EventLoop::with_user_event().build()?;
-    let mut engine = engine::Engine::new(App {});
-    event_loop.run_app(&mut engine)?;
-    Ok(())
+    engine::start(App { })
 }
