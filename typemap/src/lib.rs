@@ -82,8 +82,12 @@ impl<T: ?Sized + DynTrait> TypeMap<T> {
         T::as_dyn_any_mut(boxed).downcast_mut().expect("matching type id")
     }
 
+    pub fn has_any(&self, id: TypeId) -> bool {
+        self.values.contains_key(&id)
+    }
+
     pub fn has<U: Any>(&self) -> bool {
-        self.values.contains_key(&TypeId::of::<U>())
+        self.has_any(TypeId::of::<U>())
     }
 
     pub fn get_dyn(&self, type_id: TypeId) -> Option<&T> {

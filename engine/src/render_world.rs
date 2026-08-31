@@ -1,3 +1,5 @@
+pub mod graph;
+
 use std::{any::TypeId, collections::HashSet};
 
 use parking_lot::{MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
