@@ -1,8 +1,20 @@
-use std::sync::Arc;
-
-use anyhow::Result;
+mod graph_nodes;
 
 use crate::RenderWorld;
+
+use std::sync::Arc;
+use anyhow::Result;
+
+pub mod resources {
+    use crate::graph_resource;
+    graph_resource!(pub struct Device(pub wgpu::Device));
+    graph_resource!(pub struct Queue(pub wgpu::Queue));
+    graph_resource!(pub struct SurfaceTexture(pub wgpu::SurfaceTexture));
+    graph_resource!(pub struct SurfaceTextureView(pub wgpu::TextureView));
+    graph_resource!(pub struct FrameCommandEncoder(pub wgpu::CommandEncoder));
+    graph_resource!(pub struct FrameCommandEncoderSubmitted(()));
+    graph_resource!(pub struct SurfacePrensented(()));
+}
 
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
@@ -81,7 +93,9 @@ impl Renderer {
     }
 
     pub(crate) fn create_world(&self) -> RenderWorld {
-        RenderWorld::new(self.device.clone(), self.queue.clone(), self.surface_config.format)
+        let mut world = RenderWorld::new(self.device.clone(), self.queue.clone(), self.surface_config.format);
+        graph_nodes::register(world.render_graph_mut());
+        world
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -93,7 +107,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, world: &RenderWorld) -> anyhow::Result<()> {
+    pub fn render(&mut self, world: &mut RenderWorld) -> anyhow::Result<()> {
         self.window.request_redraw();
 
         // We can't render unless the surface is configured
@@ -123,42 +137,11 @@ impl Renderer {
             }
         };
 
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
-        
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            });
-            for mut middleware in world.iter_middlewares_in_order(crate::RenderStage::Background) {
-                middleware.render(&mut render_pass);
-            }
-        }
-
-        // submit will accept anything that implements IntoIter
-        self.queue.submit(std::iter::once(encoder.finish()));
-        self.queue.present(output);
+        let render_graph = world.render_graph_mut();
+        render_graph.set_input::<resources::Device>(self.device.clone());
+        render_graph.set_input::<resources::Queue>(self.queue.clone());
+        render_graph.set_input::<resources::SurfaceTexture>(output);
+        render_graph.run();
 
         Ok(())
     }

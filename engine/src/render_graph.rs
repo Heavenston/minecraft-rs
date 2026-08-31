@@ -175,10 +175,10 @@ impl RenderGraph {
 
     pub fn set_input<R: GraphResourceId>(&mut self, val: R::Resource) {
         self.type_name_registry.register::<R>();
-        self.inputs.insert(TypeId::of::<R>());
         self.input_values.upsert::<R>(Box::new(R::new_resource(val)));
-
-        self.steps = None;
+        if self.inputs.insert(TypeId::of::<R>()) {
+            self.steps = None;
+        }
     }
 
     pub fn push_node<N: GraphNode>(&mut self) {

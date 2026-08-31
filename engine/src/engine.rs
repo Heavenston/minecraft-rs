@@ -28,7 +28,7 @@ impl State {
     }
 
     fn render(&mut self) -> Result<()> {
-        self.renderer.render(&self.render_world)
+        self.renderer.render(&mut self.render_world)
     }
 }
 
