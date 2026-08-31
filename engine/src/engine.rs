@@ -1,45 +1,18 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use winit::{application::ApplicationHandler, event::{KeyEvent, WindowEvent}, event_loop::{ActiveEventLoop, OwnedDisplayHandle}, keyboard::{KeyCode, PhysicalKey}, window::Window};
+use winit::{application::ApplicationHandler, event::{KeyEvent, WindowEvent}, event_loop::ActiveEventLoop, keyboard::{KeyCode, PhysicalKey}, window::Window};
 
-use crate::{InputsState, RenderWorld, Renderer};
-
-pub struct State {
-    renderer: Renderer,
-    render_world: RenderWorld,
-}
-
-impl State {
-    async fn new(display_handle: OwnedDisplayHandle, window: Arc<Window>) -> Result<Self> {
-        let renderer = Renderer::new(display_handle, window).await?;
-        let render_world = renderer.create_world();
-        Ok(Self {
-            renderer,
-            render_world,
-        })
-    }
-
-    fn resize(&mut self, width: u32, height: u32) {
-        self.renderer.resize(width, height);
-        if width != 0 && height != 0 {
-            self.render_world.set_render_target_size((width, height));
-        }
-    }
-
-    fn render(&mut self) -> Result<()> {
-        self.renderer.render(&mut self.render_world)
-    }
-}
+use crate::{InputsState, Renderer};
 
 pub struct Ctx<'a> {
     pub inputs_state: &'a mut InputsState,
-    pub render_world: &'a mut RenderWorld,
+    pub renderer: &'a mut Renderer,
 }
 
 pub trait App: 'static {
-    fn resume(&mut self, render_world: &mut RenderWorld) -> Result<()> {
-        let _ = render_world;
+    fn resume(&mut self, renderer: &mut Renderer) -> Result<()> {
+        let _ = renderer;
         Ok(())
     }
 
@@ -52,7 +25,7 @@ pub trait App: 'static {
 pub struct Engine<A> {
     #[cfg(target_arch = "wasm32")]
     proxy: Option<winit::event_loop::EventLoopProxy<State>>,
-    state: Option<State>,
+    renderer: Option<Renderer>,
     inputs_state: InputsState,
     app: A,
 }
@@ -62,16 +35,16 @@ impl<A: App> Engine<A> {
         #[cfg(target_arch = "wasm32")]
         let proxy = Some(event_loop.create_proxy());
         Self {
-            state: None,
             #[cfg(target_arch = "wasm32")]
             proxy,
+            renderer: None,
             inputs_state: InputsState::new(),
             app,
         }
     }
 }
 
-impl<A: App> ApplicationHandler<State> for Engine<A> {
+impl<A: App> ApplicationHandler<Renderer> for Engine<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         #[allow(unused_mut)]
         let mut window_attributes = Window::default_attributes();
@@ -94,9 +67,9 @@ impl<A: App> ApplicationHandler<State> for Engine<A> {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let mut state = pollster::block_on(State::new(event_loop.owned_display_handle(), window)).unwrap();
-            self.app.resume(&mut state.render_world).unwrap();
-            self.state = Some(state);
+            let mut renderer = pollster::block_on(Renderer::new(event_loop.owned_display_handle(), window)).unwrap();
+            self.app.resume(&mut renderer).unwrap();
+            self.renderer = Some(renderer);
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -118,7 +91,7 @@ impl<A: App> ApplicationHandler<State> for Engine<A> {
     }
 
     #[allow(unused_mut)]
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: State) {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: Renderer) {
         // This is where proxy.send_event() ends up
         #[cfg(target_arch = "wasm32")]
         {
@@ -128,8 +101,8 @@ impl<A: App> ApplicationHandler<State> for Engine<A> {
                 event.window.inner_size().height,
             );
         }
-        self.app.resume(&mut event.render_world).unwrap();
-        self.state = Some(event);
+        self.app.resume(&mut event).unwrap();
+        self.renderer = Some(event);
     }
 
     fn window_event(
@@ -138,18 +111,18 @@ impl<A: App> ApplicationHandler<State> for Engine<A> {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        let state = match &mut self.state {
-            Some(canvas) => canvas,
+        let renderer = match &mut self.renderer {
+            Some(renderer) => renderer,
             None => return,
         };
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => state.resize(size.width, size.height),
+            WindowEvent::Resized(size) => renderer.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
                 match self.app.update(Ctx {
                     inputs_state: &mut self.inputs_state,
-                    render_world: &mut state.render_world,
+                    renderer,
                 }) {
                     Ok(_) => {}
                     Err(e) => {
@@ -159,7 +132,7 @@ impl<A: App> ApplicationHandler<State> for Engine<A> {
                     }
                 }
                 self.inputs_state.clear_just_pressed_keys();
-                match state.render() {
+                match renderer.render() {
                     Ok(_) => {}
                     Err(e) => {
                         // Log the error and exit gracefully

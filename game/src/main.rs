@@ -12,7 +12,7 @@ struct App {
 }
 
 impl engine::App for App {
-    fn resume(&mut self, render_world: &mut engine::RenderWorld) -> Result<()> {
+    fn resume(&mut self, render_world: &mut engine::Renderer) -> Result<()> {
         let _ = render_world;
         // render_world.use_middleware::<engine::render_middlewares::Clear>()
         //     .set_color(glam::Vec4::new(1., 0., 0., 1.));

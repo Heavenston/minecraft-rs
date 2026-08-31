@@ -2,6 +2,10 @@ use super::resources as res;
 use crate::render_graph;
 
 pub(super) fn register(graph: &mut render_graph::RenderGraph) {
+    graph.define_input::<res::Device>();
+    graph.define_input::<res::Queue>();
+    graph.define_input::<res::SurfaceTexture>();
+
     graph.push_node::<CreateSurfaceTextureView>();
     graph.push_node::<CreateFrameCommandEncoder>();
     graph.push_node::<SubmitFrameCommandEncoder>();

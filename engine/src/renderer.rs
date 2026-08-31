@@ -1,9 +1,9 @@
 mod graph_nodes;
 
-use crate::RenderWorld;
-
 use std::sync::Arc;
 use anyhow::Result;
+
+use crate::render_graph::RenderGraph;
 
 pub mod resources {
     use crate::graph_resource;
@@ -23,6 +23,7 @@ pub struct Renderer {
     surface_config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
 
+    render_graph: RenderGraph,
     window: Arc<winit::window::Window>,
 }
 
@@ -82,20 +83,31 @@ impl Renderer {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
 
+        let mut render_graph = RenderGraph::new();
+        graph_nodes::register(&mut render_graph);
+
         Ok(Self {
             surface,
             device,
             queue,
             surface_config,
             is_surface_configured: false,
+
+            render_graph,
             window,
         })
     }
 
-    pub(crate) fn create_world(&self) -> RenderWorld {
-        let mut world = RenderWorld::new(self.device.clone(), self.queue.clone(), self.surface_config.format);
-        graph_nodes::register(world.render_graph_mut());
-        world
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    pub fn render_graph(&mut self) -> &mut RenderGraph {
+        &mut self.render_graph
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -107,7 +119,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, world: &mut RenderWorld) -> anyhow::Result<()> {
+    pub fn render(&mut self) -> anyhow::Result<()> {
         self.window.request_redraw();
 
         // We can't render unless the surface is configured
@@ -137,11 +149,10 @@ impl Renderer {
             }
         };
 
-        let render_graph = world.render_graph_mut();
-        render_graph.set_input::<resources::Device>(self.device.clone());
-        render_graph.set_input::<resources::Queue>(self.queue.clone());
-        render_graph.set_input::<resources::SurfaceTexture>(output);
-        render_graph.run();
+        self.render_graph.set_input::<resources::Device>(self.device.clone());
+        self.render_graph.set_input::<resources::Queue>(self.queue.clone());
+        self.render_graph.set_input::<resources::SurfaceTexture>(output);
+        self.render_graph.run();
 
         Ok(())
     }
