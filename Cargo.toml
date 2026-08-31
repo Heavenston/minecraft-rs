@@ -11,3 +11,8 @@ tracing = "0.1.44"
 winit = "0.30.13"
 glam = "0.33.6"
 itertools = "0.15.0"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Heavenstone <contact@heav.fr>"]
+edition = "2024"
