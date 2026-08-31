@@ -485,6 +485,8 @@ dependencies = [
  "anyhow",
  "engine",
  "glam",
+ "itertools",
+ "ordermap",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1246,6 +1248,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "ordermap"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1288aecc871a8edf4d48083fb911efe2716700ba47bee1854c03466ff3627de"
+dependencies = [
+ "indexmap",
 ]
 
 [[package]]

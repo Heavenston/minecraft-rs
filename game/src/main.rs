@@ -1,6 +1,11 @@
+#![allow(dead_code)]
+
 use anyhow::Result;
 use winit::event_loop::EventLoop;
 use tracing::info;
+
+mod chunk;
+mod resource_location;
 
 struct App {
     
