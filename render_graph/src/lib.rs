@@ -257,6 +257,7 @@ impl RenderGraph {
         for idx in steps.iter().copied() {
             (self.nodes[idx].run)(&mut resources);
         }
+        self.inputs.clear();
         resources
     }
 }
