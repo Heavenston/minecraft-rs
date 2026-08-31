@@ -196,8 +196,11 @@ impl RenderGraph {
         }
 
         for &n in &remaining_nodes {
-            let runnable = std::iter::chain(self.nodes[n].inputs, self.nodes[n].borrowed_inputs)
+            let inputs_available = std::iter::chain(self.nodes[n].inputs, self.nodes[n].borrowed_inputs)
                 .all(|p| available_resources.contains(p));
+            let outputs_non_present = self.nodes[n].outputs.iter()
+                .all(|p| !available_resources.contains(p));
+            let runnable = inputs_available && outputs_non_present;
 
             if runnable {
                 let mut output = output.clone();
