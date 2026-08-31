@@ -6,6 +6,8 @@ pub use harness::{ Renderer, InputsState };
 
 use anyhow::Result;
 
+use crate::render_graph_nodes::RenderPassConfig;
+
 pub struct Ctx<'a> {
     pub inputs_state: &'a mut InputsState,
     pub renderer: &'a mut Renderer,
@@ -34,6 +36,9 @@ impl<A: App> harness::App for HarnessApp<A> {
     }
 
     fn update(&mut self, ctx: harness::Ctx<'_>) -> anyhow::Result<()> {
+        ctx.renderer.render_graph().set_input::<render_graph_nodes::RenderPassConfigResource>(RenderPassConfig {
+            clear_color: wgpu::Color::RED,
+        });
         self.app.update(Ctx {
             inputs_state: ctx.inputs_state,
             renderer: ctx.renderer,
