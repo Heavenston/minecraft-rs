@@ -146,12 +146,16 @@ enum GraphValidationError {
     UnsatisfiableOrdering { },
 }
 
+type GraphEvaluationSteps = Box<[usize]>;
+
 #[derive(Default)]
 pub struct RenderGraph {
     type_name_registry: TypeNameRegistry,
     inputs: HashSet<TypeId>,
     input_values: TypeMap<dyn GraphResourceId>,
     nodes: Vec<NodeData>,
+
+    steps: Option<GraphEvaluationSteps>,
 }
 
 impl RenderGraph {
@@ -162,12 +166,16 @@ impl RenderGraph {
     pub fn define_input<R: GraphResourceId>(&mut self) {
         self.type_name_registry.register::<R>();
         self.inputs.insert(TypeId::of::<R>());
+
+        self.steps = None;
     }
 
     pub fn set_input<R: GraphResourceId>(&mut self, val: R::Resource) {
         self.type_name_registry.register::<R>();
         self.inputs.insert(TypeId::of::<R>());
         self.input_values.upsert::<R>(Box::new(R::new_resource(val)));
+
+        self.steps = None;
     }
 
     pub fn push_node<N: GraphNode>(&mut self) {
@@ -184,9 +192,11 @@ impl RenderGraph {
             borrowed_inputs: N::list_borrowed_inputs(),
             outputs: N::list_outputs(),
         });
+
+        self.steps = None;
     }
 
-    fn construct_steps(&self) -> Result<Vec<usize>, Vec<GraphValidationError>> {
+    fn construct_steps(&self) -> Result<GraphEvaluationSteps, Vec<GraphValidationError>> {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         enum InputOrNode {
             Input,
@@ -290,7 +300,7 @@ impl RenderGraph {
             pushed_nodes = new_pushed_nodes;
         }
 
-        Ok(output)
+        Ok(output.into_boxed_slice())
     }
 
     pub fn run(&mut self) -> ResourceStore {
@@ -298,11 +308,17 @@ impl RenderGraph {
         let mut resources = ResourceStore {
             resources: std::mem::take(&mut self.input_values),
         };
-        let steps = match self.construct_steps() {
-            Ok(steps) => steps,
-            Err(e) => panic!("{e:#?}"),
+        let steps = match &self.steps {
+            Some(steps) => steps,
+            None => {
+                let steps = match self.construct_steps() {
+                    Ok(steps) => steps,
+                    Err(e) => panic!("{e:#?}"),
+                };
+                &*self.steps.insert(steps)
+            },
         };
-        for idx in steps {
+        for idx in steps.iter().copied() {
             (self.nodes[idx].run)(&mut resources);
         }
         resources
@@ -436,7 +452,7 @@ mod tests {
         graph.push_node::<Reserver>();
         graph.push_node::<InputHalfer>();
         graph.define_input::<Input>();
-        assert_eq!(graph.construct_steps().unwrap(), vec![2,3,1,0]);
+        assert_eq!(&*graph.construct_steps().unwrap(), &[2,3,1,0]);
     }
 
     #[test]
