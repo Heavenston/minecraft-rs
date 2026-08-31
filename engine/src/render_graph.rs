@@ -125,6 +125,27 @@ struct NodeData {
     outputs: &'static [TypeId],
 }
 
+#[derive(Debug, thiserror::Error)]
+enum GraphValidationError {
+    #[error("Resource '{resource_type_name}' consumed by multiple nodes: {consumers:?}")]
+    ResourceConsumedMultipleTimes {
+        resource_type_name: &'static str,
+        consumers: Vec<&'static str>,
+    },
+    #[error("Resource '{resource_type_name}' emitted by multiple nodes: {emitters:?}")]
+    ResourceEmittedMultipleTimes {
+        resource_type_name: &'static str,
+        emitters: Vec<&'static str>,
+    },
+    #[error("Resource '{resource_type_name}' is consumed by {consumers:?} but never emitted")]
+    ResourceLackEmitter {
+        resource_type_name: &'static str,
+        consumers: Vec<&'static str>,
+    },
+    #[error("Could not found satisfying graph ordering")]
+    UnsatisfiableOrdering { },
+}
+
 #[derive(Default)]
 pub struct RenderGraph {
     type_name_registry: TypeNameRegistry,
@@ -165,35 +186,111 @@ impl RenderGraph {
         });
     }
 
-    fn construct_steps(&self) -> Vec<usize> {
-        let mut steps = Vec::<usize>::new();
-        let mut resources = self.inputs.iter().copied().collect::<HashSet<_>>();
-        let mut remaining_nodes = (0usize..self.nodes.len()).collect_vec();
+    fn construct_steps(&self) -> Result<Vec<usize>, Vec<GraphValidationError>> {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        enum InputOrNode {
+            Input,
+            Node(usize),
+        }
 
-        while !remaining_nodes.is_empty() {
-            let mut found_one = false;
-            remaining_nodes.retain(|&idx| {
-                let all_inputs_available = std::iter::chain(
-                    self.nodes[idx].inputs,
-                    self.nodes[idx].borrowed_inputs,
-                ).copied().all(|input| resources.contains(&input));
-                if all_inputs_available {
-                    steps.push(idx);
-                    for i in self.nodes[idx].inputs { resources.remove(i); }
-                    resources.extend(self.nodes[idx].outputs);
-                    found_one = true;
-                    false
-                }
-                else {
-                    true
-                }
-            });
-            if !found_one {
-                panic!("Invalid render graph");
+        #[derive(Default)]
+        struct UsedData {
+            emitters: Vec<InputOrNode>,
+            consumers: Vec<usize>,
+            borrowers: Vec<usize>,
+        }
+
+        let mut resources_usage = HashMap::<TypeId, UsedData>::new();
+
+        for &input in &self.inputs {
+            let data = resources_usage.entry(input).or_default();
+            data.emitters.push(InputOrNode::Input);
+        }
+        
+        for (node_id, node) in self.nodes.iter().enumerate() {
+            for &input in node.inputs {
+                let data = resources_usage.entry(input).or_default();
+                data.consumers.push(node_id);
+            }
+            for &borrowed_input in node.borrowed_inputs {
+                let data = resources_usage.entry(borrowed_input).or_default();
+                data.borrowers.push(node_id);
+            }
+            for &output in node.outputs {
+                let data = resources_usage.entry(output).or_default();
+                data.emitters.push(InputOrNode::Node(node_id));
             }
         }
 
-        steps
+        let mut errors = vec![];
+        for (&tid, data) in &resources_usage {
+            let resource_type_name = self.type_name_registry.get_name(tid).unwrap_or("unknown");
+            let consumers = data.consumers.iter().map(|&idx| self.nodes[idx].type_id).map(|tid| self.type_name_registry.get_name(tid).unwrap_or("unknown")).collect_vec();
+            let emitters = data.emitters.iter().map(|idx| match idx {
+                InputOrNode::Input => "<input>",
+                &InputOrNode::Node(idx) => self.type_name_registry.get_name(self.nodes[idx].type_id).unwrap_or("unknown"),
+            }).collect_vec();
+
+            if data.emitters.is_empty() {
+                errors.push(GraphValidationError::ResourceLackEmitter {
+                    resource_type_name,
+                    consumers: consumers.clone(),
+                });
+            }
+            if data.consumers.len() > 1 {
+                errors.push(GraphValidationError::ResourceConsumedMultipleTimes {
+                    resource_type_name,
+                    consumers: consumers.clone(),
+                });
+            }
+            if data.emitters.len() > 1 {
+                errors.push(GraphValidationError::ResourceEmittedMultipleTimes {
+                    resource_type_name,
+                    emitters: emitters.clone(),
+                });
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        // For every node, lists every node that must be computed before
+        let mut back_links: Vec<HashSet<InputOrNode>> = vec![HashSet::default(); self.nodes.len()];
+
+        for data in resources_usage.values() {
+            let emitter = *data.emitters.first().unwrap();
+            // Must use a value after its emitter
+            for &n in std::iter::chain(&data.consumers, &data.borrowers) {
+                back_links[n].insert(emitter);
+            }
+            // Must consume a value after all of its borrowers
+            if let Some(&consumer) = data.consumers.first() {
+                back_links[consumer].extend(data.borrowers.iter().copied().map(InputOrNode::Node));
+            }
+        }
+
+        let mut remaining_nodes = (0..self.nodes.len()).collect_vec();
+        // Nodes that have been pushed into output
+        let mut pushed_nodes = HashSet::<InputOrNode>::new();
+        pushed_nodes.insert(InputOrNode::Input);
+        let mut output = Vec::<usize>::new();
+
+        while !remaining_nodes.is_empty() {
+            let nodes = remaining_nodes.extract_if(.., |&mut n| back_links[n].iter().all(|p| pushed_nodes.contains(p)));
+
+            let mut new_pushed_nodes = pushed_nodes.clone();
+            for node_idx in nodes {
+                output.push(node_idx);
+                new_pushed_nodes.insert(InputOrNode::Node(node_idx));
+            }
+            if new_pushed_nodes.is_empty() {
+                return Err(vec![GraphValidationError::UnsatisfiableOrdering {  }]);
+            }
+            pushed_nodes = new_pushed_nodes;
+        }
+
+        Ok(output)
     }
 
     pub fn run(&mut self) -> ResourceStore {
@@ -201,7 +298,11 @@ impl RenderGraph {
         let mut resources = ResourceStore {
             resources: std::mem::take(&mut self.input_values),
         };
-        for idx in self.construct_steps() {
+        let steps = match self.construct_steps() {
+            Ok(steps) => steps,
+            Err(e) => panic!("{e:#?}"),
+        };
+        for idx in steps {
             (self.nodes[idx].run)(&mut resources);
         }
         resources
@@ -335,7 +436,7 @@ mod tests {
         graph.push_node::<Reserver>();
         graph.push_node::<InputHalfer>();
         graph.define_input::<Input>();
-        assert_eq!(graph.construct_steps(), vec![2,3,1,0]);
+        assert_eq!(graph.construct_steps().unwrap(), vec![2,3,1,0]);
     }
 
     #[test]
