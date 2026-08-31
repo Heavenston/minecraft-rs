@@ -24,6 +24,8 @@ pub trait GraphResourceId: Any {
         where Self: Sized;
     fn get_resource(self) -> Self::Resource
         where Self: Sized;
+    fn get_resource_ref(&self) -> &Self::Resource
+        where Self: Sized;
 }
 typemap::impl_dyn_trait!(GraphResourceId);
 
@@ -44,12 +46,17 @@ macro_rules! graph_resource {
             {
                 self.0
             }
+            fn get_resource_ref(&self) -> &Self::Resource
+                where Self: Sized
+            {
+                &self.0
+            }
         }
     };
 }
 
 pub trait GraphNode: 'static {
-    type Inputs;
+    type Inputs<'a>;
     type Outputs;
 
     #[doc(hidden)]
@@ -57,19 +64,24 @@ pub trait GraphNode: 'static {
     #[doc(hidden)]
     fn list_inputs() -> &'static [TypeId];
     #[doc(hidden)]
+    fn list_borrowed_inputs() -> &'static [TypeId];
+    #[doc(hidden)]
     fn list_outputs() -> &'static [TypeId];
     #[doc(hidden)]
-    fn gather_inputs(store: &mut ResourceStore) -> Self::Inputs;
+    fn gather_inputs(store: &mut ResourceStore) -> Self::Inputs<'_>;
     #[doc(hidden)]
     fn store_outputs(outputs: Self::Outputs, store: &mut ResourceStore);
 
-    fn run(inputs: Self::Inputs) -> Self::Outputs;
+    fn run(inputs: Self::Inputs<'_>) -> Self::Outputs;
 }
 
 #[macro_export]
 macro_rules! declare_graph_deps {
-    (($($input:ty),*) -> ($($output:ty),*)) => {
-        type Inputs = ($(<$input as $crate::render_graph::GraphResourceId>::Resource,)*);
+    (($($input:ty,)*$(ref $borrowed_input:ty,)*) -> ($($output:ty,)*)) => {
+        type Inputs<'a> = (
+            $(<$input as $crate::render_graph::GraphResourceId>::Resource,)*
+            $(&'a <$borrowed_input as $crate::render_graph::GraphResourceId>::Resource,)*
+        );
         type Outputs = ($(<$output as $crate::render_graph::GraphResourceId>::Resource,)*);
 
         fn register_resources(registry: &mut $crate::render_graph::TypeNameRegistry) {
@@ -80,12 +92,19 @@ macro_rules! declare_graph_deps {
             const INPUTS: &'static [::std::any::TypeId] = &[$(::std::any::TypeId::of::<$input>()),*];
             INPUTS
         }
+        fn list_borrowed_inputs() -> &'static [::std::any::TypeId] {
+            const INPUTS: &'static [::std::any::TypeId] = &[$(::std::any::TypeId::of::<$borrowed_input>()),*];
+            INPUTS
+        }
         fn list_outputs() -> &'static [::std::any::TypeId] {
             const OUTPUTS: &'static [::std::any::TypeId] = &[$(::std::any::TypeId::of::<$output>()),*];
             OUTPUTS
         }
-        fn gather_inputs(store: &mut $crate::render_graph::ResourceStore) -> Self::Inputs {
-            ($(<$input as $crate::render_graph::GraphResourceId>::get_resource(*store.resources.remove::<$input>().expect(std::stringify!(Missing input $input))),)*)
+        fn gather_inputs(store: &mut $crate::render_graph::ResourceStore) -> Self::Inputs<'_> {
+            (
+                $(<$input as $crate::render_graph::GraphResourceId>::get_resource(*store.resources.remove::<$input>().expect(std::stringify!(Missing input $input))),)*
+                $(<$borrowed_input as $crate::render_graph::GraphResourceId>::get_resource_ref(store.resources.get::<$borrowed_input>().expect(std::stringify!(Missing input $borrowed_input))),)*
+            )
         }
         fn store_outputs(outputs: Self::Outputs, store: &mut $crate::render_graph::ResourceStore) {
             $(store.resources.insert(Box::new(<$output as $crate::render_graph::GraphResourceId>::new_resource(outputs.${index()})));)*
@@ -102,6 +121,7 @@ struct NodeData {
     type_id: TypeId,
     run: Box<dyn FnMut(&mut ResourceStore)>,
     inputs: &'static [TypeId],
+    borrowed_inputs: &'static [TypeId],
     outputs: &'static [TypeId],
 }
 
@@ -140,6 +160,7 @@ impl RenderGraph {
                 N::store_outputs(outputs, store);
             }),
             inputs: N::list_inputs(),
+            borrowed_inputs: N::list_borrowed_inputs(),
             outputs: N::list_outputs(),
         });
     }
@@ -152,7 +173,10 @@ impl RenderGraph {
         while !remaining_nodes.is_empty() {
             let mut found_one = false;
             remaining_nodes.retain(|&idx| {
-                let all_inputs_available = self.nodes[idx].inputs.iter().copied().all(|input| resources.contains(&input));
+                let all_inputs_available = std::iter::chain(
+                    self.nodes[idx].inputs,
+                    self.nodes[idx].borrowed_inputs,
+                ).copied().all(|input| resources.contains(&input));
                 if all_inputs_available {
                     steps.push(idx);
                     for i in self.nodes[idx].inputs { resources.remove(i); }
@@ -246,7 +270,7 @@ mod tests {
 
     struct TestNode;
     impl GraphNode for TestNode {
-        declare_graph_deps!((R1) -> (R2));
+        declare_graph_deps!((R1,) -> (R2,));
         fn run((val,): (u32,)) -> (u8,) {
             (val as u8,)
         }
@@ -262,32 +286,22 @@ mod tests {
     }
 
     graph_resource!(struct Input(String));
-    graph_resource!(struct Input1(String));
-    graph_resource!(struct Input2(String));
     graph_resource!(struct Reversed(String));
     graph_resource!(struct ReversedHalf(String));
     graph_resource!(struct Half(String));
     graph_resource!(#[derive(Debug, PartialEq)] struct Output(String));
 
-    struct Cloner;
-    impl GraphNode for Cloner {
-        declare_graph_deps!((Input) -> (Input1, Input2));
-        fn run((input,): (String,)) -> (String,String) {
-            (input.clone(),input)
-        }
-    }
-
     struct Reserver;
     impl GraphNode for Reserver {
-        declare_graph_deps!((Input1) -> (Reversed));
-        fn run((input,): (String,)) -> (String,) {
+        declare_graph_deps!((ref Input,) -> (Reversed,));
+        fn run((input,): (&String,)) -> (String,) {
             (input.chars().rev().collect(),)
         }
     }
 
     struct ReversedHalfer;
     impl GraphNode for ReversedHalfer {
-        declare_graph_deps!((Reversed) -> (ReversedHalf));
+        declare_graph_deps!((Reversed,) -> (ReversedHalf,));
         fn run((input,): (String,)) -> (String,) {
             let count = input.chars().count();
             let half = input.chars().take(count.div_ceil(2)).collect();
@@ -297,8 +311,8 @@ mod tests {
 
     struct InputHalfer;
     impl GraphNode for InputHalfer {
-        declare_graph_deps!((Input2) -> (Half));
-        fn run((input,): (String,)) -> (String,) {
+        declare_graph_deps!((ref Input,) -> (Half,));
+        fn run((input,): (&String,)) -> (String,) {
             let count = input.chars().count();
             let half = input.chars().take(count.div_ceil(2)).collect();
             (half,)
@@ -307,7 +321,7 @@ mod tests {
 
     struct Concat;
     impl GraphNode for Concat {
-        declare_graph_deps!((Half, ReversedHalf) -> (Output));
+        declare_graph_deps!((Half, ReversedHalf,) -> (Output,));
         fn run((a, b): (String, String)) -> (String,) {
             (a.chars().chain(b.chars()).collect(),)
         }
@@ -316,19 +330,17 @@ mod tests {
     #[test]
     fn complex_construction() {
         let mut graph = RenderGraph::new();
-        graph.push_node::<Cloner>();
         graph.push_node::<Concat>();
         graph.push_node::<ReversedHalfer>();
         graph.push_node::<Reserver>();
         graph.push_node::<InputHalfer>();
         graph.define_input::<Input>();
-        assert_eq!(graph.construct_steps(), vec![0,3,4,2,1]);
+        assert_eq!(graph.construct_steps(), vec![2,3,1,0]);
     }
 
     #[test]
     fn complex_run() {
         let mut graph = RenderGraph::new();
-        graph.push_node::<Cloner>();
         graph.push_node::<Reserver>();
         graph.push_node::<ReversedHalfer>();
         graph.push_node::<InputHalfer>();
