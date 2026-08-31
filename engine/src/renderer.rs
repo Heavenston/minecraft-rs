@@ -3,17 +3,17 @@ mod graph_nodes;
 use std::sync::Arc;
 use anyhow::Result;
 
-use crate::render_graph::RenderGraph;
+use render_graph::RenderGraph;
 
 pub mod resources {
-    use crate::graph_resource;
-    graph_resource!(pub struct Device(pub wgpu::Device));
-    graph_resource!(pub struct Queue(pub wgpu::Queue));
-    graph_resource!(pub struct SurfaceTexture(pub wgpu::SurfaceTexture));
-    graph_resource!(pub struct SurfaceTextureView(pub wgpu::TextureView));
-    graph_resource!(pub struct FrameCommandEncoder(pub wgpu::CommandEncoder));
-    graph_resource!(pub struct FrameCommandEncoderSubmitted(()));
-    graph_resource!(pub struct SurfacePrensented(()));
+    use render_graph::graph_resource as res;
+    res!(pub struct Device(pub wgpu::Device));
+    res!(pub struct Queue(pub wgpu::Queue));
+    res!(pub struct SurfaceTexture(pub wgpu::SurfaceTexture));
+    res!(pub struct SurfaceTextureView(pub wgpu::TextureView));
+    res!(pub struct FrameCommandEncoder(pub wgpu::CommandEncoder));
+    res!(pub struct FrameCommandEncoderSubmitted(()));
+    res!(pub struct SurfacePrensented(()));
 }
 
 pub struct Renderer {

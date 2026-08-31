@@ -1,3 +1,5 @@
+#![feature(macro_metavar_expr)]
+
 use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}};
 use itertools::Itertools as _;
 use typemap::TypeMap;
@@ -33,7 +35,7 @@ typemap::impl_dyn_trait!(GraphResourceId);
 macro_rules! graph_resource {
     ($(#[$attrs:meta])* $vis:vis struct $name:ident($val_vis:vis $content:ty)) => {
         $(#[$attrs])* $vis struct $name($val_vis $content);
-        impl $crate::render_graph::GraphResourceId for $name {
+        impl $crate::GraphResourceId for $name {
             type Resource = $content
                 where Self: Sized;
             fn new_resource(val: Self::Resource) -> Self
@@ -79,13 +81,13 @@ pub trait GraphNode: 'static {
 macro_rules! declare_graph_deps {
     (($($input:ty,)*$(ref $borrowed_input:ty,)*) -> ($($output:ty,)*)) => {
         type Inputs<'a> = (
-            $(<$input as $crate::render_graph::GraphResourceId>::Resource,)*
-            $(&'a <$borrowed_input as $crate::render_graph::GraphResourceId>::Resource,)*
+            $(<$input as $crate::GraphResourceId>::Resource,)*
+            $(&'a <$borrowed_input as $crate::GraphResourceId>::Resource,)*
         );
-        type Outputs = ($(<$output as $crate::render_graph::GraphResourceId>::Resource,)*);
+        type Outputs = ($(<$output as $crate::GraphResourceId>::Resource,)*);
 
         #[allow(unused)]
-        fn register_resources(registry: &mut $crate::render_graph::TypeNameRegistry) {
+        fn register_resources(registry: &mut $crate::TypeNameRegistry) {
             $(registry.register::<$input>();)*
             $(registry.register::<$output>();)*
         }
@@ -102,19 +104,18 @@ macro_rules! declare_graph_deps {
             OUTPUTS
         }
         #[allow(unused)]
-        fn gather_inputs(store: &mut $crate::render_graph::ResourceStore) -> Self::Inputs<'_> {
+        fn gather_inputs(store: &mut $crate::ResourceStore) -> Self::Inputs<'_> {
             (
-                $(<$input as $crate::render_graph::GraphResourceId>::get_resource(*store.resources.remove::<$input>().expect(std::stringify!(Missing input $input))),)*
-                $(<$borrowed_input as $crate::render_graph::GraphResourceId>::get_resource_ref(store.resources.get::<$borrowed_input>().expect(std::stringify!(Missing input $borrowed_input))),)*
+                $(<$input as $crate::GraphResourceId>::get_resource(*store.resources.remove::<$input>().expect(std::stringify!(Missing input $input))),)*
+                $(<$borrowed_input as $crate::GraphResourceId>::get_resource_ref(store.resources.get::<$borrowed_input>().expect(std::stringify!(Missing input $borrowed_input))),)*
             )
         }
         #[allow(unused)]
-        fn store_outputs(outputs: Self::Outputs, store: &mut $crate::render_graph::ResourceStore) {
-            $(store.resources.insert(Box::new(<$output as $crate::render_graph::GraphResourceId>::new_resource(outputs.${index()})));)*
+        fn store_outputs(outputs: Self::Outputs, store: &mut $crate::ResourceStore) {
+            $(store.resources.insert(Box::new(<$output as $crate::GraphResourceId>::new_resource(outputs.${index()})));)*
         }
     };
 }
-pub use declare_graph_deps;
 
 pub struct ResourceStore {
     pub resources: TypeMap<dyn GraphResourceId>,

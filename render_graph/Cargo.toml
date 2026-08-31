@@ -1,0 +1,10 @@
+[package]
+name = "render_graph"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+typemap = { workspace = true }
+itertools = { workspace = true }
+thiserror = "2.0.20"

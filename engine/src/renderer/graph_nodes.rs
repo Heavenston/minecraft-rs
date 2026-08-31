@@ -1,5 +1,4 @@
 use super::resources as res;
-use crate::render_graph;
 
 pub(super) fn register(graph: &mut render_graph::RenderGraph) {
     graph.define_input::<res::Device>();

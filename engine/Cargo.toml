@@ -5,12 +5,14 @@ authors.workspace = true
 edition.workspace = true
 
 [dependencies]
+render_graph = { workspace = true }
+typemap = { workspace = true }
+
 wgpu = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 winit = { workspace = true }
 glam = { workspace = true, features = ["bytemuck"] }
-typemap = { workspace = true }
 pollster = "1.0.1"
 itertools = { workspace = true }
 bytemuck = "1.25.2"

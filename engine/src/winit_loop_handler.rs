@@ -1,28 +1,10 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use winit::{application::ApplicationHandler, event::{KeyEvent, WindowEvent}, event_loop::ActiveEventLoop, keyboard::{KeyCode, PhysicalKey}, window::Window};
 
-use crate::{InputsState, Renderer};
+use crate::{App, Ctx, InputsState, Renderer};
 
-pub struct Ctx<'a> {
-    pub inputs_state: &'a mut InputsState,
-    pub renderer: &'a mut Renderer,
-}
-
-pub trait App: 'static {
-    fn resume(&mut self, renderer: &mut Renderer) -> Result<()> {
-        let _ = renderer;
-        Ok(())
-    }
-
-    fn update(&mut self, ctx: Ctx<'_>) -> Result<()> {
-        let _ = ctx;
-        Ok(())
-    }
-}
-
-pub struct Engine<A> {
+pub struct WinitLoopHandler<A> {
     #[cfg(target_arch = "wasm32")]
     proxy: Option<winit::event_loop::EventLoopProxy<State>>,
     renderer: Option<Renderer>,
@@ -30,7 +12,7 @@ pub struct Engine<A> {
     app: A,
 }
 
-impl<A: App> Engine<A> {
+impl<A: App> WinitLoopHandler<A> {
     pub fn new(app: A, #[cfg(target_arch = "wasm32")] event_loop: &EventLoop<State>) -> Self {
         #[cfg(target_arch = "wasm32")]
         let proxy = Some(event_loop.create_proxy());
@@ -44,7 +26,7 @@ impl<A: App> Engine<A> {
     }
 }
 
-impl<A: App> ApplicationHandler<Renderer> for Engine<A> {
+impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         #[allow(unused_mut)]
         let mut window_attributes = Window::default_attributes();
