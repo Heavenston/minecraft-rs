@@ -17,4 +17,6 @@ pub struct WorldUniformBuffer {
 pub(crate) struct GPUWorld {
     pub staging_belt: wgpu::util::StagingBelt,
     pub world_uniform: wgpu::Buffer,
+
+    pub world_bind_group: wgpu::BindGroup,
 }

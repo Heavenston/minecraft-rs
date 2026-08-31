@@ -2,7 +2,7 @@
 
 mod render_graph_nodes;
 pub mod world;
-use std::sync::Arc;
+use std::{num::NonZero, sync::Arc};
 
 use crevice::std140::AsStd140;
 pub use harness::{ Renderer, InputsState };
@@ -45,9 +45,37 @@ impl<A: App> harness::App for HarnessApp<A> {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
         });
+
+        let world_bind_group_layout = renderer.device().create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("world bind group layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZero::new(world_uniform.size()).unwrap()),
+                },
+                count: None,
+            }],
+        });
+        let world_bind_group = renderer.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("world bind group"),
+            layout: &world_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &world_uniform,
+                    offset: 0,
+                    size: None,
+                }),
+            }],
+        });
+
         self.gpu_world = Some(Arc::new(RwLock::new(GPUWorld {
             staging_belt: wgpu::util::StagingBelt::new(renderer.device().clone(), 128),
             world_uniform,
+            world_bind_group,
         })));
 
         self.app.resume(renderer)
