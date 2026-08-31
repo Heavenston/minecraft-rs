@@ -31,8 +31,10 @@ impl render_graph::GraphNode for CreateFrameCommandEncoder {
 
 struct SubmitFrameCommandEncoder;
 impl render_graph::GraphNode for SubmitFrameCommandEncoder {
-    render_graph::declare_graph_deps!((res::FrameCommandEncoder, ref res::Queue,) -> (res::FrameCommandEncoderSubmitted,));
-    fn run((command_encoder, queue): Self::Inputs<'_>) -> Self::Outputs {
+    // We borrow SurfaceTextureView to prevent the surface texture from being presented
+    // until after this node
+    render_graph::declare_graph_deps!((res::FrameCommandEncoder, ref res::Queue, ref res::SurfaceTextureView,) -> (res::FrameCommandEncoderSubmitted,));
+    fn run((command_encoder, queue, _): Self::Inputs<'_>) -> Self::Outputs {
         queue.submit(std::iter::once(command_encoder.finish()));
         ((),)
     }

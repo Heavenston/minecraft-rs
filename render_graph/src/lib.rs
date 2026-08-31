@@ -1,6 +1,6 @@
 #![feature(macro_metavar_expr)]
 
-use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}};
+use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, ops::ControlFlow};
 use itertools::Itertools as _;
 use typemap::TypeMap;
 
@@ -131,26 +131,11 @@ struct NodeData {
 
 #[derive(Debug, thiserror::Error)]
 enum GraphValidationError {
-    #[error("Resource '{resource_type_name}' consumed by multiple nodes: {consumers:?}")]
-    ResourceConsumedMultipleTimes {
-        resource_type_name: &'static str,
-        consumers: Vec<&'static str>,
-    },
-    #[error("Resource '{resource_type_name}' emitted by multiple nodes: {emitters:?}")]
-    ResourceEmittedMultipleTimes {
-        resource_type_name: &'static str,
-        emitters: Vec<&'static str>,
-    },
-    #[error("Resource '{resource_type_name}' is consumed by {consumers:?} but never emitted")]
-    ResourceLackEmitter {
-        resource_type_name: &'static str,
-        consumers: Vec<&'static str>,
-    },
     #[error("Could not found satisfying graph ordering")]
     UnsatisfiableOrdering { },
 }
 
-type GraphEvaluationSteps = Box<[Box<[usize]>]>;
+type GraphEvaluationSteps = Box<[usize]>;
 
 #[derive(Default)]
 pub struct RenderGraph {
@@ -200,113 +185,41 @@ impl RenderGraph {
         self.steps = None;
     }
 
-    fn construct_steps(&self) -> Result<GraphEvaluationSteps, Vec<GraphValidationError>> {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        enum InputOrNode {
-            Input,
-            Node(usize),
+    fn recursive_stepper(
+        &self,
+        output: Vec<usize>,
+        available_resources: HashSet<TypeId>,
+        remaining_nodes: Vec<usize>,
+    ) -> ControlFlow<GraphEvaluationSteps> {
+        if remaining_nodes.is_empty() {
+            return ControlFlow::Break(output.into_boxed_slice());
         }
 
-        #[derive(Default)]
-        struct UsedData {
-            emitters: Vec<InputOrNode>,
-            consumers: Vec<usize>,
-            borrowers: Vec<usize>,
-        }
+        for &n in &remaining_nodes {
+            let runnable = std::iter::chain(self.nodes[n].inputs, self.nodes[n].borrowed_inputs)
+                .all(|p| available_resources.contains(p));
 
-        let mut resources_usage = HashMap::<TypeId, UsedData>::new();
-
-        for &input in &self.inputs {
-            let data = resources_usage.entry(input).or_default();
-            data.emitters.push(InputOrNode::Input);
-        }
-        
-        for (node_id, node) in self.nodes.iter().enumerate() {
-            for &input in node.inputs {
-                let data = resources_usage.entry(input).or_default();
-                data.consumers.push(node_id);
-            }
-            for &borrowed_input in node.borrowed_inputs {
-                let data = resources_usage.entry(borrowed_input).or_default();
-                data.borrowers.push(node_id);
-            }
-            for &output in node.outputs {
-                let data = resources_usage.entry(output).or_default();
-                data.emitters.push(InputOrNode::Node(node_id));
+            if runnable {
+                let mut output = output.clone();
+                output.push(n);
+                let mut available_resources = available_resources.clone();
+                for i in self.nodes[n].inputs {
+                    available_resources.remove(i);
+                }
+                available_resources.extend(self.nodes[n].outputs);
+                let remaining_nodes = remaining_nodes.iter().copied().filter(|&p| p != n).collect();
+                self.recursive_stepper(output, available_resources, remaining_nodes)?;
             }
         }
+        ControlFlow::Continue(())
+    }
 
-        let mut errors = vec![];
-        for (&tid, data) in &resources_usage {
-            let resource_type_name = self.type_name_registry.get_name(tid).unwrap_or("unknown");
-            let consumers = data.consumers.iter().map(|&idx| self.nodes[idx].type_id).map(|tid| self.type_name_registry.get_name(tid).unwrap_or("unknown")).collect_vec();
-            let emitters = data.emitters.iter().map(|idx| match idx {
-                InputOrNode::Input => "<input>",
-                &InputOrNode::Node(idx) => self.type_name_registry.get_name(self.nodes[idx].type_id).unwrap_or("unknown"),
-            }).collect_vec();
-
-            if data.emitters.is_empty() {
-                errors.push(GraphValidationError::ResourceLackEmitter {
-                    resource_type_name,
-                    consumers: consumers.clone(),
-                });
-            }
-            if data.consumers.len() > 1 {
-                errors.push(GraphValidationError::ResourceConsumedMultipleTimes {
-                    resource_type_name,
-                    consumers: consumers.clone(),
-                });
-            }
-            if data.emitters.len() > 1 {
-                errors.push(GraphValidationError::ResourceEmittedMultipleTimes {
-                    resource_type_name,
-                    emitters: emitters.clone(),
-                });
-            }
+    fn construct_steps(&self) -> Result<GraphEvaluationSteps, GraphValidationError> {
+        let result = self.recursive_stepper(vec![], self.inputs.clone(), (0..self.nodes.len()).collect_vec());
+        match result {
+            ControlFlow::Continue(()) => Err(GraphValidationError::UnsatisfiableOrdering {  }),
+            ControlFlow::Break(steps) => Ok(steps),
         }
-
-        if !errors.is_empty() {
-            return Err(errors);
-        }
-
-        // For every node, lists every node that must be computed before
-        let mut back_links: Vec<HashSet<InputOrNode>> = vec![HashSet::default(); self.nodes.len()];
-
-        for data in resources_usage.values() {
-            let emitter = *data.emitters.first().unwrap();
-            // Must use a value after its emitter
-            for &n in std::iter::chain(&data.consumers, &data.borrowers) {
-                back_links[n].insert(emitter);
-            }
-            // Must consume a value after all of its borrowers
-            if let Some(&consumer) = data.consumers.first() {
-                back_links[consumer].extend(data.borrowers.iter().copied().map(InputOrNode::Node));
-            }
-        }
-
-        let mut remaining_nodes = (0..self.nodes.len()).collect_vec();
-        // Nodes that have been pushed into output
-        let mut pushed_nodes = HashSet::<InputOrNode>::new();
-        pushed_nodes.insert(InputOrNode::Input);
-        let mut output = Vec::<Box<[usize]>>::new();
-
-        while !remaining_nodes.is_empty() {
-            let nodes = remaining_nodes.extract_if(.., |&mut n| back_links[n].iter().all(|p| pushed_nodes.contains(p)));
-
-            let mut new_pushed_nodes = pushed_nodes.clone();
-            let mut new_output = Vec::<usize>::new();
-            for node_idx in nodes {
-                new_output.push(node_idx);
-                new_pushed_nodes.insert(InputOrNode::Node(node_idx));
-            }
-            if new_pushed_nodes.is_empty() {
-                return Err(vec![GraphValidationError::UnsatisfiableOrdering {  }]);
-            }
-            pushed_nodes = new_pushed_nodes;
-            output.push(new_output.into_boxed_slice());
-        }
-
-        Ok(output.into_boxed_slice())
     }
 
     pub fn run(&mut self) -> ResourceStore {
@@ -319,13 +232,12 @@ impl RenderGraph {
             None => {
                 let steps = match self.construct_steps() {
                     Ok(steps) => steps,
-                    Err(e) => {
+                    Err(error) => {
                         if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
                             std::fs::write(path, format!("{self}")).unwrap();
-                            tracing::error!(output = path, errors = %e.iter().join(", "), "Errors while validating graph, written dot version in given path");
+                            tracing::error!(output = path, %error, "Errors while validating graph, written dot version in given path");
                         }
-
-                        panic!("{e:#?}")
+                        panic!("{error:#?}")
                     },
                 };
                 if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
@@ -339,7 +251,7 @@ impl RenderGraph {
                 }
             },
         };
-        for idx in steps.iter().flatten().copied() {
+        for idx in steps.iter().copied() {
             (self.nodes[idx].run)(&mut resources);
         }
         resources
@@ -358,13 +270,15 @@ impl std::fmt::Display for RenderGraph {
             p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
         }}; }
         let mut printed_resources = HashSet::<TypeId>::new();
-        macro_rules! write_node { ($id:expr,$pref:expr,$shape:expr) => {{
+        macro_rules! write_node { ($id:expr,$pref:expr,$shape:expr$(,$name_prepend:expr)?) => {{
             let id = $id;
             printed_resources.insert(id);
             let name = get_name!(id, $pref);
             write!(f, "{INDENT}{name} [shape={}", $shape)?;
             if let Some(type_name) = self.type_name_registry.get_name(id) {
-                write!(f, " label=\"{type_name}\"")?;
+                write!(f, " label=\"")?;
+                $(write!(f, "{}", $name_prepend)?;)?
+                write!(f, "{type_name}\"")?;
             }
             writeln!(f, "]")?;
         }}; }
@@ -378,8 +292,8 @@ impl std::fmt::Display for RenderGraph {
         for &t in self.inputs.iter() {
             write_node!(t, "R", "rectangle");
         }
-        for n in self.nodes.iter() {
-            write_node!(n.type_id, "N", "diamond");
+        for (i, n) in self.nodes.iter().enumerate() {
+            write_node!(n.type_id, "N", "diamond", format!("{i} "));
             let name = get_name!(n.type_id, "N");
             for &input in n.inputs {
                 write_resource!(input);
@@ -399,7 +313,7 @@ impl std::fmt::Display for RenderGraph {
         }
 
         if let Some(steps) = &self.steps {
-            for [a, b] in steps.iter().flatten().copied().array_windows() {
+            for [a, b] in steps.iter().copied().array_windows() {
                 let name_a = get_name!(self.nodes[a].type_id, "N");
                 let name_b = get_name!(self.nodes[b].type_id, "N");
                 writeln!(f, "{INDENT}{name_a} -> {name_b} [color=blue]")?;
@@ -487,7 +401,7 @@ mod tests {
         graph.push_node::<Reserver>();
         graph.push_node::<InputHalfer>();
         graph.define_input::<Input>();
-        assert_eq!(graph.construct_steps().unwrap().iter().map(|p| &**p).collect_vec(), vec![&[2,3][..],&[1],&[0]]);
+        assert_eq!(&graph.construct_steps().unwrap()[..], &[2,1,3,0]);
     }
 
     #[test]
@@ -537,6 +451,7 @@ mod tests {
         graph.push_node::<Consumer>();
         graph.push_node::<Borrow1>();
         graph.push_node::<Borrow2>();
-        assert_eq!(graph.construct_steps().unwrap().iter().map(|p| &**p).collect_vec(), vec![&[0][..],&[2,3],&[1]]);
+        graph.run();
+        assert_eq!(&graph.construct_steps().unwrap()[..], &[0,2,3,1]);
     }
 }
