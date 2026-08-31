@@ -149,7 +149,7 @@ enum GraphValidationError {
     UnsatisfiableOrdering { },
 }
 
-type GraphEvaluationSteps = Box<[usize]>;
+type GraphEvaluationSteps = Box<[Box<[usize]>]>;
 
 #[derive(Default)]
 pub struct RenderGraph {
@@ -287,20 +287,22 @@ impl RenderGraph {
         // Nodes that have been pushed into output
         let mut pushed_nodes = HashSet::<InputOrNode>::new();
         pushed_nodes.insert(InputOrNode::Input);
-        let mut output = Vec::<usize>::new();
+        let mut output = Vec::<Box<[usize]>>::new();
 
         while !remaining_nodes.is_empty() {
             let nodes = remaining_nodes.extract_if(.., |&mut n| back_links[n].iter().all(|p| pushed_nodes.contains(p)));
 
             let mut new_pushed_nodes = pushed_nodes.clone();
+            let mut new_output = Vec::<usize>::new();
             for node_idx in nodes {
-                output.push(node_idx);
+                new_output.push(node_idx);
                 new_pushed_nodes.insert(InputOrNode::Node(node_idx));
             }
             if new_pushed_nodes.is_empty() {
                 return Err(vec![GraphValidationError::UnsatisfiableOrdering {  }]);
             }
             pushed_nodes = new_pushed_nodes;
+            output.push(new_output.into_boxed_slice());
         }
 
         Ok(output.into_boxed_slice())
@@ -321,7 +323,7 @@ impl RenderGraph {
                 &*self.steps.insert(steps)
             },
         };
-        for idx in steps.iter().copied() {
+        for idx in steps.iter().flatten().copied() {
             (self.nodes[idx].run)(&mut resources);
         }
         resources
@@ -460,7 +462,7 @@ mod tests {
         graph.push_node::<Reserver>();
         graph.push_node::<InputHalfer>();
         graph.define_input::<Input>();
-        assert_eq!(&*graph.construct_steps().unwrap(), &[2,3,1,0]);
+        assert_eq!(graph.construct_steps().unwrap().iter().map(|p| &**p).collect_vec(), vec![&[2,3][..],&[1],&[0]]);
     }
 
     #[test]
@@ -510,6 +512,6 @@ mod tests {
         graph.push_node::<Consumer>();
         graph.push_node::<Borrow1>();
         graph.push_node::<Borrow2>();
-        assert_eq!(&*graph.construct_steps().unwrap(), &[0,2,3,1]);
+        assert_eq!(graph.construct_steps().unwrap().iter().map(|p| &**p).collect_vec(), vec![&[0][..],&[2,3],&[1]]);
     }
 }
