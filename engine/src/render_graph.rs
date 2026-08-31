@@ -31,7 +31,7 @@ typemap::impl_dyn_trait!(GraphResourceId);
 macro_rules! graph_resource {
     ($(#[$attrs:meta])* $vis:vis struct $name:ident($val_vis:vis $content:ty)) => {
         $(#[$attrs])* $vis struct $name($val_vis $content);
-        impl $crate::graph::GraphResourceId for $name {
+        impl $crate::render_graph::GraphResourceId for $name {
             type Resource = $content
                 where Self: Sized;
             fn new_resource(val: Self::Resource) -> Self
@@ -69,10 +69,10 @@ pub trait GraphNode: 'static {
 #[macro_export]
 macro_rules! declare_graph_deps {
     (($($input:ty),*) -> ($($output:ty),*)) => {
-        type Inputs = ($(<$input as $crate::graph::GraphResourceId>::Resource,)*);
-        type Outputs = ($(<$output as $crate::graph::GraphResourceId>::Resource,)*);
+        type Inputs = ($(<$input as $crate::render_graph::GraphResourceId>::Resource,)*);
+        type Outputs = ($(<$output as $crate::render_graph::GraphResourceId>::Resource,)*);
 
-        fn register_resources(registry: &mut $crate::graph::TypeNameRegistry) {
+        fn register_resources(registry: &mut $crate::render_graph::TypeNameRegistry) {
             $(registry.register::<$input>();)*
             $(registry.register::<$output>();)*
         }
@@ -84,11 +84,11 @@ macro_rules! declare_graph_deps {
             const OUTPUTS: &'static [::std::any::TypeId] = &[$(::std::any::TypeId::of::<$output>()),*];
             OUTPUTS
         }
-        fn gather_inputs(store: &mut $crate::graph::ResourceStore) -> Self::Inputs {
-            ($(<$input as $crate::graph::GraphResourceId>::get_resource(*store.resources.remove::<$input>().expect(std::stringify!(Missing input $input))),)*)
+        fn gather_inputs(store: &mut $crate::render_graph::ResourceStore) -> Self::Inputs {
+            ($(<$input as $crate::render_graph::GraphResourceId>::get_resource(*store.resources.remove::<$input>().expect(std::stringify!(Missing input $input))),)*)
         }
-        fn store_outputs(outputs: Self::Outputs, store: &mut $crate::graph::ResourceStore) {
-            $(store.resources.insert(Box::new(<$output as $crate::graph::GraphResourceId>::new_resource(outputs.${index()})));)*
+        fn store_outputs(outputs: Self::Outputs, store: &mut $crate::render_graph::ResourceStore) {
+            $(store.resources.insert(Box::new(<$output as $crate::render_graph::GraphResourceId>::new_resource(outputs.${index()})));)*
         }
     };
 }

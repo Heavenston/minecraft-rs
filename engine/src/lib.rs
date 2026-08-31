@@ -4,6 +4,7 @@ mod renderer;
 pub use renderer::*;
 mod engine;
 pub use engine::*;
+pub mod render_graph;
 mod render_world;
 pub use render_world::*;
 mod inputs_state;
