@@ -5,7 +5,7 @@ authors.workspace = true
 edition.workspace = true
 
 [dependencies]
-harness = { workspace = true }
+engine = { workspace = true }
 anyhow = { workspace = true }
 glam = { workspace = true }
 tokio = { version = "1.53.1", features = ["full"] }

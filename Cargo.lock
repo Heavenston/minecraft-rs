@@ -384,6 +384,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "glam",
+ "harness",
+ "itertools",
+ "parking_lot",
+ "pollster",
+ "render_graph",
+ "thiserror 2.0.20",
+ "tracing",
+ "typemap",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -467,8 +486,8 @@ name = "game"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "engine",
  "glam",
- "harness",
  "itertools",
  "ordermap",
  "tokio",
@@ -1488,6 +1507,7 @@ version = "0.1.0"
 dependencies = [
  "itertools",
  "thiserror 2.0.20",
+ "tracing",
  "typemap",
 ]
 

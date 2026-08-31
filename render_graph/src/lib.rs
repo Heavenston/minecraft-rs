@@ -321,7 +321,15 @@ impl RenderGraph {
                     Ok(steps) => steps,
                     Err(e) => panic!("{e:#?}"),
                 };
-                &*self.steps.insert(steps)
+                if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
+                    self.steps = Some(steps);
+                    std::fs::write(path, format!("{self}")).unwrap();
+                    tracing::debug!(output = path, "Validated graph, written dot version in given path");
+                    self.steps.as_ref().unwrap()
+                }
+                else {
+                    &*self.steps.insert(steps)
+                }
             },
         };
         for idx in steps.iter().flatten().copied() {
@@ -382,6 +390,15 @@ impl std::fmt::Display for RenderGraph {
                 writeln!(f, "{INDENT}{name} -> {output}")?;
             }
         }
+
+        if let Some(steps) = &self.steps {
+            for [a, b] in steps.iter().flatten().copied().array_windows() {
+                let name_a = get_name!(self.nodes[a].type_id, "N");
+                let name_b = get_name!(self.nodes[b].type_id, "N");
+                writeln!(f, "{INDENT}{name_a} -> {name_b} [color=blue]")?;
+            }
+        }
+        
         write!(f, "}}")?;
 
         Ok(())

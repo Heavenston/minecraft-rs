@@ -7,4 +7,5 @@ edition.workspace = true
 [dependencies]
 typemap = { workspace = true }
 itertools = { workspace = true }
+tracing = { workspace = true }
 thiserror = "2.0.20"

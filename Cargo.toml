@@ -1,10 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["harness", "game", "render_graph", "typemap"]
+members = ["harness", "game", "render_graph", "typemap", "engine"]
 
 [workspace.dependencies]
-harness = { path = "./harness" }
 typemap = { path = "./typemap" }
+harness = { path = "./harness" }
+engine = { path = "./engine" }
 render_graph = { path = "./render_graph" }
 anyhow = "1.0.104"
 wgpu = "30.0.1"
