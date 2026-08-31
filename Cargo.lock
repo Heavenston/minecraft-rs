@@ -314,6 +314,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "crevice"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3f5b73a35775798e5a941a98d3eda7dd6ac6ba4715bd3cce8fef6bdf1a74c91"
+dependencies = [
+ "bytemuck",
+ "crevice-derive",
+ "glam",
+ "mint",
+]
+
+[[package]]
+name = "crevice-derive"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "669025c5d21a002274fa2a547be9da319ae8e678cf99a7e242ae5c785bcd6fa8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -389,6 +412,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "crevice",
  "glam",
  "harness",
  "itertools",
@@ -546,6 +570,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21fef0953c54fd3de2f44b743fbf77e044c81a25faee03636dfccc0d35135e23"
 dependencies = [
  "bytemuck",
+ "mint",
 ]
 
 [[package]]
@@ -841,6 +866,12 @@ checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "mint"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 
 [[package]]
 name = "mio"

@@ -199,6 +199,8 @@ impl RenderGraph {
             let inputs_available = std::iter::chain(self.nodes[n].inputs, self.nodes[n].borrowed_inputs)
                 .all(|p| available_resources.contains(p));
             let outputs_non_present = self.nodes[n].outputs.iter()
+                // A resource taken then outputed by the same node is exempt here
+                .filter(|p| !self.nodes[n].inputs.contains(p))
                 .all(|p| !available_resources.contains(p));
             let runnable = inputs_available && outputs_non_present;
 
@@ -257,7 +259,7 @@ impl RenderGraph {
         for idx in steps.iter().copied() {
             (self.nodes[idx].run)(&mut resources);
         }
-        self.inputs.clear();
+        self.input_values = Default::default();
         resources
     }
 }

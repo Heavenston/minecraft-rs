@@ -16,6 +16,7 @@ winit = { workspace = true }
 glam = { workspace = true, features = ["bytemuck"] }
 pollster = "1.0.1"
 itertools = { workspace = true }
-bytemuck = "1.25.2"
-parking_lot = "0.12.5"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+parking_lot = { version = "0.12.5", features = ["arc_lock"] }
 thiserror = "2.0.20"
+crevice = { version = "0.20.1", features = ["glam"] }

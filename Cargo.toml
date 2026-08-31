@@ -11,7 +11,7 @@ anyhow = "1.0.104"
 wgpu = "30.0.1"
 tracing = "0.1.44"
 winit = "0.30.13"
-glam = "0.33.6"
+glam = { version = "0.33.6", features = ["bytemuck"] }
 itertools = "0.15.0"
 
 [workspace.package]
