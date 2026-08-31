@@ -84,6 +84,7 @@ macro_rules! declare_graph_deps {
         );
         type Outputs = ($(<$output as $crate::render_graph::GraphResourceId>::Resource,)*);
 
+        #[allow(unused)]
         fn register_resources(registry: &mut $crate::render_graph::TypeNameRegistry) {
             $(registry.register::<$input>();)*
             $(registry.register::<$output>();)*
@@ -100,12 +101,14 @@ macro_rules! declare_graph_deps {
             const OUTPUTS: &'static [::std::any::TypeId] = &[$(::std::any::TypeId::of::<$output>()),*];
             OUTPUTS
         }
+        #[allow(unused)]
         fn gather_inputs(store: &mut $crate::render_graph::ResourceStore) -> Self::Inputs<'_> {
             (
                 $(<$input as $crate::render_graph::GraphResourceId>::get_resource(*store.resources.remove::<$input>().expect(std::stringify!(Missing input $input))),)*
                 $(<$borrowed_input as $crate::render_graph::GraphResourceId>::get_resource_ref(store.resources.get::<$borrowed_input>().expect(std::stringify!(Missing input $borrowed_input))),)*
             )
         }
+        #[allow(unused)]
         fn store_outputs(outputs: Self::Outputs, store: &mut $crate::render_graph::ResourceStore) {
             $(store.resources.insert(Box::new(<$output as $crate::render_graph::GraphResourceId>::new_resource(outputs.${index()})));)*
         }
@@ -365,6 +368,11 @@ impl std::fmt::Display for RenderGraph {
                 let input = get_name!(input, "R");
                 writeln!(f, "{INDENT}{input} -> {name}")?;
             }
+            for &borrowed_input in n.borrowed_inputs {
+                write_resource!(borrowed_input);
+                let borrowed_input = get_name!(borrowed_input, "R");
+                writeln!(f, "{INDENT}{borrowed_input} -> {name} [style=dashed]")?;
+            }
             for &output in n.outputs {
                 write_resource!(output);
                 let output = get_name!(output, "R");
@@ -465,5 +473,43 @@ mod tests {
         graph.set_input::<Input>(format!("abcdefghi"));
         let output = graph.run();
         assert_eq!(output.resources.get::<Output>(), Some(&Output(format!("abcdeihgfe"))));
+    }
+
+    graph_resource!(struct Parrallel(u32));
+
+    struct Emitter;
+    impl GraphNode for Emitter {
+        declare_graph_deps!(() -> (Parrallel,));
+
+        fn run((): ()) -> (u32,) {
+            (0,)
+        }
+    }
+
+    struct Borrow1;
+    impl GraphNode for Borrow1 {
+        declare_graph_deps!((ref Parrallel,) -> ());
+        fn run((_,): (&u32,)) -> () { }
+    }
+    struct Borrow2;
+    impl GraphNode for Borrow2 {
+        declare_graph_deps!((ref Parrallel,) -> ());
+        fn run((_,): (&u32,)) -> () { }
+    }
+
+    struct Consumer;
+    impl GraphNode for Consumer {
+        declare_graph_deps!((Parrallel,) -> ());
+        fn run((_,): (u32,)) -> () { }
+    }
+
+    #[test]
+    fn parallel_borrow_contruct() {
+        let mut graph = RenderGraph::new();
+        graph.push_node::<Emitter>();
+        graph.push_node::<Consumer>();
+        graph.push_node::<Borrow1>();
+        graph.push_node::<Borrow2>();
+        assert_eq!(&*graph.construct_steps().unwrap(), &[0,2,3,1]);
     }
 }
