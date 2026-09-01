@@ -167,6 +167,11 @@ impl RenderGraph {
     }
 
     pub fn push_node<N: GraphNode>(&mut self) {
+        if self.nodes.iter().any(|n| n.type_id == TypeId::of::<N>()) {
+            tracing::warn!("Node {} was pushed again to the render graph", std::any::type_name::<N>());
+            return;
+        }
+
         self.type_name_registry.register::<N>();
         N::register_resources(&mut self.type_name_registry);
 
@@ -188,6 +193,13 @@ impl RenderGraph {
         });
 
         self.steps = None;
+    }
+
+    pub fn remove_node<N: GraphNode>(&mut self) {
+        if let Some(pos) = self.nodes.iter().position(|n| n.type_id != TypeId::of::<N>()) {
+            self.nodes.swap_remove(pos);
+            self.steps = None;
+        }
     }
 
     fn construct_steps(&self) -> GraphEvaluationSteps {
