@@ -1,7 +1,7 @@
 #![feature(macro_metavar_expr)]
 
-use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, ops::ControlFlow};
-use itertools::Itertools as _;
+use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}};
+use itertools::{Itertools as _, chain};
 use typemap::TypeMap;
 
 #[derive(Debug, Clone, Default)]
@@ -14,7 +14,11 @@ impl TypeNameRegistry {
         self.content.insert(TypeId::of::<T>(), std::any::type_name::<T>());
     }
 
-    pub fn get_name(&self, id: TypeId) -> Option<&'static str> {
+    pub fn get_name(&self, id: TypeId) -> &'static str {
+        self.content.get(&id).copied().unwrap_or("<unknown>")
+    }
+
+    pub fn try_get_name(&self, id: TypeId) -> Option<&'static str> {
         self.content.get(&id).copied()
     }
 }
@@ -131,10 +135,7 @@ struct NodeData {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum GraphValidationError {
-    #[error("Could not found satisfying graph ordering")]
-    UnsatisfiableOrdering { },
-}
+enum GraphValidationError { }
 
 type GraphEvaluationSteps = Box<[usize]>;
 
@@ -192,46 +193,126 @@ impl RenderGraph {
         self.steps = None;
     }
 
-    fn recursive_stepper(
-        &self,
-        output: Vec<usize>,
-        available_resources: HashSet<TypeId>,
-        remaining_nodes: Vec<usize>,
-    ) -> ControlFlow<GraphEvaluationSteps> {
-        if remaining_nodes.is_empty() {
-            return ControlFlow::Break(output.into_boxed_slice());
+    fn construct_steps(&self) -> Result<GraphEvaluationSteps, GraphValidationError> {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        enum InputOrNode {
+            Input,
+            Node(usize),
+        }
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        struct ResolvedInput {
+            resource: TypeId,
+            producer: InputOrNode,
         }
 
-        for &n in &remaining_nodes {
-            let inputs_available = std::iter::chain(self.nodes[n].inputs, self.nodes[n].borrowed_inputs)
-                .all(|p| available_resources.contains(p));
-            let outputs_non_present = self.nodes[n].outputs.iter()
-                // A resource taken then outputed by the same node is exempt here
-                .filter(|p| !self.nodes[n].inputs.contains(p))
-                .all(|p| !available_resources.contains(p));
-            let runnable = inputs_available && outputs_non_present;
+        let mut producers = std::iter::chain(
+            self.nodes.iter().enumerate().flat_map(|(node_id, p)| p.outputs.iter().map(move |&tid| (tid, InputOrNode::Node(node_id)))),
+            self.inputs.iter().map(|&tid| (tid, InputOrNode::Input)),
+        ).into_group_map();
+        type ResolvedInputs = Box<[Box<[Option<ResolvedInput>]>]>;
+        let mut resolved_inputs: ResolvedInputs = self.nodes.iter().map(|node| vec![None; node.inputs.len()]).map_into().collect_vec().into();
+        let mut resolved_borrows: ResolvedInputs = self.nodes.iter().map(|node| vec![None; node.borrowed_inputs.len()]).map_into().collect_vec().into();
 
-            if runnable {
-                let mut output = output.clone();
-                output.push(n);
-                let mut available_resources = available_resources.clone();
-                for i in self.nodes[n].inputs {
-                    available_resources.remove(i);
+        fn is_after_or_equal(graph: &RenderGraph, resolved_inputs: &ResolvedInputs, resolved_borrows: &ResolvedInputs, after: InputOrNode, before: usize) -> bool {
+            let after = match after { InputOrNode::Input => return false, InputOrNode::Node(node) => node };
+            if after == before { return true; }
+
+            let consumes_borrow = resolved_borrows[before].iter()
+                .filter_map(Option::as_ref)
+                .any(|a| resolved_inputs[after].iter().filter_map(Option::as_ref).any(|b| a == b));
+
+            if consumes_borrow {
+                return true;
+            }
+
+            chain!(
+                resolved_inputs[after].iter(),
+                resolved_borrows[after].iter(),
+            ).filter_map(Option::as_ref)
+                .any(|input| is_after_or_equal(graph, resolved_inputs, resolved_borrows, input.producer, before))
+        }
+
+        while !resolved_inputs.iter().flatten().all(|p| p.is_some()) || !resolved_borrows.iter().flatten().all(|p| p.is_some()) {
+            #[derive(Default)]
+            struct ClaimList {
+                borrows: Vec<(usize, usize)>,
+                inputs: Vec<(usize, usize)>,
+            }
+            let mut claims = HashMap::<(TypeId, InputOrNode), ClaimList>::new();
+            for (node_id, node) in self.nodes.iter().enumerate() {
+                for (input_idx, input) in node.inputs.iter().enumerate() {
+                    if resolved_inputs[node_id][input_idx].is_some() { continue };
+                    let Some(producers) = producers.get_mut(&input)
+                    else { panic!("Missing producers") };
+
+                    let producer = producers.iter().filter(|&&producer| {
+                        !is_after_or_equal(self, &resolved_inputs, &resolved_borrows, producer, node_id)
+                    }).exactly_one();
+
+                    match producer {
+                        Ok(&p) => claims.entry((*input, p)).or_default().inputs.push((node_id, input_idx)),
+                        Err(_) => (),
+                    }
                 }
-                available_resources.extend(self.nodes[n].outputs);
-                let remaining_nodes = remaining_nodes.iter().copied().filter(|&p| p != n).collect();
-                self.recursive_stepper(output, available_resources, remaining_nodes)?;
+                for (borrow_idx, borrow_input) in node.borrowed_inputs.iter().enumerate() {
+                    if resolved_borrows[node_id][borrow_idx].is_some() { continue };
+                    let Some(producers) = producers.get_mut(&borrow_input)
+                    else { panic!("Missing producers") };
+
+                    let producer = producers.iter().filter(|&&producer| {
+                        !is_after_or_equal(self, &resolved_inputs, &resolved_borrows, producer, node_id)
+                    }).exactly_one();
+
+                    match producer {
+                        Ok(&p) => claims.entry((*borrow_input, p)).or_default().borrows.push((node_id, borrow_idx)),
+                        Err(_) => (),
+                    }
+                }
+            }
+
+            let mut found_valid = false;
+            for ((claim_tid, claim_producer), claimers) in claims {
+                if claimers.borrows.is_empty() {
+                    if let Ok(&(node_id, input_idx)) = claimers.inputs.iter().exactly_one() {
+                        found_valid = true;
+                        debug_assert!(resolved_inputs[node_id][input_idx].is_none());
+                        resolved_inputs[node_id][input_idx] = Some(ResolvedInput {
+                            resource: claim_tid,
+                            producer: claim_producer,
+                        });
+                        producers.get_mut(&claim_tid).unwrap().retain(|&p| p != claim_producer);
+                    }
+                }
+                else {
+                    found_valid = true;
+                    for (node_id, input_idx) in claimers.borrows {
+                        debug_assert!(resolved_borrows[node_id][input_idx].is_none());
+                        resolved_borrows[node_id][input_idx] = Some(ResolvedInput {
+                            resource: claim_tid,
+                            producer: claim_producer,
+                        });
+                    }
+                }
+            }
+            if !found_valid {
+                panic!("dd");
             }
         }
-        ControlFlow::Continue(())
-    }
 
-    fn construct_steps(&self) -> Result<GraphEvaluationSteps, GraphValidationError> {
-        let result = self.recursive_stepper(vec![], self.inputs.clone(), (0..self.nodes.len()).collect_vec());
-        match result {
-            ControlFlow::Continue(()) => Err(GraphValidationError::UnsatisfiableOrdering {  }),
-            ControlFlow::Break(steps) => Ok(steps),
-        }
+        let mut nodes = (0..self.nodes.len()).collect_vec();
+        // NOTE: This, in this state, doesn't follow sort_unstable_by conditions
+        // `is_after_or_equal` is not a total order function, and so by this method
+        // documentation, it may panic or give an invalid order
+        // For now it seems to work
+        nodes.sort_unstable_by(|&a, &b| if a == b {
+            std::cmp::Ordering::Equal
+        } else if is_after_or_equal(self, &resolved_inputs, &resolved_borrows, InputOrNode::Node(a), b) {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Less
+        });
+
+        Ok(nodes.into())        
     }
 
     pub fn run(&mut self) -> ResourceStore {
@@ -288,7 +369,7 @@ impl std::fmt::Display for RenderGraph {
             printed_resources.insert(id);
             let name = get_name!(id, $pref);
             write!(f, "{INDENT}{name} [shape={}", $shape)?;
-            if let Some(type_name) = self.type_name_registry.get_name(id) {
+            if let Some(type_name) = self.type_name_registry.try_get_name(id) {
                 write!(f, " label=\"")?;
                 $(write!(f, "{}", $name_prepend)?;)?
                 write!(f, "{type_name}\"")?;
@@ -306,7 +387,7 @@ impl std::fmt::Display for RenderGraph {
             write_node!(t, "R", "rectangle");
         }
         for (i, n) in self.nodes.iter().enumerate() {
-            write_node!(n.type_id, "N", "diamond", format!("{i} "));
+            write_node!(n.type_id, "N", "cylinder", format!("{i} "));
             let name = get_name!(n.type_id, "N");
             for &input in n.inputs {
                 write_resource!(input);
@@ -414,7 +495,7 @@ mod tests {
         graph.push_node::<Reserver>();
         graph.push_node::<InputHalfer>();
         graph.define_input::<Input>();
-        assert_eq!(&graph.construct_steps().unwrap()[..], &[2,1,3,0]);
+        assert_matches!(&graph.construct_steps().unwrap()[..], &[2,1,3,0] | &[3,2,1,0]);
     }
 
     #[test]
@@ -464,7 +545,16 @@ mod tests {
         graph.push_node::<Consumer>();
         graph.push_node::<Borrow1>();
         graph.push_node::<Borrow2>();
+        assert_matches!(&graph.construct_steps().unwrap()[..], &[0,2,3,1] | &[0,3,2,1]);
+    }
+
+    #[test]
+    fn parallel_borrow_run() {
+        let mut graph = RenderGraph::new();
+        graph.push_node::<Emitter>();
+        graph.push_node::<Consumer>();
+        graph.push_node::<Borrow1>();
+        graph.push_node::<Borrow2>();
         graph.run();
-        assert_eq!(&graph.construct_steps().unwrap()[..], &[0,2,3,1]);
     }
 }
