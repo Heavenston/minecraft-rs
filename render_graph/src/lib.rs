@@ -134,9 +134,6 @@ struct NodeData {
     outputs: &'static [TypeId],
 }
 
-#[derive(Debug, thiserror::Error)]
-enum GraphValidationError { }
-
 type GraphEvaluationSteps = Box<[usize]>;
 
 #[derive(Default)]
@@ -193,7 +190,7 @@ impl RenderGraph {
         self.steps = None;
     }
 
-    fn construct_steps(&self) -> Result<GraphEvaluationSteps, GraphValidationError> {
+    fn construct_steps(&self) -> GraphEvaluationSteps {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         enum InputOrNode {
             Input,
@@ -295,7 +292,7 @@ impl RenderGraph {
                 }
             }
             if !found_valid {
-                panic!("dd");
+                panic!("Could not contruct render graph ordering");
             }
         }
 
@@ -325,7 +322,8 @@ impl RenderGraph {
             output.push(node);
         }
         output.reverse();
-        Ok(output.into())        
+
+        output.into()        
     }
 
     pub fn run(&mut self) -> ResourceStore {
@@ -336,16 +334,7 @@ impl RenderGraph {
         let steps = match &self.steps {
             Some(steps) => steps,
             None => {
-                let steps = match self.construct_steps() {
-                    Ok(steps) => steps,
-                    Err(error) => {
-                        if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
-                            std::fs::write(path, format!("{self}")).unwrap();
-                            tracing::error!(output = path, %error, "Errors while validating graph, written dot version in given path");
-                        }
-                        panic!("{error:#?}")
-                    },
-                };
+                let steps = self.construct_steps();
                 if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
                     self.steps = Some(steps);
                     std::fs::write(path, format!("{self}")).unwrap();
@@ -508,7 +497,7 @@ mod tests {
         graph.push_node::<Reserver>();
         graph.push_node::<InputHalfer>();
         graph.define_input::<Input>();
-        assert_matches!(&graph.construct_steps().unwrap()[..], &[2,1,3,0] | &[3,2,1,0]);
+        assert_matches!(&graph.construct_steps()[..], &[2,1,3,0] | &[3,2,1,0]);
     }
 
     #[test]
@@ -558,7 +547,7 @@ mod tests {
         graph.push_node::<Consumer>();
         graph.push_node::<Borrow1>();
         graph.push_node::<Borrow2>();
-        assert_matches!(&graph.construct_steps().unwrap()[..], &[0,2,3,1] | &[0,3,2,1]);
+        assert_matches!(&graph.construct_steps()[..], &[0,2,3,1] | &[0,3,2,1]);
     }
 
     #[test]
