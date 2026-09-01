@@ -89,6 +89,7 @@ macro_rules! declare_graph_deps {
         #[allow(unused)]
         fn register_resources(registry: &mut $crate::TypeNameRegistry) {
             $(registry.register::<$input>();)*
+            $(registry.register::<$borrowed_input>();)*
             $(registry.register::<$output>();)*
         }
         fn list_inputs() -> &'static [::std::any::TypeId] {
@@ -170,6 +171,12 @@ impl RenderGraph {
     pub fn push_node<N: GraphNode>(&mut self) {
         self.type_name_registry.register::<N>();
         N::register_resources(&mut self.type_name_registry);
+
+        let inputs = N::list_inputs();
+        let borrowed_inputs = N::list_borrowed_inputs();
+        let shared = inputs.iter().filter(|o| borrowed_inputs.contains(o)).collect_vec();
+        assert!(shared.is_empty(), "Error pushing Node {} into render graph, the following resources are both consumed and borrowed: {shared:?}", std::any::type_name::<N>());
+
         self.nodes.push(NodeData {
             type_id: std::any::TypeId::of::<N>(),
             run: Box::new(move |store| {
