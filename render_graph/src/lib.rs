@@ -1,6 +1,6 @@
 #![feature(macro_metavar_expr)]
 
-use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}};
+use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, convert::identity};
 use itertools::{Itertools as _, chain};
 use typemap::TypeMap;
 
@@ -299,20 +299,33 @@ impl RenderGraph {
             }
         }
 
-        let mut nodes = (0..self.nodes.len()).collect_vec();
-        // NOTE: This, in this state, doesn't follow sort_unstable_by conditions
-        // `is_after_or_equal` is not a total order function, and so by this method
-        // documentation, it may panic or give an invalid order
-        // For now it seems to work
-        nodes.sort_unstable_by(|&a, &b| if a == b {
-            std::cmp::Ordering::Equal
-        } else if is_after_or_equal(self, &resolved_inputs, &resolved_borrows, InputOrNode::Node(a), b) {
-            std::cmp::Ordering::Greater
-        } else {
-            std::cmp::Ordering::Less
-        });
+        let mut successors: Vec<HashSet<usize>> = vec![HashSet::new(); self.nodes.len()];
+        for (node_idx, input) in chain!(resolved_borrows.iter().enumerate(), resolved_inputs.iter().enumerate()).flat_map(|(node_idx, inputs)| inputs.iter().filter_map(Option::as_ref).map(move |input| (node_idx, input))) {
+            if let InputOrNode::Node(node_idx2) = input.producer {
+                successors[node_idx2].insert(node_idx);
+            }
+        }
+        for (node_idx, borrows) in resolved_borrows.iter().enumerate() {
+            for borrow in borrows.iter().filter_map(Option::as_ref) {
+                let consumer = resolved_inputs.iter().enumerate().flat_map(|(node_idx, inputs)| inputs.iter().filter_map(Option::as_ref).map(move |input| (node_idx, input)))
+                    .find(|&(_,p)| p == borrow);
+                if let Some((consumer,_)) = consumer {
+                    successors[node_idx].insert(consumer);
+                }
+            }
+        }
+        let successors = successors;
 
-        Ok(nodes.into())        
+        let mut done = vec![false; self.nodes.len()];
+        let mut output = Vec::<usize>::new();
+        while !done.iter().copied().all(identity) {
+            let Some((node, _)) = successors.iter().enumerate().filter(|&(i, _)| !done[i]).find(|(_,succ)| succ.iter().find(|&&o| !done[o]).is_none())
+            else { panic!("Could not resolve graph ordering") };
+            done[node] = true;
+            output.push(node);
+        }
+        output.reverse();
+        Ok(output.into())        
     }
 
     pub fn run(&mut self) -> ResourceStore {
