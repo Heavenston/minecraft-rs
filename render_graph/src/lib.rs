@@ -383,10 +383,10 @@ impl std::fmt::Display for RenderGraph {
             }
         }}; }
 
-        for &t in self.inputs.iter() {
+        for &t in self.inputs.iter().sorted_by_key(|p| self.type_name_registry.get_name(**p)) {
             write_node!(t, "R", "rectangle");
         }
-        for (i, n) in self.nodes.iter().enumerate() {
+        for (i, n) in self.nodes.iter().enumerate().sorted_by_key(|(_, n)| self.type_name_registry.get_name(n.type_id)) {
             write_node!(n.type_id, "N", "cylinder", format!("{i} "));
             let name = get_name!(n.type_id, "N");
             for &input in n.inputs {
