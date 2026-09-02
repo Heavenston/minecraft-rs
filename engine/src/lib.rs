@@ -2,6 +2,7 @@
 
 mod render_graph_nodes;
 pub mod world;
+pub mod material;
 use std::{num::NonZero, sync::Arc};
 
 use crevice::std140::AsStd140;
@@ -12,14 +13,20 @@ use parking_lot::RwLock;
 
 use crate::{render_graph_nodes::RenderPassConfig, world::{GPUWorld, World, WorldUniformBuffer}};
 
+pub struct ResumeCtx<'a> {
+    pub renderer: &'a mut Renderer,
+    pub world: &'a mut World,
+    pub gpu_world: &'a mut GPUWorld,
+}
+
 pub struct Ctx<'a> {
     pub inputs_state: &'a mut InputsState,
     pub renderer: &'a mut Renderer,
 }
 
 pub trait App: 'static {
-    fn resume(&mut self, renderer: &mut Renderer) -> Result<()> {
-        let _ = renderer;
+    fn resume(&mut self, ctx: &mut ResumeCtx<'_>) -> Result<()> {
+        let _ = ctx;
         Ok(())
     }
 
@@ -76,19 +83,21 @@ impl<A: App> harness::App for HarnessApp<A> {
             staging_belt: wgpu::util::StagingBelt::new(renderer.device().clone(), 128),
             world_uniform,
             world_bind_group,
+            world_bind_group_layout,
         })));
 
-        self.app.resume(renderer)
+        self.app.resume(&mut ResumeCtx {
+            renderer,
+            world: &mut *self.world.write(),
+            gpu_world: &mut *self.gpu_world.as_ref().unwrap().write(),
+        })
     }
 
     fn update(&mut self, ctx: harness::Ctx<'_>) -> anyhow::Result<()> {
-        let gpu_world = self.gpu_world.as_ref().unwrap();
-
-        ctx.renderer.render_graph().set_input::<render_graph_nodes::RenderPassConfigResource>(RenderPassConfig {
-            clear_color: wgpu::Color::RED,
-        });
+        self.world.write().update_render_graph(ctx.renderer.render_graph());
+        
         ctx.renderer.render_graph().set_input::<render_graph_nodes::WorldResource>(self.world.read_arc());
-        ctx.renderer.render_graph().set_input::<render_graph_nodes::GPUWorldResource>(gpu_world.write_arc());
+        ctx.renderer.render_graph().set_input::<render_graph_nodes::GPUWorldResource>(self.gpu_world.as_ref().unwrap().write_arc());
         self.app.update(Ctx {
             inputs_state: ctx.inputs_state,
             renderer: ctx.renderer,

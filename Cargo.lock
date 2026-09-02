@@ -413,6 +413,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "crevice",
+ "genmap",
  "glam",
  "harness",
  "itertools",

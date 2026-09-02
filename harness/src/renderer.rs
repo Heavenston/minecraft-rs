@@ -110,6 +110,10 @@ impl Renderer {
         &mut self.render_graph
     }
 
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        self.surface_config.format
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.surface_config.width = width;

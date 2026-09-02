@@ -7,7 +7,7 @@ use render_graph::{ GraphNode, RenderGraph, declare_graph_deps, graph_resource }
 
 use crate::world::{GPUWorld, World, WorldUniformBuffer};
 
-pub(super) fn register(graph: &mut RenderGraph) {
+pub(crate) fn register(graph: &mut RenderGraph) {
     graph.define_input::<RenderPassConfigResource>();
     graph.define_input::<WorldResource>();
 
@@ -18,18 +18,18 @@ pub(super) fn register(graph: &mut RenderGraph) {
     graph.push_node(EndRenderPass);
 }
 
-pub(super) struct RenderPassConfig {
+pub(crate) struct RenderPassConfig {
     pub clear_color: wgpu::Color,
 }
 
-graph_resource!(pub(super) struct RenderPassConfigResource(pub(super) RenderPassConfig));
-graph_resource!(pub(super) struct WorldResource(ArcRwLockReadGuard<RawRwLock, World>));
-graph_resource!(pub(super) struct GPUWorldResource(ArcRwLockWriteGuard<RawRwLock, GPUWorld>));
+graph_resource!(pub(crate) struct RenderPassConfigResource(pub RenderPassConfig));
+graph_resource!(pub(crate) struct WorldResource(ArcRwLockReadGuard<RawRwLock, World>));
+graph_resource!(pub(crate) struct GPUWorldResource(ArcRwLockWriteGuard<RawRwLock, GPUWorld>));
 
-graph_resource!(struct BeforeRenderPass(()));
-graph_resource!(struct UsingStagingBelt(()));
-graph_resource!(struct RenderPass(wgpu::RenderPass<'static>));
-graph_resource!(struct RenderPassCommandEncoder(wgpu::CommandEncoder));
+graph_resource!(pub(crate) struct BeforeRenderPass(pub ()));
+graph_resource!(pub(crate) struct UsingStagingBelt(pub ()));
+graph_resource!(pub(crate) struct RenderPass(pub wgpu::RenderPass<'static>));
+graph_resource!(pub(crate) struct RenderPassCommandEncoder(pub wgpu::CommandEncoder));
 
 struct CreateUsingStagingBelt;
 impl GraphNode for CreateUsingStagingBelt {
@@ -64,9 +64,9 @@ impl GraphNode for FinishStagingBelt {
 
 struct StartRenderPass;
 impl GraphNode for StartRenderPass {
-    declare_graph_deps!((render_res::FrameCommandEncoder,RenderPassConfigResource,BeforeRenderPass,ref render_res::SurfaceTextureView,) -> (RenderPass,RenderPassCommandEncoder,));
-    fn run(&mut self, (mut command_encoder,config,_,texture_view): Self::Inputs<'_>) -> Self::Outputs {
-        let render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    declare_graph_deps!((render_res::FrameCommandEncoder,RenderPassConfigResource,BeforeRenderPass,GPUWorldResource,ref render_res::SurfaceTextureView,) -> (RenderPass,RenderPassCommandEncoder,GPUWorldResource,));
+    fn run(&mut self, (mut command_encoder,config,_,gpu_world,texture_view): Self::Inputs<'_>) -> Self::Outputs {
+        let mut render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("render_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: texture_view,
@@ -80,7 +80,9 @@ impl GraphNode for StartRenderPass {
             multiview_mask: None,
         }).forget_lifetime();
 
-        (render_pass,command_encoder)
+        render_pass.set_bind_group(0, &gpu_world.world_bind_group, &[]);
+
+        (render_pass,command_encoder,gpu_world)
     }
 }
 
