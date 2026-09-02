@@ -48,26 +48,36 @@ impl<T> GenMap<T> {
         }
     }
 
-    pub fn get(&self, handle: Handle<T>) -> Option<&T> {
+    pub fn get_index(&self, handle: Handle<T>) -> Option<usize> {
         let cell = self.sparse.get(handle.sparse().to_usize())?;
 
         if cell.generation != handle.generation() {
             None
         }
         else {
-            Some(&self.dense_values[cell.dense_idx_or_next_free.as_dense().to_usize()])
+            Some(cell.dense_idx_or_next_free.as_dense().to_usize())
         }
     }
 
-    pub fn get_mut(&mut self, handle: Handle<T>) -> Option<&mut T> {
-        let cell = self.sparse.get_mut(handle.sparse().to_usize())?;
-
-        if cell.generation != handle.generation() {
+    pub fn get_handle(&self, index: usize) -> Option<Handle<T>> {
+        if index >= self.dense_values.len() {
             None
         }
         else {
-            Some(&mut self.dense_values[cell.dense_idx_or_next_free.as_dense().to_usize()])
+            let sparse_idx = self.dense_to_sparse[index].clone();
+            let generation = self.sparse[sparse_idx.to_usize()].generation;
+            Some(Handle::new(sparse_idx, generation))
         }
+    }
+
+    pub fn get(&self, handle: Handle<T>) -> Option<&T> {
+        let index = self.get_index(handle)?;
+        Some(&self.dense_values[index])
+    }
+
+    pub fn get_mut(&mut self, handle: Handle<T>) -> Option<&mut T> {
+        let index = self.get_index(handle)?;
+        Some(&mut self.dense_values[index])
     }
 
     pub fn remove(&mut self, handle: Handle<T>) -> Option<T> {
