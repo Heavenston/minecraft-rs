@@ -48,6 +48,15 @@ impl<T> GenMap<T> {
         }
     }
 
+    pub fn has(&self, handle: Handle<T>) -> bool {
+        if let Some(cell) = self.sparse.get(handle.sparse().to_usize()) {
+            cell.generation == handle.generation()
+        }
+        else {
+            false
+        }
+    }
+
     pub fn get_index(&self, handle: Handle<T>) -> Option<usize> {
         let cell = self.sparse.get(handle.sparse().to_usize())?;
 
