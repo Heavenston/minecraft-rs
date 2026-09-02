@@ -1543,6 +1543,7 @@ dependencies = [
 name = "render_graph"
 version = "0.1.0"
 dependencies = [
+ "genmap",
  "itertools",
  "tracing",
  "typemap",

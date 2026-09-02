@@ -1,6 +1,7 @@
 #![feature(macro_metavar_expr)]
 
-use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, convert::identity};
+use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, convert::identity, marker::PhantomData};
+use genmap::GenMap;
 use itertools::{Itertools as _, chain};
 use typemap::TypeMap;
 
@@ -65,6 +66,10 @@ pub trait GraphNode: 'static {
     type Inputs<'a>;
     type Outputs;
 
+    fn label(&self) -> &str {
+        std::any::type_name::<Self>()
+    }
+
     #[doc(hidden)]
     fn register_resources(registry: &mut TypeNameRegistry);
     #[doc(hidden)]
@@ -78,7 +83,7 @@ pub trait GraphNode: 'static {
     #[doc(hidden)]
     fn store_outputs(outputs: Self::Outputs, store: &mut ResourceStore);
 
-    fn run(inputs: Self::Inputs<'_>) -> Self::Outputs;
+    fn run(&mut self, inputs: Self::Inputs<'_>) -> Self::Outputs;
 }
 
 #[macro_export]
@@ -126,13 +131,84 @@ pub struct ResourceStore {
     pub resources: TypeMap<dyn GraphResourceId>,
 }
 
+trait GraphNodeWrapperTrait: std::any::Any {
+    fn wrapped_label(&self) -> &str;
+    fn wrapped_run(&mut self, store: &mut ResourceStore);
+}
+
+impl<N: GraphNode> GraphNodeWrapperTrait for N {
+    fn wrapped_label(&self) -> &str {
+        self.label()
+    }
+    fn wrapped_run(&mut self, store: &mut ResourceStore) {
+        let inputs = N::gather_inputs(store);
+        let outputs = self.run(inputs);
+        N::store_outputs(outputs, store);
+    }
+}
+
 struct NodeData {
-    type_id: TypeId,
-    run: Box<dyn FnMut(&mut ResourceStore)>,
     inputs: &'static [TypeId],
     borrowed_inputs: &'static [TypeId],
     outputs: &'static [TypeId],
+    node: Box<dyn GraphNodeWrapperTrait>,
 }
+
+pub struct NodeHandle<N> {
+    node: PhantomData<fn(N) -> N>,
+    inner: genmap::Handle<NodeData>,
+}
+
+impl<N> NodeHandle<N> {
+    fn new(inner: genmap::Handle<NodeData>) -> Self {
+        Self {
+            node: PhantomData,
+            inner,
+        }
+    }
+
+    pub fn to_untyped(&self) -> UntypedNodeHandle {
+        self.into()
+    }
+}
+
+impl<N> std::fmt::Debug for NodeHandle<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("NodeHandle")
+            .field(&self.inner)
+            .finish()
+    }
+}
+
+impl<N> Clone for NodeHandle<N> {
+    fn clone(&self) -> Self {
+        Self { node: PhantomData, inner: self.inner.clone() }
+    }
+}
+impl<N> Copy for NodeHandle<N> { }
+
+impl<N> PartialEq for NodeHandle<N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.node == other.node && self.inner == other.inner
+    }
+}
+impl<N> Eq for NodeHandle<N> { }
+
+impl<N> Into<UntypedNodeHandle> for NodeHandle<N> {
+    fn into(self) -> UntypedNodeHandle {
+        UntypedNodeHandle(self.inner)
+    }
+}
+
+impl<N> Into<UntypedNodeHandle> for &NodeHandle<N> {
+    fn into(self) -> UntypedNodeHandle {
+        (*self).into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct UntypedNodeHandle(genmap::Handle<NodeData>);
 
 type GraphEvaluationSteps = Box<[usize]>;
 
@@ -141,7 +217,8 @@ pub struct RenderGraph {
     type_name_registry: TypeNameRegistry,
     inputs: HashSet<TypeId>,
     input_values: TypeMap<dyn GraphResourceId>,
-    nodes: Vec<NodeData>,
+    nodes: GenMap<NodeData>,
+    explicit_orderings: Vec<(UntypedNodeHandle, UntypedNodeHandle)>,
 
     steps: Option<GraphEvaluationSteps>,
 }
@@ -166,12 +243,7 @@ impl RenderGraph {
         }
     }
 
-    pub fn push_node<N: GraphNode>(&mut self) {
-        if self.nodes.iter().any(|n| n.type_id == TypeId::of::<N>()) {
-            tracing::warn!("Node {} was pushed again to the render graph", std::any::type_name::<N>());
-            return;
-        }
-
+    pub fn push_node<N: GraphNode>(&mut self, node: N) -> NodeHandle<N> {
         self.type_name_registry.register::<N>();
         N::register_resources(&mut self.type_name_registry);
 
@@ -180,26 +252,30 @@ impl RenderGraph {
         let shared = inputs.iter().filter(|o| borrowed_inputs.contains(o)).collect_vec();
         assert!(shared.is_empty(), "Error pushing Node {} into render graph, the following resources are both consumed and borrowed: {shared:?}", std::any::type_name::<N>());
 
-        self.nodes.push(NodeData {
-            type_id: std::any::TypeId::of::<N>(),
-            run: Box::new(move |store| {
-                let inputs = N::gather_inputs(store);
-                let outputs = N::run(inputs);
-                N::store_outputs(outputs, store);
-            }),
+        let handle = self.nodes.insert(NodeData {
             inputs: N::list_inputs(),
             borrowed_inputs: N::list_borrowed_inputs(),
             outputs: N::list_outputs(),
+            node: Box::new(node),
         });
 
         self.steps = None;
+
+        NodeHandle::new(handle)
     }
 
-    pub fn remove_node<N: GraphNode>(&mut self) {
-        if let Some(pos) = self.nodes.iter().position(|n| n.type_id != TypeId::of::<N>()) {
-            self.nodes.swap_remove(pos);
-            self.steps = None;
-        }
+    pub fn define_explicit_ordering(&mut self, is_before: impl Into<UntypedNodeHandle>, is_after: impl Into<UntypedNodeHandle>) {
+        let is_before = is_before.into();
+        let is_after = is_after.into();
+        assert!(self.nodes.has(is_before.0) && self.nodes.has(is_after.0), "Given node handles are not valid");
+        self.explicit_orderings.push((is_before, is_after));
+    }
+
+    pub fn remove_node<N: GraphNode>(&mut self, handle: NodeHandle<N>) -> Option<N> {
+        let node = self.nodes.remove(handle.inner)?;
+        self.explicit_orderings.retain(|&(a, b)| a.0 != handle.inner && b.0 != handle.inner);
+        self.steps = None;
+        Some(*(node.node as Box<dyn Any>).downcast::<N>().expect("Correct type associated with handle"))
     }
 
     fn construct_steps(&self) -> GraphEvaluationSteps {
@@ -218,13 +294,20 @@ impl RenderGraph {
             self.nodes.iter().enumerate().flat_map(|(node_id, p)| p.outputs.iter().map(move |&tid| (tid, InputOrNode::Node(node_id)))),
             self.inputs.iter().map(|&tid| (tid, InputOrNode::Input)),
         ).into_group_map();
+        let explicit_orderings: Box<[(usize, usize)]> = self.explicit_orderings.iter()
+            .map(|&(before, after)| (self.nodes.get_index(before.0).unwrap(), self.nodes.get_index(after.0).unwrap()))
+            .collect_vec().into_boxed_slice();
         type ResolvedInputs = Box<[Box<[Option<ResolvedInput>]>]>;
         let mut resolved_inputs: ResolvedInputs = self.nodes.iter().map(|node| vec![None; node.inputs.len()]).map_into().collect_vec().into();
         let mut resolved_borrows: ResolvedInputs = self.nodes.iter().map(|node| vec![None; node.borrowed_inputs.len()]).map_into().collect_vec().into();
 
-        fn is_after_or_equal(graph: &RenderGraph, resolved_inputs: &ResolvedInputs, resolved_borrows: &ResolvedInputs, after: InputOrNode, before: usize) -> bool {
+        fn is_after_or_equal(graph: &RenderGraph, explicit_orderings: &[(usize, usize)], resolved_inputs: &ResolvedInputs, resolved_borrows: &ResolvedInputs, after: InputOrNode, before: usize) -> bool {
             let after = match after { InputOrNode::Input => return false, InputOrNode::Node(node) => node };
             if after == before { return true; }
+
+            if explicit_orderings.contains(&(before, after)) {
+                return true;
+            }
 
             let consumes_borrow = resolved_borrows[before].iter()
                 .filter_map(Option::as_ref)
@@ -238,7 +321,7 @@ impl RenderGraph {
                 resolved_inputs[after].iter(),
                 resolved_borrows[after].iter(),
             ).filter_map(Option::as_ref)
-                .any(|input| is_after_or_equal(graph, resolved_inputs, resolved_borrows, input.producer, before))
+                .any(|input| is_after_or_equal(graph, explicit_orderings, resolved_inputs, resolved_borrows, input.producer, before))
         }
 
         while !resolved_inputs.iter().flatten().all(|p| p.is_some()) || !resolved_borrows.iter().flatten().all(|p| p.is_some()) {
@@ -255,7 +338,7 @@ impl RenderGraph {
                     else { panic!("Missing producers") };
 
                     let producer = producers.iter().filter(|&&producer| {
-                        !is_after_or_equal(self, &resolved_inputs, &resolved_borrows, producer, node_id)
+                        !is_after_or_equal(self, &explicit_orderings, &resolved_inputs, &resolved_borrows, producer, node_id)
                     }).exactly_one();
 
                     match producer {
@@ -269,7 +352,7 @@ impl RenderGraph {
                     else { panic!("Missing producers") };
 
                     let producer = producers.iter().filter(|&&producer| {
-                        !is_after_or_equal(self, &resolved_inputs, &resolved_borrows, producer, node_id)
+                        !is_after_or_equal(self, &explicit_orderings, &resolved_inputs, &resolved_borrows, producer, node_id)
                     }).exactly_one();
 
                     match producer {
@@ -359,7 +442,7 @@ impl RenderGraph {
             },
         };
         for idx in steps.iter().copied() {
-            (self.nodes[idx].run)(&mut resources);
+            self.nodes.values_mut()[idx].node.wrapped_run(&mut resources);
         }
         self.input_values = Default::default();
         resources
@@ -378,31 +461,27 @@ impl std::fmt::Display for RenderGraph {
             p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
         }}; }
         let mut printed_resources = HashSet::<TypeId>::new();
-        macro_rules! write_node { ($id:expr,$pref:expr,$shape:expr$(,$name_prepend:expr)?) => {{
-            let id = $id;
-            printed_resources.insert(id);
-            let name = get_name!(id, $pref);
-            write!(f, "{INDENT}{name} [shape={}", $shape)?;
-            if let Some(type_name) = self.type_name_registry.try_get_name(id) {
-                write!(f, " label=\"")?;
-                $(write!(f, "{}", $name_prepend)?;)?
-                write!(f, "{type_name}\"")?;
-            }
+        macro_rules! write_node { ($name:expr$(,$key:expr=>$val:expr)*) => {{
+            write!(f, "{INDENT}{} [", $name)?;
+            $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
             writeln!(f, "]")?;
         }}; }
-        macro_rules! write_resource { ($t:expr) => {{
-            let id = $t;
-            if printed_resources.insert(id) {
-                write_node!(id, "R", "none");
+        macro_rules! write_resource { ($tid:expr) => {{
+            let tid = $tid;
+            if printed_resources.insert(tid) {
+                let type_name = self.type_name_registry.get_name(tid);
+                write_node!(get_name!(tid, "R"), shape=>"none", label=>type_name);
             }
         }}; }
 
-        for &t in self.inputs.iter().sorted_by_key(|p| self.type_name_registry.get_name(**p)) {
-            write_node!(t, "R", "rectangle");
+        for &tid in self.inputs.iter().sorted_by_key(|p| self.type_name_registry.get_name(**p)) {
+            printed_resources.insert(tid);
+            let type_name = self.type_name_registry.get_name(tid);
+            write_node!(get_name!(tid, "R"), shape=>"rectangle", label=>type_name);
         }
-        for (i, n) in self.nodes.iter().enumerate().sorted_by_key(|(_, n)| self.type_name_registry.get_name(n.type_id)) {
-            write_node!(n.type_id, "N", "cylinder", format!("{i} "));
-            let name = get_name!(n.type_id, "N");
+        for (i, n) in self.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.node.wrapped_label()) {
+            let name = format!("N{i}");
+            write_node!(name, shape=>"cylinder", label=>n.node.wrapped_label());
             for &input in n.inputs {
                 write_resource!(input);
                 let input = get_name!(input, "R");
@@ -422,9 +501,7 @@ impl std::fmt::Display for RenderGraph {
 
         if let Some(steps) = &self.steps {
             for [a, b] in steps.iter().copied().array_windows() {
-                let name_a = get_name!(self.nodes[a].type_id, "N");
-                let name_b = get_name!(self.nodes[b].type_id, "N");
-                writeln!(f, "{INDENT}{name_a} -> {name_b} [color=blue]")?;
+                writeln!(f, "{INDENT}N{a} -> N{b} [color=blue]")?;
             }
         }
         
@@ -445,7 +522,7 @@ mod tests {
     struct TestNode;
     impl GraphNode for TestNode {
         declare_graph_deps!((R1,) -> (R2,));
-        fn run((val,): (u32,)) -> (u8,) {
+        fn run(&mut self, (val,): (u32,)) -> (u8,) {
             (val as u8,)
         }
     }
@@ -453,7 +530,7 @@ mod tests {
     #[test]
     fn test_simple() {
         let mut graph = RenderGraph::new();
-        graph.push_node::<TestNode>();
+        graph.push_node(TestNode);
         graph.set_input::<R1>(5);
         let output = graph.run();
         assert_matches!(output.resources.get::<R2>(), Some(&R2(5)));
@@ -468,7 +545,7 @@ mod tests {
     struct Reserver;
     impl GraphNode for Reserver {
         declare_graph_deps!((ref Input,) -> (Reversed,));
-        fn run((input,): (&String,)) -> (String,) {
+        fn run(&mut self, (input,): (&String,)) -> (String,) {
             (input.chars().rev().collect(),)
         }
     }
@@ -476,7 +553,7 @@ mod tests {
     struct ReversedHalfer;
     impl GraphNode for ReversedHalfer {
         declare_graph_deps!((Reversed,) -> (ReversedHalf,));
-        fn run((input,): (String,)) -> (String,) {
+        fn run(&mut self, (input,): (String,)) -> (String,) {
             let count = input.chars().count();
             let half = input.chars().take(count.div_ceil(2)).collect();
             (half,)
@@ -486,7 +563,7 @@ mod tests {
     struct InputHalfer;
     impl GraphNode for InputHalfer {
         declare_graph_deps!((ref Input,) -> (Half,));
-        fn run((input,): (&String,)) -> (String,) {
+        fn run(&mut self, (input,): (&String,)) -> (String,) {
             let count = input.chars().count();
             let half = input.chars().take(count.div_ceil(2)).collect();
             (half,)
@@ -496,7 +573,7 @@ mod tests {
     struct Concat;
     impl GraphNode for Concat {
         declare_graph_deps!((Half, ReversedHalf,) -> (Output,));
-        fn run((a, b): (String, String)) -> (String,) {
+        fn run(&mut self, (a, b): (String, String)) -> (String,) {
             (a.chars().chain(b.chars()).collect(),)
         }
     }
@@ -504,10 +581,10 @@ mod tests {
     #[test]
     fn complex_construction() {
         let mut graph = RenderGraph::new();
-        graph.push_node::<Concat>();
-        graph.push_node::<ReversedHalfer>();
-        graph.push_node::<Reserver>();
-        graph.push_node::<InputHalfer>();
+        graph.push_node(Concat);
+        graph.push_node(ReversedHalfer);
+        graph.push_node(Reserver);
+        graph.push_node(InputHalfer);
         graph.define_input::<Input>();
         assert_matches!(&graph.construct_steps()[..], &[2,1,3,0] | &[3,2,1,0]);
     }
@@ -515,10 +592,10 @@ mod tests {
     #[test]
     fn complex_run() {
         let mut graph = RenderGraph::new();
-        graph.push_node::<Reserver>();
-        graph.push_node::<ReversedHalfer>();
-        graph.push_node::<InputHalfer>();
-        graph.push_node::<Concat>();
+        graph.push_node(Reserver);
+        graph.push_node(ReversedHalfer);
+        graph.push_node(InputHalfer);
+        graph.push_node(Concat);
         graph.set_input::<Input>(format!("abcdefghi"));
         let output = graph.run();
         assert_eq!(output.resources.get::<Output>(), Some(&Output(format!("abcdeihgfe"))));
@@ -530,7 +607,7 @@ mod tests {
     impl GraphNode for Emitter {
         declare_graph_deps!(() -> (Parrallel,));
 
-        fn run((): ()) -> (u32,) {
+        fn run(&mut self, (): ()) -> (u32,) {
             (0,)
         }
     }
@@ -538,37 +615,62 @@ mod tests {
     struct Borrow1;
     impl GraphNode for Borrow1 {
         declare_graph_deps!((ref Parrallel,) -> ());
-        fn run((_,): (&u32,)) -> () { }
+        fn run(&mut self, (_,): (&u32,)) -> () { }
     }
     struct Borrow2;
     impl GraphNode for Borrow2 {
         declare_graph_deps!((ref Parrallel,) -> ());
-        fn run((_,): (&u32,)) -> () { }
+        fn run(&mut self, (_,): (&u32,)) -> () { }
     }
 
     struct Consumer;
     impl GraphNode for Consumer {
         declare_graph_deps!((Parrallel,) -> ());
-        fn run((_,): (u32,)) -> () { }
+        fn run(&mut self, (_,): (u32,)) -> () { }
     }
 
     #[test]
     fn parallel_borrow_contruct() {
         let mut graph = RenderGraph::new();
-        graph.push_node::<Emitter>();
-        graph.push_node::<Consumer>();
-        graph.push_node::<Borrow1>();
-        graph.push_node::<Borrow2>();
+        graph.push_node(Emitter);
+        graph.push_node(Consumer);
+        graph.push_node(Borrow1);
+        graph.push_node(Borrow2);
         assert_matches!(&graph.construct_steps()[..], &[0,2,3,1] | &[0,3,2,1]);
     }
 
     #[test]
     fn parallel_borrow_run() {
         let mut graph = RenderGraph::new();
-        graph.push_node::<Emitter>();
-        graph.push_node::<Consumer>();
-        graph.push_node::<Borrow1>();
-        graph.push_node::<Borrow2>();
+        graph.push_node(Emitter);
+        graph.push_node(Consumer);
+        graph.push_node(Borrow1);
+        graph.push_node(Borrow2);
         graph.run();
+    }
+
+    graph_resource!(struct Incremented(u32));
+
+    struct Increment(u32, &'static str);
+    impl GraphNode for Increment {
+        declare_graph_deps!((Incremented,) -> (Incremented,));
+        fn label(&self) -> &str { self.1 }
+        fn run(&mut self, (a,): Self::Inputs<'_>) -> Self::Outputs {
+            (a + self.0,)
+        }
+    }
+
+    #[test]
+    fn multiple_nodes_of_the_same_type() {
+        let mut graph = RenderGraph::new();
+
+        graph.define_input::<Incremented>();
+        let a = graph.push_node(Increment(5, "a"));
+        let b = graph.push_node(Increment(2, "b"));
+        graph.define_explicit_ordering(a, b);
+
+        graph.set_input::<Incremented>(5);
+        graph.run();
+        assert_matches!(&graph.construct_steps()[..], &[0, 1]);
     }
 }

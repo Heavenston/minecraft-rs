@@ -11,11 +11,11 @@ pub(super) fn register(graph: &mut RenderGraph) {
     graph.define_input::<RenderPassConfigResource>();
     graph.define_input::<WorldResource>();
 
-    graph.push_node::<CreateUsingStagingBelt>();
-    graph.push_node::<WriteUniformBuffer>();
-    graph.push_node::<FinishStagingBelt>();
-    graph.push_node::<StartRenderPass>();
-    graph.push_node::<EndRenderPass>();
+    graph.push_node(CreateUsingStagingBelt);
+    graph.push_node(WriteUniformBuffer);
+    graph.push_node(FinishStagingBelt);
+    graph.push_node(StartRenderPass);
+    graph.push_node(EndRenderPass);
 }
 
 pub(super) struct RenderPassConfig {
@@ -34,13 +34,13 @@ graph_resource!(struct RenderPassCommandEncoder(wgpu::CommandEncoder));
 struct CreateUsingStagingBelt;
 impl GraphNode for CreateUsingStagingBelt {
     declare_graph_deps!(() -> (UsingStagingBelt,));
-    fn run(_: Self::Inputs<'_>) -> Self::Outputs { ((),) }
+    fn run(&mut self, _: Self::Inputs<'_>) -> Self::Outputs { ((),) }
 }
 
 struct WriteUniformBuffer;
 impl GraphNode for WriteUniformBuffer {
     declare_graph_deps!((GPUWorldResource,render_res::FrameCommandEncoder,ref WorldResource,ref UsingStagingBelt,) -> (GPUWorldResource,render_res::FrameCommandEncoder,));
-    fn run((mut gpu_world,mut command_encoder,world,_): Self::Inputs<'_>) -> Self::Outputs {
+    fn run(&mut self, (mut gpu_world,mut command_encoder,world,_): Self::Inputs<'_>) -> Self::Outputs {
         let data = WorldUniformBuffer {
             view_projection_matrix: world.camera_transform.inverse_or_zero() * world.camera_projection,
         }.as_std140();
@@ -56,7 +56,7 @@ impl GraphNode for WriteUniformBuffer {
 struct FinishStagingBelt;
 impl GraphNode for FinishStagingBelt {
     declare_graph_deps!((UsingStagingBelt,GPUWorldResource,ref render_res::FrameCommandEncoder,) -> (BeforeRenderPass,GPUWorldResource,));
-    fn run(((), mut gpu_world, command_encoder): Self::Inputs<'_>) -> Self::Outputs {
+    fn run(&mut self, ((), mut gpu_world, command_encoder): Self::Inputs<'_>) -> Self::Outputs {
         gpu_world.staging_belt.finish_and_recall_on_submit(command_encoder);
         ((), gpu_world)
     }
@@ -65,7 +65,7 @@ impl GraphNode for FinishStagingBelt {
 struct StartRenderPass;
 impl GraphNode for StartRenderPass {
     declare_graph_deps!((render_res::FrameCommandEncoder,RenderPassConfigResource,BeforeRenderPass,ref render_res::SurfaceTextureView,) -> (RenderPass,RenderPassCommandEncoder,));
-    fn run((mut command_encoder,config,_,texture_view): Self::Inputs<'_>) -> Self::Outputs {
+    fn run(&mut self, (mut command_encoder,config,_,texture_view): Self::Inputs<'_>) -> Self::Outputs {
         let render_pass = command_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("render_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -87,7 +87,7 @@ impl GraphNode for StartRenderPass {
 struct EndRenderPass;
 impl GraphNode for EndRenderPass {
     declare_graph_deps!((RenderPass,RenderPassCommandEncoder,) -> (render_res::FrameCommandEncoder,));
-    fn run((render_pass, command_encoder): Self::Inputs<'_>) -> Self::Outputs {
+    fn run(&mut self, (render_pass, command_encoder): Self::Inputs<'_>) -> Self::Outputs {
         drop(render_pass);
         (command_encoder,)
     }
