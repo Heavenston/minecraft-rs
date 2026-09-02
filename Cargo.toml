@@ -1,9 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["harness", "game", "render_graph", "typemap", "engine"]
+members = ["harness", "game", "render_graph", "typemap", "engine", "genmap"]
 
 [workspace.dependencies]
 typemap = { path = "./typemap" }
+genmap = { path = "./genmap" }
 harness = { path = "./harness" }
 engine = { path = "./engine" }
 render_graph = { path = "./render_graph" }

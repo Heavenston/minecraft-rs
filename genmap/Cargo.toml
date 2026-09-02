@@ -1,0 +1,8 @@
+[package]
+name = "genmap"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+static_assertions = "1.1.0"
