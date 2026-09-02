@@ -80,7 +80,6 @@ impl<A: App> harness::App for HarnessApp<A> {
         });
 
         self.gpu_world = Some(Arc::new(RwLock::new(GPUWorld {
-            staging_belt: wgpu::util::StagingBelt::new(renderer.device().clone(), 128),
             world_uniform,
             world_bind_group,
             world_bind_group_layout,

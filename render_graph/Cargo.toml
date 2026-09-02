@@ -9,3 +9,4 @@ typemap = { workspace = true }
 itertools = { workspace = true }
 tracing = { workspace = true }
 genmap = { workspace = true }
+parking_lot = "0.12.5"

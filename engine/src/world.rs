@@ -105,7 +105,6 @@ pub struct WorldUniformBuffer {
 
 #[derive(Debug)]
 pub struct GPUWorld {
-    pub staging_belt: wgpu::util::StagingBelt,
     pub world_uniform: wgpu::Buffer,
 
     pub world_bind_group_layout: wgpu::BindGroupLayout,

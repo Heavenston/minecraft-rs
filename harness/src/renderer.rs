@@ -7,13 +7,16 @@ use render_graph::RenderGraph;
 
 pub mod resources {
     use render_graph::graph_resource as res;
-    res!(pub struct Device(pub wgpu::Device));
-    res!(pub struct Queue(pub wgpu::Queue));
+    res!(pub struct Device(pub wgpu::Device); permanent);
+    res!(pub struct Queue(pub wgpu::Queue); permanent);
     res!(pub struct SurfaceTexture(pub wgpu::SurfaceTexture));
+    res!(pub(crate) struct BorrowedSurfaceTexture(pub wgpu::SurfaceTexture));
     res!(pub struct SurfaceTextureView(pub wgpu::TextureView));
     res!(pub struct FrameCommandEncoder(pub wgpu::CommandEncoder));
-    res!(pub struct FrameCommandEncoderSubmitted(()));
-    res!(pub struct SurfacePrensented(()));
+    res!(pub struct FrameCommandEncoderSubmitted(pub ()));
+    res!(pub struct SurfacePresented(pub ()));
+    res!(pub struct ComputingFrame(pub ()));
+    res!(pub struct FrameFinished(pub ()); permanent);
 }
 
 pub struct Renderer {
@@ -86,6 +89,9 @@ impl Renderer {
         let mut render_graph = RenderGraph::new();
         graph_nodes::register(&mut render_graph);
 
+        render_graph.set_input::<resources::Device>(device.clone());
+        render_graph.set_input::<resources::Queue>(queue.clone());
+
         Ok(Self {
             surface,
             device,
@@ -124,6 +130,8 @@ impl Renderer {
     }
 
     pub fn render(&mut self) -> anyhow::Result<()> {
+        self.render_graph.prepare_run();
+
         self.window.request_redraw();
 
         // We can't render unless the surface is configured
@@ -153,10 +161,9 @@ impl Renderer {
             }
         };
 
-        self.render_graph.set_input::<resources::Device>(self.device.clone());
-        self.render_graph.set_input::<resources::Queue>(self.queue.clone());
         self.render_graph.set_input::<resources::SurfaceTexture>(output);
-        self.render_graph.run();
+        let resources::FrameFinished(()) =
+            self.render_graph.compute::<resources::FrameFinished>();
 
         Ok(())
     }

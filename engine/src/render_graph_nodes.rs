@@ -2,7 +2,7 @@ use std::num::NonZero;
 
 use crevice::std140::AsStd140;
 use harness::renderer::resources as render_res;
-use parking_lot::{ArcRwLockReadGuard, ArcRwLockWriteGuard, RawRwLock};
+use parking_lot::{ArcRwLockReadGuard, ArcRwLockWriteGuard, RawRwLock, RwLock};
 use render_graph::{ GraphNode, RenderGraph, declare_graph_deps, graph_resource };
 
 use crate::world::{GPUWorld, World, WorldUniformBuffer};
@@ -12,8 +12,10 @@ pub(crate) fn register(graph: &mut RenderGraph) {
     graph.define_input::<WorldResource>();
 
     graph.push_node(CreateUsingStagingBelt);
-    graph.push_node(WriteUniformBuffer);
+    graph.push_node(CreateStagingBelt);
     graph.push_node(FinishStagingBelt);
+
+    graph.push_node(WriteUniformBuffer);
     graph.push_node(StartRenderPass);
     graph.push_node(EndRenderPass);
 }
@@ -27,38 +29,50 @@ graph_resource!(pub(crate) struct WorldResource(ArcRwLockReadGuard<RawRwLock, Wo
 graph_resource!(pub(crate) struct GPUWorldResource(ArcRwLockWriteGuard<RawRwLock, GPUWorld>));
 
 graph_resource!(pub(crate) struct BeforeRenderPass(pub ()));
-graph_resource!(pub(crate) struct UsingStagingBelt(pub ()));
 graph_resource!(pub(crate) struct RenderPass(pub wgpu::RenderPass<'static>));
 graph_resource!(pub(crate) struct RenderPassCommandEncoder(pub wgpu::CommandEncoder));
 
-struct CreateUsingStagingBelt;
-impl GraphNode for CreateUsingStagingBelt {
-    declare_graph_deps!(() -> (UsingStagingBelt,));
-    fn run(&mut self, _: Self::Inputs<'_>) -> Self::Outputs { ((),) }
+graph_resource!(pub(crate) struct StagingBelt(pub RwLock<wgpu::util::StagingBelt>); permanent);
+graph_resource!(pub(crate) struct UsingStagingBelt(pub ()));
+
+struct CreateStagingBelt;
+impl GraphNode for CreateStagingBelt {
+    declare_graph_deps!((ref render_res::Device,) -> (StagingBelt,));
+    fn run(&mut self, (device,): Self::Inputs<'_>) -> Self::Outputs {
+        tracing::debug!("Created a staging belt");
+        (RwLock::new(wgpu::util::StagingBelt::new(device.clone(), 128)),)
+    }
 }
 
-struct WriteUniformBuffer;
-impl GraphNode for WriteUniformBuffer {
-    declare_graph_deps!((GPUWorldResource,render_res::FrameCommandEncoder,ref WorldResource,ref UsingStagingBelt,) -> (GPUWorldResource,render_res::FrameCommandEncoder,));
-    fn run(&mut self, (mut gpu_world,mut command_encoder,world,_): Self::Inputs<'_>) -> Self::Outputs {
-        let data = WorldUniformBuffer {
-            view_projection_matrix: world.camera_transform.inverse_or_zero() * world.camera_projection,
-        }.as_std140();
-        let bytes = data.as_bytes();
-
-        let gw = &mut *gpu_world;
-        gw.staging_belt.write_buffer(&mut command_encoder, &gw.world_uniform, 0, NonZero::new(bytes.len() as u64).unwrap());
-        
-        (gpu_world,command_encoder,)
+struct CreateUsingStagingBelt;
+impl GraphNode for CreateUsingStagingBelt {
+    declare_graph_deps!((ref StagingBelt,) -> (UsingStagingBelt,));
+    fn run(&mut self, _: Self::Inputs<'_>) -> Self::Outputs {
+        ((),)
     }
 }
 
 struct FinishStagingBelt;
 impl GraphNode for FinishStagingBelt {
-    declare_graph_deps!((UsingStagingBelt,GPUWorldResource,ref render_res::FrameCommandEncoder,) -> (BeforeRenderPass,GPUWorldResource,));
-    fn run(&mut self, ((), mut gpu_world, command_encoder): Self::Inputs<'_>) -> Self::Outputs {
-        gpu_world.staging_belt.finish_and_recall_on_submit(command_encoder);
-        ((), gpu_world)
+    declare_graph_deps!((UsingStagingBelt,ref StagingBelt,ref render_res::FrameCommandEncoder,) -> (BeforeRenderPass,));
+    fn run(&mut self, (_,staging_belt,command_encoder): Self::Inputs<'_>) -> Self::Outputs {
+        staging_belt.write().finish_and_recall_on_submit(command_encoder);
+        ((),)
+    }
+}
+
+struct WriteUniformBuffer;
+impl GraphNode for WriteUniformBuffer {
+    declare_graph_deps!((render_res::FrameCommandEncoder,ref WorldResource,ref GPUWorldResource,ref StagingBelt,ref UsingStagingBelt,) -> (render_res::FrameCommandEncoder,));
+    fn run(&mut self, (mut command_encoder,world,gpu_world,staging_belt,_): Self::Inputs<'_>) -> Self::Outputs {
+        let data = WorldUniformBuffer {
+            view_projection_matrix: world.camera_transform.inverse_or_zero() * world.camera_projection,
+        }.as_std140();
+        let bytes = data.as_bytes();
+
+        staging_belt.write().write_buffer(&mut command_encoder, &gpu_world.world_uniform, 0, NonZero::new(bytes.len() as u64).unwrap());
+        
+        (command_encoder,)
     }
 }
 

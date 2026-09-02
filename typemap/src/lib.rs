@@ -108,8 +108,12 @@ impl<T: ?Sized + DynTrait> TypeMap<T> {
             .map(|t| { t.as_dyn_any_mut().downcast_mut::<U>().expect("matching type id") })
     }
 
+    pub fn remove_dyn(&mut self, tid: TypeId) -> Option<Box<T>> {
+        self.values.remove(&tid)
+    }
+
     pub fn remove<U: Any>(&mut self) -> Option<Box<U>> {
-        self.values.remove(&TypeId::of::<U>())
+        self.remove_dyn(TypeId::of::<U>())
             .map(|p| p.into_box_dyn().downcast().expect("matching type id"))
     }
 
