@@ -6,6 +6,7 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
     graph.define_input::<res::SurfaceTexture>();
 
     graph.push_node(CreateSurfaceTextureView);
+    graph.push_node(DestroySurfaceTextureView);
     graph.push_node(CreateFrameCommandEncoder);
     graph.push_node(SubmitFrameCommandEncoder);
     graph.push_node(PresentSurface);
@@ -18,6 +19,14 @@ impl render_graph::GraphNode for CreateSurfaceTextureView {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         (view,)
     }
+}
+
+struct DestroySurfaceTextureView;
+impl render_graph::GraphNode for DestroySurfaceTextureView {
+    // We borrow SurfaceTexture to prevent the surface texture from being presented
+    // until after everyone is done with SurfaceTextureView
+    render_graph::declare_graph_deps!((res::SurfaceTextureView,ref res::SurfaceTexture,) -> ());
+    fn run(&mut self, (_,_,): Self::Inputs<'_>) -> Self::Outputs { }
 }
 
 struct CreateFrameCommandEncoder;
@@ -42,9 +51,8 @@ impl render_graph::GraphNode for SubmitFrameCommandEncoder {
 
 struct PresentSurface;
 impl render_graph::GraphNode for PresentSurface {
-    // We consume SurfaceTextureView to make sure it is not in use anymore
-    render_graph::declare_graph_deps!((res::SurfaceTexture, res::SurfaceTextureView, ref res::Queue,) -> (res::SurfacePrensented,));
-    fn run(&mut self, (output,_,queue): Self::Inputs<'_>) -> Self::Outputs {
+    render_graph::declare_graph_deps!((res::SurfaceTexture,ref res::Queue,) -> (res::SurfacePrensented,));
+    fn run(&mut self, (output,queue): Self::Inputs<'_>) -> Self::Outputs {
         queue.present(output);
         ((),)
     }
