@@ -1,13 +1,10 @@
 #![feature(macro_metavar_expr)]
 
-#![expect(dead_code)]
-#![expect(unused_imports)]
-
 mod compiler;
 
-use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, convert::identity, marker::PhantomData};
+use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, marker::PhantomData};
 use genmap::GenMap;
-use itertools::{Itertools as _, chain};
+use itertools::Itertools as _;
 use typemap::TypeMap;
 
 use crate::compiler::CompiledGraph;
@@ -245,8 +242,6 @@ impl<N> Into<UntypedNodeHandle> for &NodeHandle<N> {
 #[repr(transparent)]
 pub struct UntypedNodeHandle(genmap::Handle<NodeData>);
 
-type GraphEvaluationSteps = Box<[usize]>;
-
 #[derive(Default)]
 pub struct RenderGraph {
     type_name_registry: TypeNameRegistry,
@@ -403,9 +398,9 @@ impl RenderGraph {
             let type_name = self.type_name_registry.get_name(tid);
             write_node!(get_name!(tid, "R"), shape=>"rectangle", label=>type_name);
         }
-        for (i, n) in self.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.node.wrapped_label()) {
+        for (i, n) in self.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.label()) {
             let name = format!("N{i}");
-            write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.node.wrapped_label()));
+            write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.label()));
             for &input in n.inputs {
                 write_resource!(input);
                 let input = get_name!(input, "R");

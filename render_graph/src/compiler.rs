@@ -165,9 +165,9 @@ impl ResolvedResources {
             }};
         }
 
-        for (i, n) in graph.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.node.wrapped_label()) {
+        for (i, n) in graph.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.label()) {
             let name = format!("N{i}");
-            write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.node.wrapped_label()));
+            write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.label()));
             for input in self.resolved_inputs(i) {
                 write_edge!(input -> name);
             }
