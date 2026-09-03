@@ -302,7 +302,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                     continue;
                 };
                 let Some(producers) = producers.get(&input)
-                else { panic!("Missing producers") };
+                else { panic!("Missing producers for {}", tn!(*input)) };
 
                 let producer = producers.iter().filter(|&&producer| {
                     !this.is_after_or_equal(Default::default(), producer, node_id)
@@ -326,7 +326,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                     continue
                 }
                 let Some(producers) = producers_for_borrows.get(&borrow_input)
-                else { panic!("Missing producers") };
+                else { panic!("Missing producers for {}", tn!(*borrow_input)) };
 
                 let producer = producers.iter().filter(|&&producer| {
                     !this.is_after_or_equal(Default::default(), producer, node_id)
