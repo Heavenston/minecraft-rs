@@ -1,10 +1,6 @@
 use super::resources as res;
 
 pub(super) fn register(graph: &mut render_graph::RenderGraph) {
-    graph.define_input::<res::Device>();
-    graph.define_input::<res::Queue>();
-    graph.define_input::<res::SurfaceTexture>();
-
     graph.push_node(BeginFrame);
     graph.push_node(EndFrame);
     let a = graph.push_node(EndFrameMustHaveSubmitted);

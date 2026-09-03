@@ -7,9 +7,11 @@ use render_graph::RenderGraph;
 
 pub mod resources {
     use render_graph::graph_resource as res;
+    res!(pub struct WindowSize((u32, u32)); permanent);
     res!(pub struct Device(pub wgpu::Device); permanent);
     res!(pub struct Queue(pub wgpu::Queue); permanent);
     res!(pub struct SurfaceTexture(pub wgpu::SurfaceTexture));
+
     res!(pub(crate) struct BorrowedSurfaceTexture(pub wgpu::SurfaceTexture));
     res!(pub struct SurfaceTextureView(pub wgpu::TextureView));
     res!(pub struct FrameCommandEncoder(pub wgpu::CommandEncoder));
@@ -17,6 +19,15 @@ pub mod resources {
     res!(pub struct SurfacePresented(pub ()));
     res!(pub struct ComputingFrame(pub ()));
     res!(pub struct FrameFinished(pub ()); permanent);
+}
+use resources as res;
+
+fn define_inputs(graph: &mut RenderGraph) {
+    graph.define_input::<res::WindowSize>();
+    graph.define_input::<res::Device>();
+    graph.define_input::<res::Queue>();
+
+    graph.define_input::<res::SurfaceTexture>();
 }
 
 pub struct Renderer {
@@ -80,17 +91,18 @@ impl Renderer {
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode: surface_caps.alpha_modes[0],
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
 
         let mut render_graph = RenderGraph::new();
+        define_inputs(&mut render_graph);
         graph_nodes::register(&mut render_graph);
 
-        render_graph.set_input::<resources::Device>(device.clone());
-        render_graph.set_input::<resources::Queue>(queue.clone());
+        render_graph.set_input::<res::Device>(device.clone());
+        render_graph.set_input::<res::Queue>(queue.clone());
 
         Ok(Self {
             surface,
@@ -161,9 +173,8 @@ impl Renderer {
             }
         };
 
-        self.render_graph.set_input::<resources::SurfaceTexture>(output);
-        let resources::FrameFinished(()) =
-            self.render_graph.compute::<resources::FrameFinished>();
+        self.render_graph.set_input::<res::SurfaceTexture>(output);
+        let res::FrameFinished(()) = self.render_graph.compute();
 
         Ok(())
     }

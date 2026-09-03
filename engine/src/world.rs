@@ -99,14 +99,6 @@ impl Default for World {
 
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable, AsStd140)]
 #[repr(C)]
-pub struct WorldUniformBuffer {
+pub struct WorldUniform {
     pub view_projection_matrix: Mat4,
-}
-
-#[derive(Debug)]
-pub struct GPUWorld {
-    pub world_uniform: wgpu::Buffer,
-
-    pub world_bind_group_layout: wgpu::BindGroupLayout,
-    pub world_bind_group: wgpu::BindGroup,
 }
