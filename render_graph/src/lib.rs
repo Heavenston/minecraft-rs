@@ -182,7 +182,7 @@ impl NodeData {
     }
 }
 
-struct ResourceData {
+struct ResourceTypeInfo {
     is_permanent: bool,
 }
 
@@ -245,7 +245,7 @@ pub struct UntypedNodeHandle(genmap::Handle<NodeData>);
 #[derive(Default)]
 pub struct RenderGraph {
     type_name_registry: TypeNameRegistry,
-    resources: HashMap<TypeId, ResourceData>,
+    resources_infos: HashMap<TypeId, ResourceTypeInfo>,
     inputs: HashSet<TypeId>,
     resource_store: ResourceStore,
     nodes: GenMap<NodeData>,
@@ -260,7 +260,7 @@ impl RenderGraph {
     }
 
     fn is_resource_permanent(&self, tid: &TypeId) -> bool {
-        self.resources.get(tid).is_some_and(|p| p.is_permanent)
+        self.resources_infos.get(tid).is_some_and(|p| p.is_permanent)
     }
 
     pub fn define_input<R: GraphResourceId>(&mut self) {
@@ -286,13 +286,13 @@ impl RenderGraph {
         self.type_name_registry.register::<N>();
         struct Registerer<'a> {
             type_name_registry: &'a mut TypeNameRegistry,
-            resources: &'a mut HashMap<TypeId, ResourceData>,
+            resources: &'a mut HashMap<TypeId, ResourceTypeInfo>,
         }
         impl ResourceRegisterer for Registerer<'_> {
             fn register<R: GraphResourceId>(&mut self) {
                 self.type_name_registry.register::<R>();
                 self.resources.entry(TypeId::of::<R>()).or_insert_with(|| {
-                    ResourceData {
+                    ResourceTypeInfo {
                         is_permanent: R::is_permanent(),
                     }
                 });
@@ -300,14 +300,14 @@ impl RenderGraph {
         }
         N::register_resources(&mut Registerer {
             type_name_registry: &mut self.type_name_registry,
-            resources: &mut self.resources,
+            resources: &mut self.resources_infos,
         });
 
         let inputs = N::list_inputs();
         let borrowed_inputs = N::list_borrowed_inputs();
         let shared = inputs.iter().filter(|o| borrowed_inputs.contains(o)).collect_vec();
         assert!(shared.is_empty(), "Error pushing Node {} into render graph, the following resources are both consumed and borrowed: {shared:?}", std::any::type_name::<N>());
-        let consumed_permanents = inputs.iter().filter(|p| self.resources.get(p).is_some_and(|data| data.is_permanent)).collect_vec();
+        let consumed_permanents = inputs.iter().filter(|p| self.resources_infos.get(p).is_some_and(|data| data.is_permanent)).collect_vec();
         assert!(consumed_permanents.is_empty(), "Error pushing Node {} into render graph, the following resources cannot be consumed because they are permanent: {consumed_permanents:?}", std::any::type_name::<N>());
 
         let handle = self.nodes.insert(NodeData {
@@ -348,7 +348,7 @@ impl RenderGraph {
         for idx in steps.iter().copied() {
             self.nodes.values_mut()[idx].node.wrapped_run(&mut self.resource_store);
         }
-        for (&tid, t) in &self.resources {
+        for (&tid, t) in &self.resources_infos {
             if !t.is_permanent {
                 self.resource_store.resources.remove_dyn(tid);
             }
