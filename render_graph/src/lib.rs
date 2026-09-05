@@ -99,34 +99,47 @@ pub trait ResourceStorer: ResourceInfoProvider {
     fn store_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>);
 }
 
-struct ResourceManager<'a>(&'a mut RenderGraph);
+struct ResourceManager<'a> {
+    resources: &'a mut GenMap<ResourceData>,
+    type_resources_info: &'a mut HashMap<TypeId, ResourceTypeInfo>,
+}
 
 impl<'a> ResourceInfoProvider for ResourceManager<'a> {
     fn resource_from_type<R: GraphResourceId>(&mut self) -> ResourceHandle<R::Resource> {
-        self.0.resource_from_type::<R>()
+        let handle = self.type_resources_info.entry(TypeId::of::<R>()).or_insert_with(|| {
+            let handle = self.resources.insert(ResourceData {
+                label: std::any::type_name::<R>(),
+                storage: TypeId::of::<R::Resource>(),
+                is_permanent: R::is_permanent(),
+                value: None,
+            });
+
+            ResourceTypeInfo { handle }
+        }).handle;
+        ResourceHandle::new(handle)
     }
 }
 
 impl ResourceGatherer for ResourceManager<'_> {
     fn consume<R: Any>(&mut self, handle: ResourceHandle<R>) -> R {
-        *self.0.resources.get_mut(handle.inner).expect("Invalid resource handle")
+        *self.resources.get_mut(handle.inner).expect("Invalid resource handle")
             .value.take().expect("Missing resource")
             .downcast().expect("Stored resource of invalid type")
     }
 
     fn consume_untyped(&mut self, handle: UntypedResourceHandle) -> Box<dyn Any> {
-        self.0.resources.get_mut(handle.0).expect("Invalid resource handle")
+        self.resources.get_mut(handle.0).expect("Invalid resource handle")
             .value.take().expect("Missing resource")
     }
 
     fn borrow<R: Any>(&self, handle: ResourceHandle<R>) -> &R {
-        self.0.resources.get(handle.inner).expect("Invalid resource handle")
+        self.resources.get(handle.inner).expect("Invalid resource handle")
             .value.as_ref().expect("Missing resource")
             .downcast_ref().expect("Stored resource of invalid type")
     }
 
     fn borrow_untyped(&self, handle: UntypedResourceHandle) -> &dyn Any {
-        self.0.resources.get(handle.0).expect("Invalid resource handle")
+        self.resources.get(handle.0).expect("Invalid resource handle")
             .value.as_ref().expect("Missing resource")
     }
 }
@@ -319,17 +332,10 @@ impl RenderGraph {
     }
 
     pub fn resource_from_type<R: GraphResourceId>(&mut self) -> ResourceHandle<R::Resource> {
-        let handle = self.type_resources_info.entry(TypeId::of::<R>()).or_insert_with(|| {
-            let handle = self.resources.insert(ResourceData {
-                label: std::any::type_name::<R>(),
-                storage: TypeId::of::<R::Resource>(),
-                is_permanent: R::is_permanent(),
-                value: None,
-            });
-
-            ResourceTypeInfo { handle }
-        }).handle;
-        ResourceHandle::new(handle)
+        ResourceManager {
+            resources: &mut self.resources,
+            type_resources_info: &mut self.type_resources_info,
+        }.resource_from_type::<R>()
     }
 
     pub fn set_input<R: GraphResourceId>(&mut self, val: R::Resource) {
@@ -345,9 +351,13 @@ impl RenderGraph {
     pub fn push_node_complete<N: GraphNode>(&mut self, node: N, input_bundle: N::InputBundle, output_bundle: N::OutputBundle) -> NodeHandle<N> {
         self.type_name_registry.register::<N>();
 
-        let consumes = input_bundle.list_consumes(&mut ResourceManager(self)).into_iter().collect_vec();
-        let borrows = input_bundle.list_borrows(&mut ResourceManager(self)).into_iter().collect_vec();
-        let outputs = output_bundle.list_resources(&mut ResourceManager(self)).into_iter().collect_vec();
+        let mut manager = ResourceManager {
+            resources: &mut self.resources,
+            type_resources_info: &mut self.type_resources_info,
+        };
+        let consumes = input_bundle.list_consumes(&mut manager).into_iter().collect_vec();
+        let borrows = input_bundle.list_borrows(&mut manager).into_iter().collect_vec();
+        let outputs = output_bundle.list_resources(&mut manager).into_iter().collect_vec();
 
         let shared = consumes.iter().filter(|o| borrows.contains(o)).collect_vec();
         assert!(shared.is_empty(), "Error pushing Node {} into render graph, the following resources are both consumed and borrowed: {shared:?}", std::any::type_name::<N>());
@@ -396,19 +406,20 @@ impl RenderGraph {
     }
 
     fn execute(&mut self, steps: &[usize]) {
-        todo!()
-        // for idx in steps.iter().copied() {
-        //     self.nodes.values_mut()[idx].node.run(&mut self.resource_store);
-        // }
-        // for (&tid, t) in &self.resources_infos {
-        //     if !t.is_permanent {
-        //         self.resource_store.resources.remove_dyn(tid);
-        //     }
-        // }
+        for &idx in steps {
+            self.nodes.values_mut()[idx].node.run(&mut ResourceManager {
+                resources: &mut self.resources,
+                type_resources_info: &mut self.type_resources_info,
+            });
+        }
+        for resource in self.resources.iter_mut() {
+            if !resource.is_permanent {
+                resource.value = None;
+            }
+        }
     }
 
     pub fn compute<T: GraphResourceId>(&mut self) -> T {
-        todo!()
         // self.prepare_run();
         // let mut compiled = self.compiled.take().unwrap();
         // let result = compiled.compute(self, TypeId::of::<T>());
