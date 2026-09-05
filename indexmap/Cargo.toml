@@ -1,0 +1,8 @@
+[package]
+name = "indexmap"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+ref-cast = "1.0.27"
