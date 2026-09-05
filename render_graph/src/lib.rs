@@ -1,13 +1,21 @@
-#![feature(macro_metavar_expr)]
-
-mod compiler;
+mod bundles;
+pub use bundles::*;
+mod node;
+pub use node::*;
+// mod compiler;
+#[cfg(test)]
+mod tests;
 
 use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, marker::PhantomData};
-use genmap::GenMap;
+use static_assertions as sa;
+use genmap::{GenMap, Handle};
 use itertools::Itertools as _;
-use typemap::TypeMap;
 
-use crate::compiler::CompiledGraph;
+// use crate::compiler::CompiledGraph;
+struct CompiledGraph { }
+impl CompiledGraph {
+    fn new(_graph: &RenderGraph) -> Self { Self { } }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct TypeNameRegistry {
@@ -75,100 +83,84 @@ macro_rules! graph_resource {
     };
 }
 
-pub trait ResourceRegisterer {
-    fn register<R: GraphResourceId>(&mut self);
+pub trait ResourceInfoProvider {
+    fn resource_from_type<R: GraphResourceId>(&mut self) -> ResourceHandle<R::Resource>;
 }
 
-pub trait GraphNode: 'static {
-    type Inputs<'a>;
-    type Outputs;
+pub trait ResourceGatherer: ResourceInfoProvider {
+    fn consume<R: Any>(&mut self, handle: ResourceHandle<R>) -> R;
+    fn consume_untyped(&mut self, handle: UntypedResourceHandle) -> Box<dyn Any>;
+    fn borrow<R: Any>(&self, handle: ResourceHandle<R>) -> &R;
+    fn borrow_untyped(&self, handle: UntypedResourceHandle) -> &dyn Any;
+}
 
-    fn label(&self) -> &str {
-        std::any::type_name::<Self>()
+pub trait ResourceStorer: ResourceInfoProvider {
+    fn store<R: Any>(&mut self, handle: ResourceHandle<R>, value: R);
+    fn store_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>);
+}
+
+struct ResourceManager<'a>(&'a mut RenderGraph);
+
+impl<'a> ResourceInfoProvider for ResourceManager<'a> {
+    fn resource_from_type<R: GraphResourceId>(&mut self) -> ResourceHandle<R::Resource> {
+        self.0.resource_from_type::<R>()
+    }
+}
+
+impl ResourceGatherer for ResourceManager<'_> {
+    fn consume<R: Any>(&mut self, handle: ResourceHandle<R>) -> R {
+        *self.0.resources.get_mut(handle.inner).expect("Invalid resource handle")
+            .value.take().expect("Missing resource")
+            .downcast().expect("Stored resource of invalid type")
     }
 
-    #[doc(hidden)]
-    fn register_resources(registerer: &mut impl ResourceRegisterer);
-    #[doc(hidden)]
-    fn list_inputs() -> &'static [TypeId];
-    #[doc(hidden)]
-    fn list_borrowed_inputs() -> &'static [TypeId];
-    #[doc(hidden)]
-    fn list_outputs() -> &'static [TypeId];
-    #[doc(hidden)]
-    fn gather_inputs(store: &mut ResourceStore) -> Self::Inputs<'_>;
-    #[doc(hidden)]
-    fn store_outputs(outputs: Self::Outputs, store: &mut ResourceStore);
+    fn consume_untyped(&mut self, handle: UntypedResourceHandle) -> Box<dyn Any> {
+        self.0.resources.get_mut(handle.0).expect("Invalid resource handle")
+            .value.take().expect("Missing resource")
+    }
 
-    fn run(&mut self, inputs: Self::Inputs<'_>) -> Self::Outputs;
+    fn borrow<R: Any>(&self, handle: ResourceHandle<R>) -> &R {
+        self.0.resources.get(handle.inner).expect("Invalid resource handle")
+            .value.as_ref().expect("Missing resource")
+            .downcast_ref().expect("Stored resource of invalid type")
+    }
+
+    fn borrow_untyped(&self, handle: UntypedResourceHandle) -> &dyn Any {
+        self.0.resources.get(handle.0).expect("Invalid resource handle")
+            .value.as_ref().expect("Missing resource")
+    }
 }
 
-#[macro_export]
-macro_rules! declare_graph_deps {
-    (($($input:ty,)*$(ref $borrowed_input:ty,)*) -> ($($output:ty,)*)) => {
-        type Inputs<'a> = (
-            $(<$input as $crate::GraphResourceId>::Resource,)*
-            $(&'a <$borrowed_input as $crate::GraphResourceId>::Resource,)*
-        );
-        type Outputs = ($(<$output as $crate::GraphResourceId>::Resource,)*);
+impl ResourceStorer for ResourceManager<'_> {
+    fn store<R: Any>(&mut self, handle: ResourceHandle<R>, value: R) {
+        todo!()
+    }
 
-        #[allow(unused)]
-        fn register_resources(registerer: &mut impl $crate::ResourceRegisterer) {
-            $(registerer.register::<$input>();)*
-            $(registerer.register::<$borrowed_input>();)*
-            $(registerer.register::<$output>();)*
-        }
-        fn list_inputs() -> &'static [::std::any::TypeId] {
-            const INPUTS: &'static [::std::any::TypeId] = &[$(::std::any::TypeId::of::<$input>()),*];
-            INPUTS
-        }
-        fn list_borrowed_inputs() -> &'static [::std::any::TypeId] {
-            const INPUTS: &'static [::std::any::TypeId] = &[$(::std::any::TypeId::of::<$borrowed_input>()),*];
-            INPUTS
-        }
-        fn list_outputs() -> &'static [::std::any::TypeId] {
-            const OUTPUTS: &'static [::std::any::TypeId] = &[$(::std::any::TypeId::of::<$output>()),*];
-            OUTPUTS
-        }
-        #[allow(unused)]
-        fn gather_inputs(store: &mut $crate::ResourceStore) -> Self::Inputs<'_> {
-            (
-                $(<$input as $crate::GraphResourceId>::get_resource(*store.resources.remove::<$input>().expect(std::stringify!(Missing input $input))),)*
-                $(<$borrowed_input as $crate::GraphResourceId>::get_resource_ref(store.resources.get::<$borrowed_input>().expect(std::stringify!(Missing input $borrowed_input))),)*
-            )
-        }
-        #[allow(unused)]
-        fn store_outputs(outputs: Self::Outputs, store: &mut $crate::ResourceStore) {
-            $(store.resources.insert(Box::new(<$output as $crate::GraphResourceId>::new_resource(outputs.${index()})));)*
-        }
-    };
-}
-
-#[derive(Default)]
-pub struct ResourceStore {
-    pub resources: TypeMap<dyn GraphResourceId>,
+    fn store_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>) {
+        todo!()
+    }
 }
 
 trait GraphNodeWrapperTrait: std::any::Any {
-    fn wrapped_label(&self) -> &str;
-    fn wrapped_run(&mut self, store: &mut ResourceStore);
+    fn label(&self) -> &str;
+    fn run(&mut self, manager: &mut ResourceManager<'_>);
 }
-
-impl<N: GraphNode> GraphNodeWrapperTrait for N {
-    fn wrapped_label(&self) -> &str {
-        self.label()
+sa::assert_obj_safe!(GraphNodeWrapperTrait);
+impl<N: GraphNode> GraphNodeWrapperTrait for (N::InputBundle, N, N::OutputBundle) {
+    fn label(&self) -> &str {
+        self.1.label()
     }
-    fn wrapped_run(&mut self, store: &mut ResourceStore) {
-        let inputs = N::gather_inputs(store);
-        let outputs = self.run(inputs);
-        N::store_outputs(outputs, store);
+    fn run(&mut self, manager: &mut ResourceManager<'_>) {
+        let input = self.0.gather(manager);
+        let output = self.1.run(input);
+        self.2.store(output, manager);
     }
 }
 
 struct NodeData {
-    inputs: &'static [TypeId],
-    borrowed_inputs: &'static [TypeId],
-    outputs: &'static [TypeId],
+    borrows: Vec<UntypedResourceHandle>,
+    consumes: Vec<UntypedResourceHandle>,
+    outputs: Vec<UntypedResourceHandle>,
     node: Box<dyn GraphNodeWrapperTrait>,
 }
 
@@ -178,12 +170,19 @@ impl NodeData {
     }
 
     fn label(&self) -> &str {
-        self.node.wrapped_label()
+        self.node.label()
     }
 }
 
-struct ResourceTypeInfo {
+struct ResourceData {
+    label: &'static str,
+    storage: TypeId,
     is_permanent: bool,
+    value: Option<Box<dyn Any>>,
+}
+
+struct ResourceTypeInfo {
+    handle: Handle<ResourceData>,
 }
 
 pub struct NodeHandle<N> {
@@ -242,12 +241,68 @@ impl<N> Into<UntypedNodeHandle> for &NodeHandle<N> {
 #[repr(transparent)]
 pub struct UntypedNodeHandle(genmap::Handle<NodeData>);
 
+pub struct ResourceHandle<R> {
+    node: PhantomData<fn(R) -> R>,
+    inner: genmap::Handle<ResourceData>,
+}
+
+impl<R> ResourceHandle<R> {
+    fn new(inner: genmap::Handle<ResourceData>) -> Self {
+        Self {
+            node: PhantomData,
+            inner,
+        }
+    }
+
+    pub fn to_untyped(&self) -> UntypedResourceHandle {
+        self.into()
+    }
+}
+
+impl<N> std::fmt::Debug for ResourceHandle<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ResourceHandle")
+            .field(&self.inner)
+            .finish()
+    }
+}
+
+impl<N> Clone for ResourceHandle<N> {
+    fn clone(&self) -> Self {
+        Self { node: PhantomData, inner: self.inner.clone() }
+    }
+}
+impl<N> Copy for ResourceHandle<N> { }
+
+impl<N> PartialEq for ResourceHandle<N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.node == other.node && self.inner == other.inner
+    }
+}
+impl<N> Eq for ResourceHandle<N> { }
+
+impl<N> Into<UntypedResourceHandle> for ResourceHandle<N> {
+    fn into(self) -> UntypedResourceHandle {
+        UntypedResourceHandle(self.inner)
+    }
+}
+
+impl<N> Into<UntypedResourceHandle> for &ResourceHandle<N> {
+    fn into(self) -> UntypedResourceHandle {
+        (*self).into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct UntypedResourceHandle(genmap::Handle<ResourceData>);
+
 #[derive(Default)]
 pub struct RenderGraph {
     type_name_registry: TypeNameRegistry,
-    resources_infos: HashMap<TypeId, ResourceTypeInfo>,
-    inputs: HashSet<TypeId>,
-    resource_store: ResourceStore,
+    type_resources_info: HashMap<TypeId, ResourceTypeInfo>,
+    inputs: HashSet<UntypedResourceHandle>,
+    resources: GenMap<ResourceData>,
     nodes: GenMap<NodeData>,
     explicit_orderings: Vec<(UntypedNodeHandle, UntypedNodeHandle)>,
 
@@ -259,67 +314,63 @@ impl RenderGraph {
         Self::default()
     }
 
-    fn is_resource_permanent(&self, tid: &TypeId) -> bool {
-        self.resources_infos.get(tid).is_some_and(|p| p.is_permanent)
+    fn is_resource_permanent(&self, resource: UntypedResourceHandle) -> bool {
+        self.resources.get(resource.0).is_some_and(|r| r.is_permanent)
     }
 
-    pub fn define_input<R: GraphResourceId>(&mut self) {
-        self.type_name_registry.register::<R>();
-        self.inputs.insert(TypeId::of::<R>());
+    pub fn resource_from_type<R: GraphResourceId>(&mut self) -> ResourceHandle<R::Resource> {
+        let handle = self.type_resources_info.entry(TypeId::of::<R>()).or_insert_with(|| {
+            let handle = self.resources.insert(ResourceData {
+                label: std::any::type_name::<R>(),
+                storage: TypeId::of::<R::Resource>(),
+                is_permanent: R::is_permanent(),
+                value: None,
+            });
 
-        self.compiled = None;
+            ResourceTypeInfo { handle }
+        }).handle;
+        ResourceHandle::new(handle)
     }
 
     pub fn set_input<R: GraphResourceId>(&mut self, val: R::Resource) {
-        self.type_name_registry.register::<R>();
-        self.resource_store.resources.upsert::<R>(Box::new(R::new_resource(val)));
-        if self.inputs.insert(TypeId::of::<R>()) {
-            self.compiled = None;
-        }
-        else if R::is_permanent() && let Some(mut compiled) = self.compiled.take() {
-            compiled.mark_resource_dirty(self, TypeId::of::<R>());
-            self.compiled = Some(compiled);
-        }
+        let res = self.resource_from_type::<R>();
+        self.set_resource_input(res, val);
     }
 
-    pub fn push_node<N: GraphNode>(&mut self, node: N) -> NodeHandle<N> {
-        self.type_name_registry.register::<N>();
-        struct Registerer<'a> {
-            type_name_registry: &'a mut TypeNameRegistry,
-            resources: &'a mut HashMap<TypeId, ResourceTypeInfo>,
-        }
-        impl ResourceRegisterer for Registerer<'_> {
-            fn register<R: GraphResourceId>(&mut self) {
-                self.type_name_registry.register::<R>();
-                self.resources.entry(TypeId::of::<R>()).or_insert_with(|| {
-                    ResourceTypeInfo {
-                        is_permanent: R::is_permanent(),
-                    }
-                });
-            }
-        }
-        N::register_resources(&mut Registerer {
-            type_name_registry: &mut self.type_name_registry,
-            resources: &mut self.resources_infos,
-        });
+    pub fn set_resource_input<R: Any>(&mut self, handle: ResourceHandle<R>, value: R) {
+        let resource = self.resources.get_mut(handle.inner).expect("Invalid resource handle");
+        resource.value = Some(Box::new(value));
+    }
 
-        let inputs = N::list_inputs();
-        let borrowed_inputs = N::list_borrowed_inputs();
-        let shared = inputs.iter().filter(|o| borrowed_inputs.contains(o)).collect_vec();
+    pub fn push_node_complete<N: GraphNode>(&mut self, node: N, input_bundle: N::InputBundle, output_bundle: N::OutputBundle) -> NodeHandle<N> {
+        self.type_name_registry.register::<N>();
+
+        let consumes = input_bundle.list_consumes(&mut ResourceManager(self)).into_iter().collect_vec();
+        let borrows = input_bundle.list_borrows(&mut ResourceManager(self)).into_iter().collect_vec();
+        let outputs = output_bundle.list_resources(&mut ResourceManager(self)).into_iter().collect_vec();
+
+        let shared = consumes.iter().filter(|o| borrows.contains(o)).collect_vec();
         assert!(shared.is_empty(), "Error pushing Node {} into render graph, the following resources are both consumed and borrowed: {shared:?}", std::any::type_name::<N>());
-        let consumed_permanents = inputs.iter().filter(|p| self.resources_infos.get(p).is_some_and(|data| data.is_permanent)).collect_vec();
+        let consumed_permanents = consumes.iter().filter(|p| self.resources.get(p.0).is_some_and(|data| data.is_permanent)).collect_vec();
         assert!(consumed_permanents.is_empty(), "Error pushing Node {} into render graph, the following resources cannot be consumed because they are permanent: {consumed_permanents:?}", std::any::type_name::<N>());
 
         let handle = self.nodes.insert(NodeData {
-            inputs,
-            borrowed_inputs,
-            outputs: N::list_outputs(),
-            node: Box::new(node),
+            consumes,
+            borrows,
+            outputs,
+            node: Box::new((input_bundle, node, output_bundle)),
         });
 
         self.compiled = None;
 
         NodeHandle::new(handle)
+    }
+
+    pub fn push_node<N: GraphNode>(&mut self, node: N) -> NodeHandle<N>
+        where N::InputBundle: Default,
+              N::OutputBundle: Default,
+    {
+        self.push_node_complete(node, Default::default(), Default::default())
     }
 
     pub fn define_explicit_ordering(&mut self, is_before: impl Into<UntypedNodeHandle>, is_after: impl Into<UntypedNodeHandle>) {
@@ -345,87 +396,90 @@ impl RenderGraph {
     }
 
     fn execute(&mut self, steps: &[usize]) {
-        for idx in steps.iter().copied() {
-            self.nodes.values_mut()[idx].node.wrapped_run(&mut self.resource_store);
-        }
-        for (&tid, t) in &self.resources_infos {
-            if !t.is_permanent {
-                self.resource_store.resources.remove_dyn(tid);
-            }
-        }
+        todo!()
+        // for idx in steps.iter().copied() {
+        //     self.nodes.values_mut()[idx].node.run(&mut self.resource_store);
+        // }
+        // for (&tid, t) in &self.resources_infos {
+        //     if !t.is_permanent {
+        //         self.resource_store.resources.remove_dyn(tid);
+        //     }
+        // }
     }
 
     pub fn compute<T: GraphResourceId>(&mut self) -> T {
-        self.prepare_run();
-        let mut compiled = self.compiled.take().unwrap();
-        let result = compiled.compute(self, TypeId::of::<T>());
+        todo!()
+        // self.prepare_run();
+        // let mut compiled = self.compiled.take().unwrap();
+        // let result = compiled.compute(self, TypeId::of::<T>());
 
-        assert!(result.required_inputs.iter().all(|&p| self.resource_store.resources.has_any(p)), "Cannot run, missing inputs!");
-        self.execute(&result.steps);
-        compiled.apply_compute_result(self, &result);
+        // assert!(result.required_inputs.iter().all(|&p| self.resource_store.resources.has_any(p)), "Cannot run, missing inputs!");
+        // self.execute(&result.steps);
+        // compiled.apply_compute_result(self, &result);
         
-        self.compiled = Some(compiled);
+        // self.compiled = Some(compiled);
 
-        *self.resource_store.resources.remove::<T>().unwrap()
+        // *self.resource_store.resources.remove::<T>().unwrap()
     }
 
     fn write_to_dot(&self, f: &mut impl std::fmt::Write, steps: Option<&[usize]>) -> std::fmt::Result {
-        const INDENT: &'static str = "  ";
+        todo!()
+        // const INDENT: &'static str = "  ";
 
-        writeln!(f, "digraph {{")?;
-        let mut names = HashMap::<&'static str, HashMap<TypeId, String>>::new();
-        macro_rules! get_name { ($n: expr, $pref: expr) => {{
-            let p = names.entry($pref).or_default();
-            let c = p.len();
-            p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
-        }}; }
-        let mut printed_resources = HashSet::<TypeId>::new();
-        macro_rules! write_node { ($name:expr$(,$key:expr=>$val:expr)*) => {{
-            write!(f, "{INDENT}{} [", $name)?;
-            $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
-            writeln!(f, "]")?;
-        }}; }
-        macro_rules! write_resource { ($tid:expr) => {{
-            let tid = $tid;
-            if printed_resources.insert(tid) {
-                let type_name = self.type_name_registry.get_name(tid);
-                write_node!(get_name!(tid, "R"), shape=>"plain", label=>type_name);
-            }
-        }}; }
+        // writeln!(f, "digraph {{")?;
+        // let mut names = HashMap::<&'static str, HashMap<TypeId, String>>::new();
+        // macro_rules! get_name { ($n: expr, $pref: expr) => {{
+        //     let p = names.entry($pref).or_default();
+        //     let c = p.len();
+        //     p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
+        // }}; }
+        // let mut printed_resources = HashSet::<TypeId>::new();
+        // macro_rules! write_node { ($name:expr$(,$key:expr=>$val:expr)*) => {{
+        //     write!(f, "{INDENT}{} [", $name)?;
+        //     $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
+        //     writeln!(f, "]")?;
+        // }}; }
+        // macro_rules! write_resource { ($tid:expr) => {{
+        //     let tid = $tid;
+        //     if printed_resources.insert(tid) {
+        //         let type_name = self.type_name_registry.get_name(tid);
+        //         write_node!(get_name!(tid, "R"), shape=>"plain", label=>type_name);
+        //     }
+        // }}; }
 
-        for &tid in self.inputs.iter().sorted_by_key(|p| self.type_name_registry.get_name(**p)) {
-            printed_resources.insert(tid);
-            let type_name = self.type_name_registry.get_name(tid);
-            write_node!(get_name!(tid, "R"), shape=>"rectangle", label=>type_name);
-        }
-        for (i, n) in self.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.label()) {
-            let name = format!("N{i}");
-            write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.label()));
-            for &input in n.inputs {
-                write_resource!(input);
-                let input = get_name!(input, "R");
-                writeln!(f, "{INDENT}{input} -> {name}")?;
-            }
-            for &borrowed_input in n.borrowed_inputs {
-                write_resource!(borrowed_input);
-                let borrowed_input = get_name!(borrowed_input, "R");
-                writeln!(f, "{INDENT}{borrowed_input} -> {name} [style=dashed]")?;
-            }
-            for &output in n.outputs {
-                write_resource!(output);
-                let output = get_name!(output, "R");
-                writeln!(f, "{INDENT}{name} -> {output}")?;
-            }
-        }
+        // for &tid in self.inputs.iter().sorted_by_key(|p| self.type_name_registry.get_name(**p)) {
+        //     printed_resources.insert(tid);
+        //     let type_name = self.type_name_registry.get_name(tid);
+        //     write_node!(get_name!(tid, "R"), shape=>"rectangle", label=>type_name);
+        // }
+        // for (i, n) in self.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.label()) {
+        //     let name = format!("N{i}");
+        //     write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.label()));
+        //     for &input in n.inputs {
+        //         write_resource!(input);
+        //         let input = get_name!(input, "R");
+        //         writeln!(f, "{INDENT}{input} -> {name}")?;
+        //     }
+        //     for &borrowed_input in n.borrowed_inputs {
+        //         write_resource!(borrowed_input);
+        //         let borrowed_input = get_name!(borrowed_input, "R");
+        //         writeln!(f, "{INDENT}{borrowed_input} -> {name} [style=dashed]")?;
+        //     }
+        //     for &output in n.outputs {
+        //         write_resource!(output);
+        //         let output = get_name!(output, "R");
+        //         writeln!(f, "{INDENT}{name} -> {output}")?;
+        //     }
+        // }
 
-        if let Some(steps) = steps {
-            for [a, b] in steps.iter().copied().array_windows() {
-                writeln!(f, "{INDENT}N{a} -> N{b} [color=blue]")?;
-            }
-        }
+        // if let Some(steps) = steps {
+        //     for [a, b] in steps.iter().copied().array_windows() {
+        //         writeln!(f, "{INDENT}N{a} -> N{b} [color=blue]")?;
+        //     }
+        // }
         
-        write!(f, "}}")?;
+        // write!(f, "}}")?;
 
-        Ok(())
+        // Ok(())
     }
 }

@@ -1,0 +1,15 @@
+[package]
+name = "render_graph_macros"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+itertools = { workspace = true }
+proc-macro-crate = "3.5.0"
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = "3.0.4"

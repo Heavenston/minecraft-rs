@@ -5,8 +5,10 @@ authors.workspace = true
 edition.workspace = true
 
 [dependencies]
+render_graph_macros = { path = "../render_graph_macros" }
 typemap = { workspace = true }
 itertools = { workspace = true }
 tracing = { workspace = true }
 genmap = { workspace = true }
+static_assertions = "1.1.0"
 parking_lot = "0.12.5"
