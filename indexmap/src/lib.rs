@@ -123,6 +123,24 @@ impl<T, I> IndexMut<&I> for IndexSlice<T, I>
     }
 }
 
+impl<'a, T, I> IntoIterator for &'a IndexSlice<T, I> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T, I> IntoIterator for &'a mut IndexSlice<T, I> {
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
 pub struct IndexMap<T, I> {
     index: PhantomData<fn(I) -> I>,
     values: Vec<T>,
@@ -142,6 +160,13 @@ impl<T, I> IndexMap<T, I> {
 
     pub const fn as_mut_slice(&mut self) -> &mut IndexSlice<T, I> {
         IndexSlice::new_mut(self.values.as_mut_slice())
+    }
+
+    pub const fn from_vec(values: Vec<T>) -> Self {
+        Self {
+            index: PhantomData,
+            values,
+        }
     }
 
     pub fn into_inner(self) -> Vec<T> {
@@ -192,5 +217,38 @@ impl<T, I> Deref for IndexMap<T, I> {
 impl<T, I> DerefMut for IndexMap<T, I> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         IndexSlice::new_mut(self.values.as_mut_slice())
+    }
+}
+
+impl<T, I> FromIterator<T> for IndexMap<T, I> {
+    fn from_iter<A: IntoIterator<Item = T>>(iter: A) -> Self {
+        Self::from_vec(Vec::from_iter(iter))
+    }
+}
+
+impl<T, I> IntoIterator for IndexMap<T, I> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_inner().into_iter()
+    }
+}
+
+impl<'a, T, I> IntoIterator for &'a IndexMap<T, I> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T, I> IntoIterator for &'a mut IndexMap<T, I> {
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }
