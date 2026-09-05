@@ -6,6 +6,14 @@ use static_assertions as sa;
 pub struct Generation(u32);
 
 impl Generation {
+    #[cfg(all(debug_assertions, any(target_arch = "x86", target_arch = "x86_64"), target_feature = "rdrand"))]
+    pub(crate) fn new() -> Self {
+        let mut val: u32 = 0;
+        core::arch::x86::_rdrand32_step(&mut val);
+        Self(val)
+    }
+
+    #[cfg(not(all(debug_assertions, any(target_arch = "x86", target_arch = "x86_64"), target_feature = "rdrand")))]
     pub(crate) fn new() -> Self {
         Self(0)
     }
@@ -25,25 +33,26 @@ impl Generation {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparseIdx(u32);
 
-impl SparseIdx {
-    pub(crate) fn from_usize(val: usize) -> Self {
-        Self(val.try_into().expect("GenMap overflowed u32 capacity"))
+impl indexmap::MapIndex for SparseIdx {
+    fn from_usize(idx: usize) -> Self {
+        Self(idx.try_into().expect("GenMap overflowed u32 capacity"))
     }
 
-    pub(crate) fn to_usize(&self) -> usize {
+    fn as_usize(&self) -> usize {
         sa::const_assert!(std::mem::size_of::<usize>() >= std::mem::size_of::<u32>());
         self.0 as usize
     }
 }
 
-pub(crate) struct DenseIdx(u32);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DenseIdx(u32);
 
-impl DenseIdx {
-    pub(crate) fn from_usize(val: usize) -> Self {
-        Self(val.try_into().expect("GenMap overflowed u32 capacity"))
+impl indexmap::MapIndex for DenseIdx {
+    fn from_usize(idx: usize) -> Self {
+        Self(idx.try_into().expect("GenMap overflowed u32 capacity"))
     }
 
-    pub(crate) fn to_usize(&self) -> usize {
+    fn as_usize(&self) -> usize {
         sa::const_assert!(std::mem::size_of::<usize>() >= std::mem::size_of::<u32>());
         self.0 as usize
     }
