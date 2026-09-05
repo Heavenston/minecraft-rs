@@ -184,6 +184,19 @@ impl<T> GenMap<T> {
         self.dense_values.iter()
     }
 
+    /// Iterate over the sparse indices of the values in the same order as in
+    /// the dense array.
+    pub fn iter_sparse_indexes(&self) -> impl Iterator<Item = &SparseIdx> + DoubleEndedIterator + ExactSizeIterator {
+        self.dense_to_sparse.iter()
+    }
+
+    pub fn enumerated(&self) -> impl Iterator<Item = (SparseIdx, &'_ T)> + DoubleEndedIterator + ExactSizeIterator {
+        std::iter::zip(
+            self.dense_to_sparse.iter().cloned(),
+            self.dense_values.iter(),
+        )
+    }
+
     /// Returns an iterator of mutable references over all values in the map
     /// in the same order as in the dense array
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, T> {

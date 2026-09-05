@@ -1,27 +1,74 @@
 use std::{any::TypeId, collections::{HashMap, HashSet}, convert::identity, rc::Rc, sync::{Arc}};
 
+use genmap::SparseIdx;
 use itertools::{Itertools as _, chain};
 use parking_lot::RwLock;
 
-use crate::RenderGraph;
+use crate::{RenderGraph, UntypedNodeHandle, UntypedResourceHandle};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct NodeRef(SparseIdx);
+impl From<NodeRef> for SparseIdx {
+    fn from(value: NodeRef) -> Self {
+        value.0
+    }
+}
+impl From<SparseIdx> for NodeRef {
+    fn from(value: SparseIdx) -> Self {
+        Self(value)
+    }
+}
+impl From<UntypedNodeHandle> for NodeRef {
+    fn from(value: UntypedNodeHandle) -> Self {
+        Self(value.0.sparse_index())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ResourceRef(SparseIdx);
+impl From<ResourceRef> for SparseIdx {
+    fn from(value: ResourceRef) -> Self {
+        value.0
+    }
+}
+impl From<SparseIdx> for ResourceRef {
+    fn from(value: SparseIdx) -> Self {
+        Self(value)
+    }
+}
+impl From<UntypedResourceHandle> for ResourceRef {
+    fn from(value: UntypedResourceHandle) -> Self {
+        Self(value.0.sparse_index())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum InputOrNode {
     Input,
-    Node(usize),
+    Node(NodeRef),
 }
+
+impl PartialEq<NodeRef> for InputOrNode {
+    fn eq(&self, other: &NodeRef) -> bool {
+        match self {
+            InputOrNode::Input => false,
+            InputOrNode::Node(node_ref) => node_ref == other,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ResolvedInput {
-    resource: TypeId,
+    resource: ResourceRef,
     producer: InputOrNode,
 }
 
-type Producers = HashMap<TypeId, Vec<InputOrNode>>;
+type Producers = HashMap<ResourceRef, Vec<InputOrNode>>;
 
 fn compute_producers(graph: &RenderGraph) -> Producers {
     std::iter::chain(
-        graph.nodes.iter().enumerate().flat_map(|(node_id, p)| p.outputs.iter().map(move |&tid| (tid, InputOrNode::Node(node_id)))),
-        graph.inputs.iter().map(|&tid| (tid, InputOrNode::Input)),
+        graph.nodes.enumerated().map(|(node_idx, data)| (NodeRef::from(node_idx), data)).flat_map(|(node_id, p)| p.outputs.iter().map(move |&tid| (tid.into(), InputOrNode::Node(node_id.clone())))),
+        graph.inputs.iter().map(|&tid| (tid.into(), InputOrNode::Input)),
     ).into_group_map()
 }
 
@@ -33,15 +80,15 @@ struct Cons {
 }
 
 impl ListLink {
-    fn iter(&self) -> impl Iterator<Item = InputOrNode> {
+    fn iter(&self) -> impl Iterator<Item = &InputOrNode> {
         struct Iter<'a>(Option<&'a Cons>);
         impl<'a> Iterator for Iter<'a> {
-            type Item = InputOrNode;
+            type Item = &'a InputOrNode;
 
             fn next(&mut self) -> Option<Self::Item> {
                 match self.0 {
                     Some(n) => {
-                        let val = n.val;
+                        let val = &n.val;
                         self.0 = n.prev.0.as_ref().map(|p| &**p);
                         Some(val)
                     },
@@ -61,144 +108,146 @@ impl ListLink {
 }
 
 trait ResolvedResourcesContainer {
-    fn node_count(&self) -> usize;
-    fn explicit_orderings(&self) -> &[(usize, usize)];
-    fn resolved_inputs(&self, id: usize) -> impl Iterator<Item = &ResolvedInput>;
-    fn resolved_borrows(&self, id: usize) -> impl Iterator<Item = &ResolvedInput>;
+    fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator;
+    fn explicit_orderings(&self) -> &[(NodeRef, NodeRef)];
+    fn resolved_inputs(&self, id: &NodeRef) -> impl Iterator<Item = &ResolvedInput>;
+    fn resolved_borrows(&self, id: &NodeRef) -> impl Iterator<Item = &ResolvedInput>;
 
-    fn combined_inputs(&self, i: usize) -> impl Iterator<Item = &ResolvedInput> {
+    fn combined_inputs(&self, i: &NodeRef) -> impl Iterator<Item = &ResolvedInput> {
         chain!(self.resolved_inputs(i), self.resolved_borrows(i))
     }
 
-    fn borrowers_of(&self, i: &ResolvedInput) -> impl Iterator<Item = usize> {
-        (0..self.node_count())
-            .filter(move |&node_id| self.resolved_borrows(node_id).any(move |ri| ri == i))
+    fn borrowers_of(&self, ri: &ResolvedInput) -> impl Iterator<Item = NodeRef> {
+        self.node_refs().filter(move |node2| self.resolved_borrows(node2).any(move |ri2| ri2 == ri))
     }
 
     #[tracing::instrument(skip(self, recursive))]
-    fn is_after_or_equal(&self, recursive: ListLink, after: InputOrNode, before: usize) -> bool {
+    fn is_after_or_equal(&self, recursive: ListLink, after: &InputOrNode, before: &NodeRef) -> bool {
         if recursive.iter().any(|o| o == after) {
             tracing::warn!("recursive");
             return false;
         }
-        let recursive = recursive.cons(after);
+        let recursive = recursive.cons(after.clone());
 
         let after = match after { InputOrNode::Input => return false, InputOrNode::Node(node) => node };
 
         after == before ||
-        self.explicit_orderings().contains(&(before, after)) ||
-        self.combined_inputs(after).any(|input| input.producer == InputOrNode::Node(before)) ||
+        self.explicit_orderings().contains(&(before.clone(), after.clone())) ||
+        self.combined_inputs(after).any(|input| &input.producer == before) ||
         self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2)) ||
         self.combined_inputs(after)
             .any(|input| {
                 tracing::debug_span!("input", ?input.resource).in_scope(|| {
-                    self.is_after_or_equal(recursive.clone(), input.producer, before)
+                    self.is_after_or_equal(recursive.clone(), &input.producer, before)
                 })
             }) ||
         self.resolved_inputs(after)
             .flat_map(|i| self.borrowers_of(i))
             .any(|o| {
                 tracing::debug_span!("cross-borrow").in_scope(|| {
-                    self.is_after_or_equal(recursive.clone(), InputOrNode::Node(o), before)
+                    self.is_after_or_equal(recursive.clone(), &InputOrNode::Node(o), before)
                 })
             })
     }
 }
 
 struct ResolvedResources {
-    explicit_orderings: Box<[(usize, usize)]>,
-    inputs: Box<[Box<[ResolvedInput]>]>,
-    borrows: Box<[Box<[ResolvedInput]>]>,
-    consumers: HashMap<ResolvedInput, usize>,
-    borrowers: HashMap<ResolvedInput, Vec<usize>>
+    node_refs: Box<[NodeRef]>,
+    explicit_orderings: Box<[(NodeRef, NodeRef)]>,
+    inputs: HashMap<NodeRef, Box<[ResolvedInput]>>,
+    borrows: HashMap<NodeRef, Box<[ResolvedInput]>>,
+    consumers: HashMap<ResolvedInput, NodeRef>,
+    borrowers: HashMap<ResolvedInput, Vec<NodeRef>>
 }
 
 impl ResolvedResources {
-    fn users(&self, res: &ResolvedInput) -> impl Iterator<Item = usize> {
+    fn users(&self, res: &ResolvedInput) -> impl Iterator<Item = &NodeRef> {
         chain!(
             self.consumers.get(res),
             self.borrowers.get(res).map(Vec::as_slice).unwrap_or_default(),
-        ).copied()
+        )
     }
 
     fn write_to_dot(&self, graph: &RenderGraph, f: &mut impl std::fmt::Write) -> std::fmt::Result {
-        const INDENT: &'static str = "  ";
+        todo!()
+        // const INDENT: &'static str = "  ";
 
-        writeln!(f, "digraph {{")?;
-        let mut names = HashMap::<&'static str, HashMap<TypeId, String>>::new();
-        macro_rules! tn { ($t:expr) => {
-            graph.type_name_registry.get_name($t)
-        }; }
-        let mut printed_resources = HashSet::<TypeId>::new();
-        macro_rules! get_name { ($n: expr, $pref: expr) => {{
-            let p = names.entry($pref).or_default();
-            let c = p.len();
-            p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
-        }}; }
-        macro_rules! write_resource { ($tid:expr) => {{
-            let tid = $tid;
-            if printed_resources.insert(tid) {
-                let type_name = graph.type_name_registry.get_name(tid);
-                write_node!(get_name!(tid, "R"), shape=>"rectangle", label=>type_name);
-            }
-        }}; }
-        macro_rules! write_node { ($name:expr$(,$key:expr=>$val:expr)*) => {{
-            write!(f, "{INDENT}{} [", $name)?;
-            $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
-            writeln!(f, "]")?;
-        }}; }
-        macro_rules! write_edge {
-            ($i:ident -> $n:ident$(,$key:expr=>$val:expr)*) => {{
-                let name = $n.clone();
-                let input = $i;
-                match input.producer {
-                    InputOrNode::Input => {
-                        write_resource!($i.resource);
-                        write!(f, "{INDENT}{} -> {name} [", get_name!(input.resource, "R"))?;
-                    },
-                    InputOrNode::Node(n) => {
-                        write!(f, "{INDENT}{} -> {name} [label=\"{}\"", format!("N{n}"), tn!(input.resource))?;
-                    }
-                };
-                $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
-                writeln!(f, "]")?;
-            }};
-        }
+        // writeln!(f, "digraph {{")?;
+        // let mut names = HashMap::<&'static str, HashMap<TypeId, String>>::new();
+        // macro_rules! tn { ($t:expr) => {
+        //     graph.type_name_registry.get_name($t)
+        // }; }
+        // let mut printed_resources = HashSet::<TypeId>::new();
+        // macro_rules! get_name { ($n: expr, $pref: expr) => {{
+        //     let p = names.entry($pref).or_default();
+        //     let c = p.len();
+        //     p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
+        // }}; }
+        // macro_rules! write_resource { ($tid:expr) => {{
+        //     let tid = $tid;
+        //     if printed_resources.insert(tid) {
+        //         let type_name = graph.type_name_registry.get_name(tid);
+        //         write_node!(get_name!(tid, "R"), shape=>"rectangle", label=>type_name);
+        //     }
+        // }}; }
+        // macro_rules! write_node { ($name:expr$(,$key:expr=>$val:expr)*) => {{
+        //     write!(f, "{INDENT}{} [", $name)?;
+        //     $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
+        //     writeln!(f, "]")?;
+        // }}; }
+        // macro_rules! write_edge {
+        //     ($i:ident -> $n:ident$(,$key:expr=>$val:expr)*) => {{
+        //         let name = $n.clone();
+        //         let input = $i;
+        //         match input.producer {
+        //             InputOrNode::Input => {
+        //                 write_resource!($i.resource);
+        //                 write!(f, "{INDENT}{} -> {name} [", get_name!(input.resource, "R"))?;
+        //             },
+        //             InputOrNode::Node(n) => {
+        //                 write!(f, "{INDENT}{} -> {name} [label=\"{}\"", format!("N{n}"), tn!(input.resource))?;
+        //             }
+        //         };
+        //         $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
+        //         writeln!(f, "]")?;
+        //     }};
+        // }
 
-        for (i, n) in graph.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.label()) {
-            let name = format!("N{i}");
-            write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.label()));
-            for input in self.resolved_inputs(i) {
-                write_edge!(input -> name);
-            }
-            for input in self.resolved_borrows(i) {
-                write_edge!(input -> name, style=>"dashed");
-            }
-        }
+        // for (i, n) in graph.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.label()) {
+        //     let name = format!("N{i}");
+        //     write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.label()));
+        //     for input in self.resolved_inputs(i) {
+        //         write_edge!(input -> name);
+        //     }
+        //     for input in self.resolved_borrows(i) {
+        //         write_edge!(input -> name, style=>"dashed");
+        //     }
+        // }
         
-        write!(f, "}}")?;
+        // write!(f, "}}")?;
 
-        Ok(())
+        // Ok(())
     }
 }
 
 impl ResolvedResourcesContainer for ResolvedResources {
-    fn node_count(&self) -> usize {
-        self.inputs.len()
+    fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator {
+        self.node_refs.iter().cloned()
     }
-    fn explicit_orderings(&self) -> &[(usize, usize)] {
+    fn explicit_orderings(&self) -> &[(NodeRef, NodeRef)] {
         &self.explicit_orderings
     }
-    fn resolved_inputs(&self, id: usize) -> impl Iterator<Item = &ResolvedInput> {
+    fn resolved_inputs(&self, id: &NodeRef) -> impl Iterator<Item = &ResolvedInput> {
         self.inputs[id].iter()
     }
-    fn resolved_borrows(&self, id: usize) -> impl Iterator<Item = &ResolvedInput> {
+    fn resolved_borrows(&self, id: &NodeRef) -> impl Iterator<Item = &ResolvedInput> {
         self.borrows[id].iter()
     }
 }
 
 struct GraphResourceResolver {
-    explicit_orderings: Box<[(usize, usize)]>,
+    node_refs: Box<[NodeRef]>,
+    explicit_orderings: Box<[(NodeRef, NodeRef)]>,
     resolved_inputs: Box<[Box<[Option<ResolvedInput>]>]>,
     resolved_borrows: Box<[Box<[Option<ResolvedInput>]>]>,
 }
@@ -232,7 +281,7 @@ impl ResolvedResourcesContainer for GraphResourceResolver {
     fn node_count(&self) -> usize {
         self.resolved_inputs.len()
     }
-    fn explicit_orderings(&self) -> &[(usize, usize)] {
+    fn explicit_orderings(&self) -> &[(NodeRef, NodeRef)] {
         &self.explicit_orderings
     }
     fn resolved_inputs(&self, id: usize) -> impl Iterator<Item = &ResolvedInput> {
@@ -274,8 +323,8 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
 
     let mut producers = compute_producers(graph);
     let producers_for_borrows = compute_producers(graph);
-    let explicit_orderings: Box<[(usize, usize)]> = graph.explicit_orderings.iter()
-        .map(|&(before, after)| (graph.nodes.get_index(before.0).unwrap(), graph.nodes.get_index(after.0).unwrap()))
+    let explicit_orderings: Box<[(NodeRef, NodeRef)]> = graph.explicit_orderings.iter()
+        .map(|&(before, after)| (before.0.sparse_index(), after.0.sparse_index()))
         .collect_vec().into_boxed_slice();
     let nodes = graph.nodes.values();
     let mut this = GraphResourceResolver {

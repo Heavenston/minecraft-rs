@@ -22,7 +22,7 @@ impl Generation {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SparseIdx(u32);
 
 impl SparseIdx {

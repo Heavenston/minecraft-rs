@@ -2,7 +2,7 @@ mod bundles;
 pub use bundles::*;
 mod node;
 pub use node::*;
-// mod compiler;
+mod compiler;
 #[cfg(test)]
 mod tests;
 
@@ -420,6 +420,7 @@ impl RenderGraph {
     }
 
     pub fn compute<T: GraphResourceId>(&mut self) -> T {
+        todo!()
         // self.prepare_run();
         // let mut compiled = self.compiled.take().unwrap();
         // let result = compiled.compute(self, TypeId::of::<T>());
