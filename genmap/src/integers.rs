@@ -1,17 +1,20 @@
-use std::{marker::PhantomData, num::Wrapping};
+use std::marker::PhantomData;
 
 use static_assertions as sa;
 
 #[derive(PartialEq, Clone, Copy)]
-pub(crate) struct Generation(Wrapping<u32>);
+pub struct Generation(u32);
 
 impl Generation {
     pub(crate) fn new() -> Self {
-        Self(Wrapping(0))
+        Self(0)
     }
 
     pub(crate) fn next(&self) -> Self {
-        Self(self.0 + Wrapping(1))
+        Self(match self.0.checked_add(1) {
+            None => panic!("Generation overflowed"),
+            Some(new_value) => new_value,
+        })
     }
 
     pub(crate) fn increment(&mut self) {
@@ -20,7 +23,7 @@ impl Generation {
 }
 
 #[derive(Clone)]
-pub(crate) struct SparseIdx(u32);
+pub struct SparseIdx(u32);
 
 impl SparseIdx {
     pub(crate) fn from_usize(val: usize) -> Self {
@@ -73,19 +76,19 @@ pub struct Handle<T> {
 }
 
 impl<T> Handle<T> {
-    pub(crate) fn new(sparse: SparseIdx, generation: Generation) -> Self {
+    pub fn new(sparse: SparseIdx, generation: Generation) -> Self {
         Self {
             data: PhantomData,
-            value: u64::from(sparse.0) | (u64::from(generation.0.0) << 32)
+            value: u64::from(sparse.0) | (u64::from(generation.0) << 32)
         }
     }
 
-    pub(crate) fn sparse(&self) -> SparseIdx {
+    pub fn sparse_index(&self) -> SparseIdx {
         SparseIdx(self.value.truncate())
     }
 
-    pub(crate) fn generation(&self) -> Generation {
-        Generation(Wrapping((self.value >> 32).truncate()))
+    pub fn generation(&self) -> Generation {
+        Generation((self.value >> 32).truncate())
     }
 }
 
@@ -108,7 +111,7 @@ impl<T> Eq for Handle<T> {}
 impl<T> std::fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Handle")
-            .field("sparse", &self.sparse().0)
+            .field("sparse_index", &self.sparse_index().0)
             .field("generation", &self.generation().0)
             .finish()
     }
