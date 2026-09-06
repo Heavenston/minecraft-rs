@@ -15,25 +15,6 @@ use itertools::Itertools as _;
 
 use crate::compiler::CompiledGraph;
 
-#[derive(Debug, Clone, Default)]
-pub struct TypeNameRegistry {
-    content: HashMap<TypeId, &'static str>
-}
-
-impl TypeNameRegistry {
-    pub fn register<T: Any>(&mut self) {
-        self.content.insert(TypeId::of::<T>(), std::any::type_name::<T>());
-    }
-
-    pub fn get_name(&self, id: TypeId) -> &'static str {
-        self.content.get(&id).copied().unwrap_or("<unknown>")
-    }
-
-    pub fn try_get_name(&self, id: TypeId) -> Option<&'static str> {
-        self.content.get(&id).copied()
-    }
-}
-
 pub trait GraphResourceId: Any {
     type Resource
         where Self: Sized;
@@ -300,7 +281,6 @@ pub struct UntypedResourceHandle(genmap::Handle<ResourceData>);
 
 #[derive(Default)]
 pub struct RenderGraph {
-    type_name_registry: TypeNameRegistry,
     type_resources_info: HashMap<TypeId, ResourceTypeInfo>,
     inputs: HashSet<UntypedResourceHandle>,
     resources: GenMap<ResourceData>,
@@ -337,8 +317,6 @@ impl RenderGraph {
     }
 
     pub fn push_node_complete<N: GraphNode>(&mut self, node: N, input_bundle: N::InputBundle, output_bundle: N::OutputBundle) -> NodeHandle<N> {
-        self.type_name_registry.register::<N>();
-
         let mut manager = ResourceManager {
             resources: &mut self.resources,
             type_resources_info: &mut self.type_resources_info,
