@@ -18,3 +18,6 @@ itertools = { workspace = true }
 bytemuck = "1.25.2"
 parking_lot = "0.12.5"
 thiserror = "2.0.20"
+
+[lints]
+workspace = true

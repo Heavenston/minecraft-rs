@@ -13,3 +13,6 @@ tracing = { workspace = true }
 itertools = { workspace = true }
 tracing-subscriber = "0.3.23"
 ordermap = "1.2.1"
+
+[lints]
+workspace = true
