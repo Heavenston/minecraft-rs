@@ -5,7 +5,7 @@ use indexmap::{IndexMap, IndexSlice, MapIndex as _};
 use itertools::{Itertools as _, chain};
 use parking_lot::RwLock;
 
-use crate::{NodeData, RenderGraph, ResourceData, UntypedNodeHandle, UntypedResourceHandle};
+use crate::{NodeData, RenderGraph, ResourceData, UntypedNodeHandle, UncheckedResourceHandle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeRef(DenseIdx);
@@ -62,8 +62,8 @@ trait RenderGraphExt {
     fn resources(&self) -> &IndexSlice<ResourceData, ResourceRef>;
     fn node_ref(&self, handle: impl Into<UntypedNodeHandle>) -> NodeRef;
     fn node_handle(&self, node: NodeRef) -> UntypedNodeHandle;
-    fn resource_ref(&self, resource: impl Into<UntypedResourceHandle>) -> ResourceRef;
-    fn resource_handle(&self, resource: ResourceRef) -> UntypedResourceHandle;
+    fn resource_ref(&self, resource: impl Into<UncheckedResourceHandle>) -> ResourceRef;
+    fn resource_handle(&self, resource: ResourceRef) -> UncheckedResourceHandle;
     fn is_resource_ref_permanent(&self, resource: ResourceRef) -> bool;
 }
 
@@ -90,15 +90,15 @@ impl RenderGraphExt for RenderGraph {
     }
 
     fn node_handle(&self, node: NodeRef) -> UntypedNodeHandle {
-        UntypedNodeHandle(self.nodes.from_dense_index(node.0).expect("valid dense index"))
+        UntypedNodeHandle(self.nodes.handle_from_dense_index(node.0).expect("valid dense index"))
     }
 
-    fn resource_ref(&self, resource: impl Into<UntypedResourceHandle>) -> ResourceRef {
-        ResourceRef(self.resources.get_dense_index(resource.into().0).expect("Invalid resource handle"))
+    fn resource_ref(&self, resource: impl Into<UncheckedResourceHandle>) -> ResourceRef {
+        ResourceRef(self.resources.unsafe_get_dense_index(resource.into().0))
     }
 
-    fn resource_handle(&self, resource: ResourceRef) -> UntypedResourceHandle {
-        UntypedResourceHandle(self.resources.from_dense_index(resource.0).expect("valid dense index"))
+    fn resource_handle(&self, resource: ResourceRef) -> UncheckedResourceHandle {
+        UncheckedResourceHandle(self.resources.unsafe_from_sparse_index(resource.0))
     }
 
     fn is_resource_ref_permanent(&self, resource: ResourceRef) -> bool {
@@ -552,7 +552,7 @@ fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box
 
 #[derive(Default)]
 pub struct ComputeResult {
-    pub required_inputs: Box<[UntypedResourceHandle]>,
+    pub required_inputs: Box<[UncheckedResourceHandle]>,
     pub steps: Box<[UntypedNodeHandle]>,
     output_new_permanents: Box<[ResourceRef]>,
 }
@@ -609,7 +609,7 @@ impl CompiledGraph {
         }
     }
 
-    pub fn mark_resource_dirty(&mut self, graph: &RenderGraph, resource: UntypedResourceHandle) {
+    pub fn mark_resource_dirty(&mut self, graph: &RenderGraph, resource: UncheckedResourceHandle) {
         let resource = graph.resource_ref(resource);
         assert!(graph.is_resource_ref_permanent(resource), "Only permanent resources can bbe marked dirty");
         let &[producer] = self.producers.get(&resource).map(Vec::as_slice).unwrap_or_default()
@@ -628,7 +628,7 @@ impl CompiledGraph {
     }
 
     #[tracing::instrument(level = "trace", skip_all)]
-    pub fn compute(&self, graph: &RenderGraph, resource: UntypedResourceHandle) -> Arc<ComputeResult> {
+    pub fn compute(&self, graph: &RenderGraph, resource: UncheckedResourceHandle) -> Arc<ComputeResult> {
         let resource = graph.resource_ref(resource);
         let cached = self.cache.read().get(&self.not_dirty).map(Arc::clone);
         if let Some(cached) = cached {

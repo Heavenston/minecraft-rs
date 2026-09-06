@@ -154,9 +154,9 @@ impl<N: GraphNode> GraphNodeWrapperTrait for (N::InputBundle, N, N::OutputBundle
 }
 
 struct NodeData {
-    borrows: Vec<UntypedResourceHandle>,
-    consumes: Vec<UntypedResourceHandle>,
-    outputs: Vec<UntypedResourceHandle>,
+    borrows: Vec<UncheckedResourceHandle>,
+    consumes: Vec<UncheckedResourceHandle>,
+    outputs: Vec<UncheckedResourceHandle>,
     node: Box<dyn GraphNodeWrapperTrait>,
 }
 
@@ -279,13 +279,21 @@ impl<N> From<&ResourceHandle<N>> for UntypedResourceHandle {
 #[repr(transparent)]
 pub struct UntypedResourceHandle(genmap::Handle<ResourceData>);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+struct UncheckedResourceHandle(genmap::SparseIdx);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+struct UncheckedNodeHandle(genmap::SparseIdx);
+
 #[derive(Default)]
 pub struct RenderGraph {
     type_resources_info: HashMap<TypeId, ResourceTypeInfo>,
-    inputs: HashSet<UntypedResourceHandle>,
+    inputs: HashSet<UncheckedResourceHandle>,
     resources: GenMap<ResourceData>,
     nodes: GenMap<NodeData>,
-    explicit_orderings: Vec<(UntypedNodeHandle, UntypedNodeHandle)>,
+    explicit_orderings: Vec<(UncheckedNodeHandle, UncheckedNodeHandle)>,
 
     compiled: Option<CompiledGraph>,
 }
@@ -324,10 +332,17 @@ impl RenderGraph {
         let consumes = input_bundle.list_consumes(&mut manager).into_iter().collect_vec();
         let borrows = input_bundle.list_borrows(&mut manager).into_iter().collect_vec();
         let outputs = output_bundle.list_resources(&mut manager).into_iter().collect_vec();
+        let mapper = |handle: UntypedResourceHandle| -> UncheckedResourceHandle {
+            assert!(self.resources.has(handle.0), "Resource handle not valid");
+            UncheckedResourceHandle(handle.0.sparse_index())
+        };
+        let consumes = consumes.into_iter().map(mapper).collect_vec();
+        let borrows = borrows.into_iter().map(mapper).collect_vec();
+        let outputs = outputs.into_iter().map(mapper).collect_vec();
 
         let shared = consumes.iter().filter(|o| borrows.contains(o)).collect_vec();
         assert!(shared.is_empty(), "Error pushing Node {} into render graph, the following resources are both consumed and borrowed: {shared:?}", std::any::type_name::<N>());
-        let consumed_permanents = consumes.iter().filter(|p| self.resources.get(p.0).is_some_and(|data| data.is_permanent)).collect_vec();
+        let consumed_permanents = consumes.iter().filter(|p| self.resources.unsafe_get(p.0).is_permanent).collect_vec();
         assert!(consumed_permanents.is_empty(), "Error pushing Node {} into render graph, the following resources cannot be consumed because they are permanent: {consumed_permanents:?}", std::any::type_name::<N>());
 
         let handle = self.nodes.insert(NodeData {
@@ -353,14 +368,14 @@ impl RenderGraph {
         let is_before = is_before.into();
         let is_after = is_after.into();
         assert!(self.nodes.has(is_before.0) && self.nodes.has(is_after.0), "Given node handles are not valid");
-        self.explicit_orderings.push((is_before, is_after));
+        self.explicit_orderings.push((UncheckedNodeHandle(is_before.0.sparse_index()), UncheckedNodeHandle(is_after.0.sparse_index())));
 
         self.compiled = None;
     }
 
     pub fn remove_node<N: GraphNode>(&mut self, handle: NodeHandle<N>) -> Option<N> {
         let node = self.nodes.remove(handle.inner)?;
-        self.explicit_orderings.retain(|&(a, b)| a.0 != handle.inner && b.0 != handle.inner);
+        self.explicit_orderings.retain(|&(a, b)| a.0 != handle.inner.sparse_index() && b.0 != handle.inner.sparse_index());
         self.compiled = None;
         Some(*(node.node as Box<dyn Any>).downcast::<N>().expect("Correct type associated with handle"))
     }
@@ -371,9 +386,9 @@ impl RenderGraph {
         self.compiled = Some(compiled);
     }
 
-    fn execute(&mut self, steps: &[UntypedNodeHandle]) {
+    fn execute(&mut self, steps: &[genmap::DenseIdx]) {
         for node in steps {
-            self.nodes.get_mut(node.0).expect("Valid handle").node.run(&mut ResourceManager {
+            self.nodes.values_mut()[node].node.run(&mut ResourceManager {
                 resources: &mut self.resources,
                 type_resources_info: &mut self.type_resources_info,
             });
