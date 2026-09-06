@@ -8,6 +8,8 @@ pub use integers::*;
 #[cfg(test)]
 mod tests;
 
+trait Sealed { }
+
 struct SparseCell {
     dense_idx_or_next_free: DenseOrSparse,
     generation: Generation,
@@ -18,6 +20,169 @@ struct AliveCellRef<'a>(&'a SparseCell);
 impl AliveCellRef<'_> {
     fn dense_idx(&self) -> DenseIdx {
         self.0.dense_idx_or_next_free.as_dense()
+    }
+}
+
+pub struct SlotRef<'a, T> {
+    map: &'a GenMap<T>,
+    sparse_idx: SparseIdx,
+    dense_idx: DenseIdx,
+}
+
+impl<'a, T> SlotRef<'a, T> {
+    pub fn sparse_idx(&self) -> SparseIdx {
+        self.sparse_idx
+    }
+
+    pub fn dense_idx(&self) -> DenseIdx {
+        self.dense_idx
+    }
+
+    pub fn handle(&self) -> Handle<T> {
+        Handle::new(self.sparse_idx, self.map.sparse[self.sparse_idx].generation)
+    }
+
+    pub fn get(&self) -> &'a T {
+        &self.map.dense_values[self.dense_idx()]
+    }
+}
+
+pub struct SlotMut<'a, T> {
+    map: &'a mut GenMap<T>,
+    sparse_idx: SparseIdx,
+    dense_idx: DenseIdx,
+}
+
+impl<'a, T> SlotMut<'a, T> {
+    pub fn into_ref(self) -> SlotRef<'a, T> {
+        SlotRef { map: self.map, sparse_idx: self.sparse_idx, dense_idx: self.dense_idx }
+    }
+
+    pub fn sparse_idx(&self) -> SparseIdx {
+        self.sparse_idx
+    }
+
+    pub fn dense_idx(&self) -> DenseIdx {
+        self.dense_idx
+    }
+
+    pub fn handle(&self) -> Handle<T> {
+        Handle::new(self.sparse_idx, self.map.sparse[self.sparse_idx].generation)
+    }
+
+    pub fn get(&self) -> &T {
+        &self.map.dense_values[self.dense_idx()]
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.map.dense_values[self.dense_idx]
+    }
+
+    pub fn into_mut(self) -> &'a mut T {
+        &mut self.map.dense_values[self.dense_idx]
+    }
+
+    /// Removes and return the value for the given handle if it is valid.
+    /// This may change the dense index of any other handle.
+    pub fn remove(self) -> T {
+        let Self { map, sparse_idx, dense_idx } = self;
+        debug_assert!(!map.dense_values.is_empty() && !map.dense_to_sparse.is_empty(), "If a handle is valid, it means there is at least one value");
+
+        map.dense_to_sparse.swap_remove(dense_idx);
+        let result = map.dense_values.swap_remove(dense_idx);
+
+        if let Some(moved_sparse) = map.dense_to_sparse.get(dense_idx) {
+            map.sparse[moved_sparse].dense_idx_or_next_free = DenseOrSparse::new_dense(dense_idx);
+        }
+
+        let cell = &mut map.sparse[&sparse_idx];
+        cell.generation.increment();
+        cell.dense_idx_or_next_free = DenseOrSparse::new_sparse(std::mem::replace(&mut map.free_head, sparse_idx));
+
+        result
+    }
+}
+
+#[expect(private_bounds, reason = "Sealed trait")]
+#[diagnostic::on_unimplemented(message = "Use the types genmap::Handle, genmap::DenseIndex or genmap::AssumeAlive")]
+pub trait GenMapIndex<T>: Sealed {
+    type Checked<U>;
+    fn map_checked<U, V>(val: Self::Checked<U>, mapper: impl FnOnce(U) -> V) -> Self::Checked<V>;
+    fn get(map: &GenMap<T>, handle: Self) -> Self::Checked<SlotRef<'_, T>>;
+    fn get_mut(map: &mut GenMap<T>, handle: Self) -> Self::Checked<SlotMut<'_, T>>;
+}
+
+impl<T> Sealed for Handle<T> { }
+impl<T> GenMapIndex<T> for Handle<T> {
+    type Checked<U> = Option<U>;
+
+    fn map_checked<U, V>(val: Option<U>, mapper: impl FnOnce(U) -> V) -> Option<V> {
+        Option::map(val, mapper)
+    }
+
+    fn get(map: &GenMap<T>, handle: Self) -> Option<SlotRef<'_, T>> {
+        let cell = map.get_cell(handle)?;
+        Some(SlotRef {
+            map,
+            sparse_idx: handle.sparse_index(),
+            dense_idx: cell.dense_idx(),
+        })
+    }
+
+    fn get_mut(map: &mut GenMap<T>, handle: Self) -> Option<SlotMut<'_, T>> {
+        let cell = map.get_cell(handle)?;
+        Some(SlotMut {
+            sparse_idx: handle.sparse_index(),
+            dense_idx: cell.dense_idx(),
+            map,
+        })
+    }
+}
+
+impl Sealed for DenseIdx { }
+impl<T> GenMapIndex<T> for DenseIdx {
+    type Checked<U> = Option<U>;
+
+    fn map_checked<U, V>(val: Option<U>, mapper: impl FnOnce(U) -> V) -> Option<V> { Option::map(val, mapper) }
+
+    fn get(map: &GenMap<T>, handle: Self) -> Option<SlotRef<'_, T>> {
+        Some(SlotRef {
+            map,
+            sparse_idx: *map.dense_to_sparse.get(handle)?,
+            dense_idx: handle,
+        })
+    }
+
+    fn get_mut(map: &mut GenMap<T>, handle: Self) -> Option<SlotMut<'_, T>> {
+        Some(SlotMut {
+            sparse_idx: *map.dense_to_sparse.get(handle)?,
+            dense_idx: handle,
+            map,
+        })
+    }
+}
+
+pub struct AssumeAlive(pub SparseIdx);
+impl Sealed for AssumeAlive { }
+impl<T> GenMapIndex<T> for AssumeAlive {
+    type Checked<U> = U;
+
+    fn map_checked<U, V>(val: U, mapper: impl FnOnce(U) -> V) -> V { mapper(val) }
+
+    fn get(map: &GenMap<T>, Self(sparse_idx): Self) -> Self::Checked<SlotRef<'_, T>> {
+        SlotRef {
+            map,
+            sparse_idx,
+            dense_idx: map.assume_cell_alive(sparse_idx).dense_idx(),
+        }
+    }
+
+    fn get_mut(map: &mut GenMap<T>, Self(sparse_idx): Self) -> Self::Checked<SlotMut<'_, T>> {
+        SlotMut {
+            sparse_idx,
+            dense_idx: map.assume_cell_alive(sparse_idx).dense_idx(),
+            map,
+        }
     }
 }
 
@@ -47,58 +212,22 @@ impl<T> GenMap<T> {
         self.get_cell(handle).is_some()
     }
 
-    /// This returns the Handle to the value at the given dense index.
-    /// Returns None if the given index is greater or equal than the length
-    /// of the array.
-    pub fn from_dense_index(&self, index: DenseIdx) -> Option<Handle<T>> {
-        let sparse_idx = *self.dense_to_sparse.get(index)?;
-        let generation = self.sparse[&sparse_idx].generation;
-        Some(Handle::new(sparse_idx, generation))
+    pub fn with<I: GenMapIndex<T>>(&self, handle: I) -> I::Checked<SlotRef<'_, T>> {
+        I::get(self, handle)
     }
 
-    /// If the given `sparse_index` is currently inocupied, this will return
-    /// an inocupied handle, using it with any method may return incoherent values
-    /// or even panic.
-    pub fn unsafe_from_sparse_index(&self, sparse_index: SparseIdx) -> Handle<T> {
-        let generation = self.sparse[&sparse_index].generation;
-        Handle::new(sparse_index, generation)
-    }
-
-    /// If the given `sparse_index` is currently inocupied the returned index
-    /// will be arbitrary, may not be a valid index for the dense array.
-    pub fn unsafe_get_dense_index(&self, sparse_index: SparseIdx) -> DenseIdx {
-        self.assume_cell_alive(sparse_index).dense_idx()
-    }
-
-    /// If the given sparse index is currently incopuied this may
-    /// panic or return any arbitrary value currently in the map.
-    pub fn unsafe_get(&self, sparse_index: SparseIdx) -> &T {
-        let idx = self.unsafe_get_dense_index(sparse_index);
-        &self.dense_values[idx]
-    }
-
-    /// See [`Self::unsafe_get`].
-    pub fn unsafe_get_mut(&mut self, sparse_index: SparseIdx) -> &mut T {
-        let idx = self.unsafe_get_dense_index(sparse_index);
-        &mut self.dense_values[idx]
-    }
-
-    /// Returns the index into the dense array for the given handle.
-    /// This index may change if any other value inside the map is removed.
-    pub fn get_dense_index(&self, handle: Handle<T>) -> Option<DenseIdx> {
-        self.get_cell(handle).map(|cell| cell.dense_idx())
+    pub fn with_mut<I: GenMapIndex<T>>(&mut self, handle: I) -> I::Checked<SlotMut<'_, T>> {
+        I::get_mut(self, handle)
     }
 
     /// Returns a reference to the value for the given handle if it is still valid.
-    pub fn get(&self, handle: Handle<T>) -> Option<&T> {
-        let idx = self.get_dense_index(handle)?;
-        Some(&self.dense_values[idx])
+    pub fn get<I: GenMapIndex<T>>(&self, handle: I) -> I::Checked<&T> {
+        I::map_checked(self.with(handle), |slot| slot.get())
     }
 
     /// Returns a mutable reference to the value for the given handle if it is still valid.
-    pub fn get_mut(&mut self, handle: Handle<T>) -> Option<&mut T> {
-        let idx = self.get_dense_index(handle)?;
-        Some(&mut self.dense_values[idx])
+    pub fn get_mut<I: GenMapIndex<T>>(&mut self, handle: I) -> I::Checked<&mut T> {
+        I::map_checked(self.with_mut(handle), SlotMut::into_mut)
     }
 
     /// Inserts the given value into the map and returns a unique handle to it.
@@ -126,30 +255,8 @@ impl<T> GenMap<T> {
         }
     }
 
-    /// Removes and return the value for the given handle if it is valid.
-    /// This may change the dense index of any other handle.
-    pub fn remove(&mut self, handle: Handle<T>) -> Option<T> {
-        let cell = self.get_cell(handle)?;
-        debug_assert!(!self.dense_values.is_empty() && !self.dense_to_sparse.is_empty(), "If a handle is valid, it means there is at least one value");
-        let dense_idx = cell.dense_idx();
-        let sparse_idx: SparseIdx;
-
-        let result = if self.dense_values.last_index().as_ref() == Some(&dense_idx) {
-            sparse_idx = self.dense_to_sparse.pop().unwrap();
-            self.dense_values.pop().unwrap()
-        }
-        else {
-            let moved_sparse = self.dense_to_sparse.last().expect("non empty");
-            self.sparse[moved_sparse].dense_idx_or_next_free = DenseOrSparse::new_dense(dense_idx);
-            sparse_idx = self.dense_to_sparse.swap_remove(dense_idx);
-            self.dense_values.swap_remove(dense_idx)
-        };
-
-        let sparse = &mut self.sparse[&sparse_idx];
-        sparse.generation.increment();
-        sparse.dense_idx_or_next_free = DenseOrSparse::new_sparse(std::mem::replace(&mut self.free_head, sparse_idx));
-
-        Some(result)
+    pub fn remove<I: GenMapIndex<T>>(&mut self, handle: I) -> I::Checked<T> {
+        I::map_checked(self.with_mut(handle), SlotMut::remove)
     }
 
     /// Returns a reference to the dense array.

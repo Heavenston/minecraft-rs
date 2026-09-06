@@ -6,15 +6,6 @@ use static_assertions as sa;
 pub struct Generation(u32);
 
 impl Generation {
-    #[cfg(all(debug_assertions, any(target_arch = "x86", target_arch = "x86_64"), target_feature = "rdrand"))]
-    #[expect(clippy::single_call_fn, reason = "Used only when inserting a new value into the map")]
-    pub(crate) fn new() -> Self {
-        let mut val: u32 = 0;
-        core::arch::x86::_rdrand32_step(&mut val);
-        Self(val)
-    }
-
-    #[cfg(not(all(debug_assertions, any(target_arch = "x86", target_arch = "x86_64"), target_feature = "rdrand")))]
     #[expect(clippy::single_call_fn, reason = "Used only when inserting a new value into the map")]
     pub(crate) fn new() -> Self {
         Self(0)
@@ -115,6 +106,12 @@ impl<T> PartialEq for Handle<T> {
 }
 
 impl<T> Eq for Handle<T> {}
+
+impl<T> std::hash::Hash for Handle<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
+    }
+}
 
 impl<T> std::fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

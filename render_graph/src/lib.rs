@@ -10,7 +10,7 @@ mod tests;
 
 use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, marker::PhantomData, ops::Deref as _};
 use static_assertions as sa;
-use genmap::{GenMap, Handle};
+use genmap::{AssumeAlive, GenMap, Handle};
 use itertools::Itertools as _;
 
 use crate::compiler::CompiledGraph;
@@ -131,9 +131,7 @@ impl ResourceStorer for ResourceManager<'_> {
     }
 
     fn store_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>) {
-        let resource_data = self.resources.get_mut(handle.0).expect("Invalid resource handle");
-        debug_assert_eq!(resource_data.storage, value.deref().type_id(), "given value type does not match expected storage type of resource");
-        resource_data.value = Some(value);
+        self.resources.get_mut(handle.0).expect("Invalid resource handle").checked_insert(value);
     }
 }
 
@@ -177,6 +175,13 @@ struct ResourceData {
     value: Option<Box<dyn Any>>,
 }
 
+impl ResourceData {
+    fn checked_insert(&mut self, value: Box<dyn Any>) {
+        debug_assert_eq!(self.storage, value.deref().type_id(), "given value type does not match expected storage type of resource");
+        self.value = Some(value);
+    }
+}
+
 struct ResourceTypeInfo {
     handle: Handle<ResourceData>,
 }
@@ -214,6 +219,16 @@ impl<N> PartialEq for NodeHandle<N> {
 }
 impl<N> Eq for NodeHandle<N> { }
 
+impl<N> std::hash::Hash for NodeHandle<N> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct UntypedNodeHandle(genmap::Handle<NodeData>);
+
 impl<N> From<NodeHandle<N>> for UntypedNodeHandle {
     fn from(val: NodeHandle<N>) -> Self {
         Self(val.inner)
@@ -226,9 +241,15 @@ impl<N> From<&NodeHandle<N>> for UntypedNodeHandle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct UntypedNodeHandle(genmap::Handle<NodeData>);
+struct UncheckedNodeHandle(genmap::SparseIdx);
+
+impl From<UntypedNodeHandle> for UncheckedNodeHandle {
+    fn from(value: UntypedNodeHandle) -> Self {
+        Self(value.0.sparse_index())
+    }
+}
 
 pub struct ResourceHandle<R> {
     node: PhantomData<fn(R) -> R>,
@@ -263,6 +284,16 @@ impl<N> PartialEq for ResourceHandle<N> {
 }
 impl<N> Eq for ResourceHandle<N> { }
 
+impl<N> std::hash::Hash for ResourceHandle<N> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct UntypedResourceHandle(genmap::Handle<ResourceData>);
+
 impl<N> From<ResourceHandle<N>> for UntypedResourceHandle {
     fn from(val: ResourceHandle<N>) -> Self {
         Self(val.inner)
@@ -275,17 +306,21 @@ impl<N> From<&ResourceHandle<N>> for UntypedResourceHandle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct UntypedResourceHandle(genmap::Handle<ResourceData>);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 struct UncheckedResourceHandle(genmap::SparseIdx);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-struct UncheckedNodeHandle(genmap::SparseIdx);
+impl From<UntypedResourceHandle> for UncheckedResourceHandle {
+    fn from(value: UntypedResourceHandle) -> Self {
+        Self(value.0.sparse_index())
+    }
+}
+
+impl<T> From<ResourceHandle<T>> for UncheckedResourceHandle {
+    fn from(value: ResourceHandle<T>) -> Self {
+        Self(value.inner.sparse_index())
+    }
+}
 
 #[derive(Default)]
 pub struct RenderGraph {
@@ -320,8 +355,14 @@ impl RenderGraph {
     }
 
     pub fn set_resource_input<R: Any>(&mut self, handle: ResourceHandle<R>, value: R) {
-        let resource = self.resources.get_mut(handle.inner).expect("Invalid resource handle");
-        resource.value = Some(Box::new(value));
+        self.set_resource_input_untyped(handle.to_untyped(), Box::new(value));
+    }
+
+    pub fn set_resource_input_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>) {
+        self.resources.get_mut(handle.0).expect("Invalid resource handle").checked_insert(value);
+        if self.inputs.insert(handle.into()) {
+            self.compiled = None;
+        }
     }
 
     pub fn push_node_complete<N: GraphNode>(&mut self, node: N, input_bundle: N::InputBundle, output_bundle: N::OutputBundle) -> NodeHandle<N> {
@@ -342,7 +383,7 @@ impl RenderGraph {
 
         let shared = consumes.iter().filter(|o| borrows.contains(o)).collect_vec();
         assert!(shared.is_empty(), "Error pushing Node {} into render graph, the following resources are both consumed and borrowed: {shared:?}", std::any::type_name::<N>());
-        let consumed_permanents = consumes.iter().filter(|p| self.resources.unsafe_get(p.0).is_permanent).collect_vec();
+        let consumed_permanents = consumes.iter().filter(|p| self.resources.with(AssumeAlive(p.0)).get().is_permanent).collect_vec();
         assert!(consumed_permanents.is_empty(), "Error pushing Node {} into render graph, the following resources cannot be consumed because they are permanent: {consumed_permanents:?}", std::any::type_name::<N>());
 
         let handle = self.nodes.insert(NodeData {
@@ -374,10 +415,14 @@ impl RenderGraph {
     }
 
     pub fn remove_node<N: GraphNode>(&mut self, handle: NodeHandle<N>) -> Option<N> {
-        let node = self.nodes.remove(handle.inner)?;
-        self.explicit_orderings.retain(|&(a, b)| a.0 != handle.inner.sparse_index() && b.0 != handle.inner.sparse_index());
+        Some(*self.remove_node_untyped(handle.to_untyped())?.downcast::<N>().expect("Correct type associated with handle"))
+    }
+
+    pub fn remove_node_untyped(&mut self, handle: UntypedNodeHandle) -> Option<Box<dyn Any>> {
+        let node = self.nodes.remove(handle.0)?;
+        self.explicit_orderings.retain(|&(a, b)| a.0 != handle.0.sparse_index() && b.0 != handle.0.sparse_index());
         self.compiled = None;
-        Some(*(node.node as Box<dyn Any>).downcast::<N>().expect("Correct type associated with handle"))
+        Some(node.node as Box<dyn Any>)
     }
 
     pub fn prepare_run(&mut self) {
@@ -386,9 +431,9 @@ impl RenderGraph {
         self.compiled = Some(compiled);
     }
 
-    fn execute(&mut self, steps: &[genmap::DenseIdx]) {
+    fn execute(&mut self, steps: &[UncheckedNodeHandle]) {
         for node in steps {
-            self.nodes.values_mut()[node].node.run(&mut ResourceManager {
+            self.nodes.get_mut(AssumeAlive(node.0)).node.run(&mut ResourceManager {
                 resources: &mut self.resources,
                 type_resources_info: &mut self.type_resources_info,
             });
@@ -401,21 +446,24 @@ impl RenderGraph {
     }
 
     pub fn compute<T: 'static>(&mut self, resource: ResourceHandle<T>) -> T {
-        self.prepare_run();
-        let mut compiled = self.compiled.take().unwrap();
-        let result = compiled.compute(self, resource.to_untyped());
+        *self.compute_untyped(resource.to_untyped()).downcast().expect("correct type inside storage")
+    }
 
-        assert!(result.required_inputs.iter().all(|&p| self.resources.get(p.0).is_some_and(|p| p.value.is_some())), "Cannot run, missing inputs!");
+    pub fn compute_untyped(&mut self, resource: UntypedResourceHandle) -> Box<dyn Any> {
+        let mut compiled = self.compiled.take().unwrap_or_else(|| CompiledGraph::new(self));
+        let result = compiled.compute(self, resource.into());
+
+        assert!(result.required_inputs.iter().all(|&p| self.resources.get(AssumeAlive(p.0)).value.is_some()), "Cannot run, missing inputs!");
         self.execute(&result.steps);
         compiled.apply_compute_result(self, &result);
         
         self.compiled = Some(compiled);
 
-        *self.resources.get_mut(resource.inner).expect("valid resource handle").value.take().expect("value was created during compute").downcast().expect("correct type inside storage")
+        self.resources.get_mut(resource.0).expect("valid resource handle").value.take().expect("value was created during compute")
     }
 
-    fn write_to_dot(&self, f: &mut impl std::fmt::Write, steps: Option<&[UntypedNodeHandle]>) -> std::fmt::Result {
-        let _ = f;
+    fn write_to_dot(&self, f: &mut impl std::fmt::Write, steps: Option<&[UncheckedNodeHandle]>) -> std::fmt::Result {
+        let _ = &mut *f;
         let _ = steps;
         todo!()
         // const INDENT: &'static str = "  ";

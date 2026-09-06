@@ -1,11 +1,11 @@
 use std::{collections::{HashMap, HashSet}, convert::identity, rc::Rc, sync::{Arc}};
 
-use genmap::DenseIdx;
+use genmap::{AssumeAlive, DenseIdx};
 use indexmap::{IndexMap, IndexSlice, MapIndex as _};
 use itertools::{Itertools as _, chain};
 use parking_lot::RwLock;
 
-use crate::{NodeData, RenderGraph, ResourceData, UntypedNodeHandle, UncheckedResourceHandle};
+use crate::{NodeData, RenderGraph, ResourceData, UncheckedNodeHandle, UncheckedResourceHandle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeRef(DenseIdx);
@@ -60,8 +60,8 @@ trait RenderGraphExt {
     fn nodes(&self) -> impl Iterator<Item = (NodeRef, NodeDataWrapper<'_>)>;
     fn node(&self, node: NodeRef) -> NodeDataWrapper<'_>;
     fn resources(&self) -> &IndexSlice<ResourceData, ResourceRef>;
-    fn node_ref(&self, handle: impl Into<UntypedNodeHandle>) -> NodeRef;
-    fn node_handle(&self, node: NodeRef) -> UntypedNodeHandle;
+    fn node_ref(&self, handle: impl Into<UncheckedNodeHandle>) -> NodeRef;
+    fn node_handle(&self, node: NodeRef) -> UncheckedNodeHandle;
     fn resource_ref(&self, resource: impl Into<UncheckedResourceHandle>) -> ResourceRef;
     fn resource_handle(&self, resource: ResourceRef) -> UncheckedResourceHandle;
     fn is_resource_ref_permanent(&self, resource: ResourceRef) -> bool;
@@ -85,20 +85,20 @@ impl RenderGraphExt for RenderGraph {
         self.resources.values().as_with_index()
     }
 
-    fn node_ref(&self, handle: impl Into<UntypedNodeHandle>) -> NodeRef {
-        NodeRef(self.nodes.get_dense_index(handle.into().0).expect("Invalid resource handle"))
+    fn node_ref(&self, handle: impl Into<UncheckedNodeHandle>) -> NodeRef {
+        NodeRef(self.nodes.with(AssumeAlive(handle.into().0)).dense_idx())
     }
 
-    fn node_handle(&self, node: NodeRef) -> UntypedNodeHandle {
-        UntypedNodeHandle(self.nodes.handle_from_dense_index(node.0).expect("valid dense index"))
+    fn node_handle(&self, node: NodeRef) -> UncheckedNodeHandle {
+        UncheckedNodeHandle(self.nodes.with(node.0).expect("valid dense index").sparse_idx())
     }
 
     fn resource_ref(&self, resource: impl Into<UncheckedResourceHandle>) -> ResourceRef {
-        ResourceRef(self.resources.unsafe_get_dense_index(resource.into().0))
+        ResourceRef(self.resources.with(AssumeAlive(resource.into().0)).dense_idx())
     }
 
     fn resource_handle(&self, resource: ResourceRef) -> UncheckedResourceHandle {
-        UncheckedResourceHandle(self.resources.unsafe_from_sparse_index(resource.0))
+        UncheckedResourceHandle(self.resources.with(resource.0).unwrap().sparse_idx())
     }
 
     fn is_resource_ref_permanent(&self, resource: ResourceRef) -> bool {
@@ -237,7 +237,7 @@ impl ResolvedResources {
 
     fn write_to_dot(&self, graph: &RenderGraph, f: &mut impl std::fmt::Write) -> std::fmt::Result {
         let _ = graph;
-        let _ = f;
+        let _ = &mut *f;
         todo!()
         // const INDENT: &'static str = "  ";
 
@@ -553,7 +553,7 @@ fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box
 #[derive(Default)]
 pub struct ComputeResult {
     pub required_inputs: Box<[UncheckedResourceHandle]>,
-    pub steps: Box<[UntypedNodeHandle]>,
+    pub steps: Box<[UncheckedNodeHandle]>,
     output_new_permanents: Box<[ResourceRef]>,
 }
 
@@ -567,7 +567,6 @@ pub struct CompiledGraph {
 }
 
 impl CompiledGraph {
-    #[expect(clippy::single_call_fn, reason = "Meant to encapsulate a single usage")]
     pub fn new(graph: &RenderGraph) -> Self {
         let producers = compute_producers(graph);
         assert!(
