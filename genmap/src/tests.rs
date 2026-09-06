@@ -16,14 +16,14 @@ fn zst_new_empty() {
 fn insert_check_slice() {
     let mut map = GenMap::<u32>::new();
     map.insert(67);
-    assert_eq!(map.values(), &[67]);
+    assert_eq!(map.values().as_std_slice(), &[67]);
 }
 
 #[test]
 fn zst_insert_check_slice() {
     let mut map = GenMap::<()>::new();
     map.insert(());
-    assert_eq!(map.values(), &[()]);
+    assert_eq!(map.values().as_std_slice(), &[()]);
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn insert_twice_check_slice() {
     let mut map = GenMap::<u32>::new();
     map.insert(67);
     map.insert(69);
-    assert_eq!(map.values(), &[67, 69]);
+    assert_eq!(map.values().as_std_slice(), &[67, 69]);
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn zst_insert_twice_check_slice() {
     let mut map = GenMap::<()>::new();
     map.insert(());
     map.insert(());
-    assert_eq!(map.values(), &[(), ()]);
+    assert_eq!(map.values().as_std_slice(), &[(), ()]);
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn insert_remove_insert() {
     assert_ne!(handle1, handle2);
     assert_eq!(map.get(handle1), None);
     assert_eq!(map.get(handle2), Some(&69));
-    assert_eq!(map.values(), &[69]);
+    assert_eq!(map.values().as_std_slice(), &[69]);
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn insert_remove_insert_remove() {
     map.remove(handle2);
     assert_eq!(map.get(handle1), None);
     assert_eq!(map.get(handle2), None);
-    assert_eq!(map.values(), &[]);
+    assert_eq!(map.values().as_std_slice(), &[]);
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn insert_twice_remove1_insert() {
     assert_eq!(map.get(handle1), None);
     assert_eq!(map.get(handle2), Some(&69));
     assert_eq!(map.get(handle3), Some(&420));
-    assert_eq!(map.values(), &[69, 420]);
+    assert_eq!(map.values().as_std_slice(), &[69, 420]);
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn insert_twice_remove2_insert() {
     assert_eq!(map.get(handle1), Some(&67));
     assert_eq!(map.get(handle2), None);
     assert_eq!(map.get(handle3), Some(&420));
-    assert_eq!(map.values(), &[67, 420]);
+    assert_eq!(map.values().as_std_slice(), &[67, 420]);
 }
 
 #[test]
@@ -183,5 +183,5 @@ fn insert_twice_remove_twice_insert() {
     assert_eq!(map.get(handle1), None);
     assert_eq!(map.get(handle2), None);
     assert_eq!(map.get(handle3), Some(&420));
-    assert_eq!(map.values(), &[420]);
+    assert_eq!(map.values().as_std_slice(), &[420]);
 }

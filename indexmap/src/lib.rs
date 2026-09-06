@@ -20,6 +20,22 @@ impl<T, I> IndexSlice<T, I> {
     #[ref_cast_custom]
     const fn new_mut(values: &mut [T]) -> &mut Self;
 
+    pub const fn as_with_index<N>(&self) -> &IndexSlice<T, N> {
+        IndexSlice::<T, N>::new(&self.values)
+    }
+
+    pub const fn as_with_index_mut<N>(&mut self) -> &mut IndexSlice<T, N> {
+        IndexSlice::<T, N>::new_mut(&mut self.values)
+    }
+
+    pub fn as_std_slice(&self) -> &[T] {
+        &self.values
+    }
+
+    pub fn as_std_slice_mut(&mut self) -> &mut [T] {
+        &mut self.values
+    }
+
     pub const fn len(&self) -> usize {
         self.values.len()
     }
@@ -162,6 +178,10 @@ impl<T, I> IndexMap<T, I> {
         IndexSlice::new_mut(self.values.as_mut_slice())
     }
 
+    pub fn into_with_index<N>(self) -> IndexMap<T, N> {
+        IndexMap { index: PhantomData, values: self.values }
+    }
+
     pub const fn from_vec(values: Vec<T>) -> Self {
         Self {
             index: PhantomData,
@@ -169,7 +189,8 @@ impl<T, I> IndexMap<T, I> {
         }
     }
 
-    pub fn into_inner(self) -> Vec<T> {
+    #[doc(alias = "into_inner")]
+    pub fn into_vec(self) -> Vec<T> {
         self.values
     }
 
@@ -197,6 +218,18 @@ impl<T, I> IndexMap<T, I>
 
     pub fn swap_remove(&mut self, idx: impl Borrow<I>) -> T {
         self.values.swap_remove(idx.borrow().as_usize())
+    }
+}
+
+impl<T, I> From<Vec<T>> for IndexMap<T, I> {
+    fn from(value: Vec<T>) -> Self {
+        Self::from_vec(value)
+    }
+}
+
+impl<T, I> From<IndexMap<T, I>> for Vec<T> {
+    fn from(value: IndexMap<T, I>) -> Self {
+        value.into_vec()
     }
 }
 
@@ -231,7 +264,7 @@ impl<T, I> IntoIterator for IndexMap<T, I> {
     type IntoIter = std::vec::IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.into_inner().into_iter()
+        self.into_vec().into_iter()
     }
 }
 

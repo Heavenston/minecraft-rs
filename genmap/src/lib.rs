@@ -59,9 +59,9 @@ impl<T> GenMap<T> {
     /// If the given sparse_index is currently inocupied, this will return
     /// an inocupied handle, using it with any method may return incoherent values
     /// or even panic
-    pub fn unsafe_from_sparse_index(&self, sparse_index: SparseIdx) -> Option<Handle<T>> {
-        let generation = self.sparse.get(&sparse_index)?.generation;
-        Some(Handle::new(sparse_index, generation))
+    pub fn unsafe_from_sparse_index(&self, sparse_index: SparseIdx) -> Handle<T> {
+        let generation = self.sparse[&sparse_index].generation;
+        Handle::new(sparse_index, generation)
     }
 
     /// If the given sparse_index is currently inocupied the returned index

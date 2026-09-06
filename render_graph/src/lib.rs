@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod bundles;
 pub use bundles::*;
 mod node;
@@ -6,16 +8,12 @@ mod compiler;
 #[cfg(test)]
 mod tests;
 
-use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, marker::PhantomData};
+use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, marker::PhantomData, ops::Deref};
 use static_assertions as sa;
 use genmap::{GenMap, Handle};
 use itertools::Itertools as _;
 
-// use crate::compiler::CompiledGraph;
-struct CompiledGraph { }
-impl CompiledGraph {
-    fn new(_graph: &RenderGraph) -> Self { Self { } }
-}
+use crate::compiler::CompiledGraph;
 
 #[derive(Debug, Clone, Default)]
 pub struct TypeNameRegistry {
@@ -122,8 +120,7 @@ impl<'a> ResourceInfoProvider for ResourceManager<'a> {
 
 impl ResourceGatherer for ResourceManager<'_> {
     fn consume<R: Any>(&mut self, handle: ResourceHandle<R>) -> R {
-        *self.resources.get_mut(handle.inner).expect("Invalid resource handle")
-            .value.take().expect("Missing resource")
+        *self.consume_untyped(handle.to_untyped())
             .downcast().expect("Stored resource of invalid type")
     }
 
@@ -133,8 +130,7 @@ impl ResourceGatherer for ResourceManager<'_> {
     }
 
     fn borrow<R: Any>(&self, handle: ResourceHandle<R>) -> &R {
-        self.resources.get(handle.inner).expect("Invalid resource handle")
-            .value.as_ref().expect("Missing resource")
+        self.borrow_untyped(handle.to_untyped())
             .downcast_ref().expect("Stored resource of invalid type")
     }
 
@@ -146,11 +142,13 @@ impl ResourceGatherer for ResourceManager<'_> {
 
 impl ResourceStorer for ResourceManager<'_> {
     fn store<R: Any>(&mut self, handle: ResourceHandle<R>, value: R) {
-        todo!()
+        self.store_untyped(handle.to_untyped(), Box::new(value));
     }
 
     fn store_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>) {
-        todo!()
+        let resource_data = self.resources.get_mut(handle.0).expect("Invalid resource handle");
+        debug_assert_eq!(resource_data.storage, value.deref().type_id(), "given value type does not match expected storage type of resource");
+        resource_data.value = Some(value);
     }
 }
 
@@ -405,9 +403,9 @@ impl RenderGraph {
         self.compiled = Some(compiled);
     }
 
-    fn execute(&mut self, steps: &[usize]) {
-        for &idx in steps {
-            self.nodes.values_mut()[idx].node.run(&mut ResourceManager {
+    fn execute(&mut self, steps: &[UntypedNodeHandle]) {
+        for node in steps {
+            self.nodes.get_mut(node.0).expect("Valid handle").node.run(&mut ResourceManager {
                 resources: &mut self.resources,
                 type_resources_info: &mut self.type_resources_info,
             });
@@ -419,22 +417,23 @@ impl RenderGraph {
         }
     }
 
-    pub fn compute<T: GraphResourceId>(&mut self) -> T {
-        todo!()
-        // self.prepare_run();
-        // let mut compiled = self.compiled.take().unwrap();
-        // let result = compiled.compute(self, TypeId::of::<T>());
+    pub fn compute<T: 'static>(&mut self, resource: ResourceHandle<T>) -> T {
+        self.prepare_run();
+        let mut compiled = self.compiled.take().unwrap();
+        let result = compiled.compute(self, resource.to_untyped());
 
-        // assert!(result.required_inputs.iter().all(|&p| self.resource_store.resources.has_any(p)), "Cannot run, missing inputs!");
-        // self.execute(&result.steps);
-        // compiled.apply_compute_result(self, &result);
+        assert!(result.required_inputs.iter().all(|&p| self.resources.get(p.0).is_some_and(|p| p.value.is_some())), "Cannot run, missing inputs!");
+        self.execute(&result.steps);
+        compiled.apply_compute_result(self, &result);
         
-        // self.compiled = Some(compiled);
+        self.compiled = Some(compiled);
 
-        // *self.resource_store.resources.remove::<T>().unwrap()
+        *self.resources.get_mut(resource.inner).expect("valid resource handle").value.take().expect("value was created during compute").downcast().expect("correct type inside storage")
     }
 
-    fn write_to_dot(&self, f: &mut impl std::fmt::Write, steps: Option<&[usize]>) -> std::fmt::Result {
+    fn write_to_dot(&self, f: &mut impl std::fmt::Write, steps: Option<&[UntypedNodeHandle]>) -> std::fmt::Result {
+        let _ = f;
+        let _ = steps;
         todo!()
         // const INDENT: &'static str = "  ";
 

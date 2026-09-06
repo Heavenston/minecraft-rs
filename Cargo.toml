@@ -5,6 +5,7 @@ members = ["render_graph", "typemap", "genmap", "render_graph_macros", "indexmap
 
 [workspace.dependencies]
 typemap = { path = "./typemap" }
+indexmap = { path = "./indexmap" }
 genmap = { path = "./genmap" }
 harness = { path = "./harness" }
 engine = { path = "./engine" }

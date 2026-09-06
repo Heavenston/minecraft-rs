@@ -184,6 +184,7 @@ name = "render_graph"
 version = "0.1.0"
 dependencies = [
  "genmap",
+ "indexmap 0.1.0",
  "itertools",
  "parking_lot",
  "render_graph_macros",

@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 render_graph_macros = { path = "../render_graph_macros" }
+indexmap = { workspace = true }
 typemap = { workspace = true }
 itertools = { workspace = true }
 tracing = { workspace = true }

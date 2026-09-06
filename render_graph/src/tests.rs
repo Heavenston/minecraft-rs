@@ -19,6 +19,7 @@ impl super::GraphNode for N {
     type OutputBundle = MyCoolBundleOutput;
 
     fn run(&mut self, inputs: <Self::InputBundle as crate::ResourceInputBundle>::Values<'_>) -> <Self::OutputBundle as crate::ResourceOutputBundle>::Values {
+        let _ = inputs;
         todo!()
     }
 }
