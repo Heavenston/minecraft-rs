@@ -2,11 +2,12 @@ use std::marker::PhantomData;
 
 use static_assertions as sa;
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub struct Generation(u32);
 
 impl Generation {
     #[cfg(all(debug_assertions, any(target_arch = "x86", target_arch = "x86_64"), target_feature = "rdrand"))]
+    #[expect(clippy::single_call_fn, reason = "Used only when inserting a new value into the map")]
     pub(crate) fn new() -> Self {
         let mut val: u32 = 0;
         core::arch::x86::_rdrand32_step(&mut val);
@@ -14,15 +15,13 @@ impl Generation {
     }
 
     #[cfg(not(all(debug_assertions, any(target_arch = "x86", target_arch = "x86_64"), target_feature = "rdrand")))]
+    #[expect(clippy::single_call_fn, reason = "Used only when inserting a new value into the map")]
     pub(crate) fn new() -> Self {
         Self(0)
     }
 
-    pub(crate) fn next(&self) -> Self {
-        Self(match self.0.checked_add(1) {
-            None => panic!("Generation overflowed"),
-            Some(new_value) => new_value,
-        })
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.checked_add(1).unwrap_or_else(|| panic!("Generation overflowed")))
     }
 
     pub(crate) fn increment(&mut self) {
@@ -30,7 +29,7 @@ impl Generation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SparseIdx(u32);
 
 impl indexmap::MapIndex for SparseIdx {
@@ -44,7 +43,7 @@ impl indexmap::MapIndex for SparseIdx {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DenseIdx(u32);
 
 impl indexmap::MapIndex for DenseIdx {
@@ -58,7 +57,7 @@ impl indexmap::MapIndex for DenseIdx {
     }
 }
 
-pub(crate) struct DenseOrSparse(u32);
+pub struct DenseOrSparse(u32);
 
 impl DenseOrSparse {
     pub fn new_sparse(val: SparseIdx) -> Self {
@@ -103,7 +102,7 @@ impl<T> Handle<T> {
 
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
-        Self { data: PhantomData, value: self.value }
+        *self
     }
 }
 

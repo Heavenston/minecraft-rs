@@ -6,3 +6,6 @@ edition.workspace = true
 
 [dependencies]
 ref-cast = "1.0.27"
+
+[lints]
+workspace = true

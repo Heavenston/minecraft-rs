@@ -235,7 +235,7 @@ impl<T, I> From<IndexMap<T, I>> for Vec<T> {
 
 impl<T, I> Default for IndexMap<T, I> {
     fn default() -> Self {
-        Self { index: Default::default(), values: Default::default() }
+        Self { index: PhantomData, values: Vec::default() }
     }
 }
 

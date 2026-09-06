@@ -198,5 +198,5 @@ pub(super) fn input_bundle_macro(input: PseudoStruct<Entry>) -> TokenStream {
                 #value_struct_construction
             }
         }
-    }.into()
+    }
 }

@@ -14,8 +14,9 @@ pub trait DynTraitInto<T: ?Sized> {
     fn dyn_trait_into_box(from: Box<Self>) -> Box<T>;
 }
 
-impl<A: ?Sized, B: ?Sized> DynTraitInto<B> for A
-    where B: DynTraitFrom<A>,
+impl<A, B> DynTraitInto<B> for A
+    where A: ?Sized,
+          B: ?Sized + DynTraitFrom<A>,
 {
     fn dyn_trait_into_box(from: Box<Self>) -> Box<B> {
         B::dyn_trait_from_box(from)
@@ -55,6 +56,10 @@ impl<T: ?Sized + DynTrait> TypeMap<T> {
 
     pub fn len(&self) -> usize {
         self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> + ExactSizeIterator {
@@ -140,7 +145,7 @@ impl<T: ?Sized + DynTrait> TypeMap<T> {
 
 impl<T: ?Sized + Any> Default for TypeMap<T> {
     fn default() -> Self {
-        Self { values: Default::default() }
+        Self { values: HashMap::default() }
     }
 }
 

@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, convert::identity, rc::Rc, sync::{Arc}};
 
 use genmap::DenseIdx;
-use indexmap::{IndexMap, IndexSlice, MapIndex};
+use indexmap::{IndexMap, IndexSlice, MapIndex as _};
 use itertools::{Itertools as _, chain};
 use parking_lot::RwLock;
 
@@ -68,7 +68,7 @@ trait RenderGraphExt {
 }
 
 impl RenderGraphExt for RenderGraph {
-    fn nodes<'a>(&'a self) -> impl Iterator<Item = (NodeRef, NodeDataWrapper<'a>)> {
+    fn nodes(&self) -> impl Iterator<Item = (NodeRef, NodeDataWrapper<'_>)> {
         self.nodes.values().as_with_index::<NodeRef>().enumerated()
             .map(|(node, data)| (node, NodeDataWrapper { data, graph: self }))
     }
@@ -89,16 +89,16 @@ impl RenderGraphExt for RenderGraph {
         NodeRef(self.nodes.get_dense_index(handle.into().0).expect("Invalid resource handle"))
     }
 
-    fn node_handle(&self, resource: &NodeRef) -> UntypedNodeHandle {
-        UntypedNodeHandle(self.nodes.from_dense_index(resource.0.clone()).expect("valid dense index"))
+    fn node_handle(&self, node: &NodeRef) -> UntypedNodeHandle {
+        UntypedNodeHandle(self.nodes.from_dense_index(node.0).expect("valid dense index"))
     }
 
-    fn resource_ref(&self, handle: impl Into<UntypedResourceHandle>) -> ResourceRef {
-        ResourceRef(self.resources.get_dense_index(handle.into().0).expect("Invalid resource handle"))
+    fn resource_ref(&self, resource: impl Into<UntypedResourceHandle>) -> ResourceRef {
+        ResourceRef(self.resources.get_dense_index(resource.into().0).expect("Invalid resource handle"))
     }
 
     fn resource_handle(&self, resource: &ResourceRef) -> UntypedResourceHandle {
-        UntypedResourceHandle(self.resources.from_dense_index(resource.0.clone()).expect("valid dense index"))
+        UntypedResourceHandle(self.resources.from_dense_index(resource.0).expect("valid dense index"))
     }
 
     fn is_resource_ref_permanent(&self, resource: &ResourceRef) -> bool {
@@ -115,8 +115,8 @@ enum InputOrNode {
 impl PartialEq<NodeRef> for InputOrNode {
     fn eq(&self, other: &NodeRef) -> bool {
         match self {
-            InputOrNode::Input => false,
-            InputOrNode::Node(node_ref) => node_ref == other,
+            Self::Input => false,
+            Self::Node(node_ref) => node_ref == other,
         }
     }
 }
@@ -156,14 +156,14 @@ impl ListLink {
                 match self.0 {
                     Some(n) => {
                         let val = &n.val;
-                        self.0 = n.prev.0.as_ref().map(|p| &**p);
+                        self.0 = n.prev.0.as_deref();
                         Some(val)
                     },
                     None => None,
                 }
             }
         }
-        Iter(self.0.as_ref().map(|p| &**p))
+        Iter(self.0.as_deref())
     }
 
     fn cons(self, val: InputOrNode) -> Self {
@@ -177,8 +177,8 @@ impl ListLink {
 trait ResolvedResourcesContainer {
     fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator;
     fn explicit_orderings(&self) -> &[(NodeRef, NodeRef)];
-    fn resolved_inputs(&self, id: &NodeRef) -> impl Iterator<Item = &ResolvedInput> + use<'_, Self>;
-    fn resolved_borrows(&self, id: &NodeRef) -> impl Iterator<Item = &ResolvedInput> + use<'_, Self>;
+    fn resolved_inputs(&self, node: &NodeRef) -> impl Iterator<Item = &ResolvedInput> + use<'_, Self>;
+    fn resolved_borrows(&self, node: &NodeRef) -> impl Iterator<Item = &ResolvedInput> + use<'_, Self>;
 
     fn combined_inputs(&self, i: &NodeRef) -> impl Iterator<Item = &ResolvedInput> {
         chain!(self.resolved_inputs(i), self.resolved_borrows(i))
@@ -306,11 +306,11 @@ impl ResolvedResourcesContainer for ResolvedResources {
     fn explicit_orderings(&self) -> &[(NodeRef, NodeRef)] {
         &self.explicit_orderings
     }
-    fn resolved_inputs(&self, id: &NodeRef) -> impl Iterator<Item = &ResolvedInput> + use<'_> {
-        self.inputs[id].iter()
+    fn resolved_inputs(&self, node: &NodeRef) -> impl Iterator<Item = &ResolvedInput> + use<'_> {
+        self.inputs[node].iter()
     }
-    fn resolved_borrows(&self, id: &NodeRef) -> impl Iterator<Item = &ResolvedInput> + use<'_> {
-        self.borrows[id].iter()
+    fn resolved_borrows(&self, node: &NodeRef) -> impl Iterator<Item = &ResolvedInput> + use<'_> {
+        self.borrows[node].iter()
     }
 }
 
@@ -323,13 +323,13 @@ struct GraphResourceResolver {
 
 impl GraphResourceResolver {
     fn is_complete(&self) -> bool {
-        self.resolved_inputs.iter().flatten().all(|p| p.is_some()) && self.resolved_borrows.iter().flatten().all(|p| p.is_some())
+        self.resolved_inputs.iter().flatten().all(std::option::Option::is_some) && self.resolved_borrows.iter().flatten().all(std::option::Option::is_some)
     }
 
     fn consumer(&self, ri: &ResolvedInput) -> Option<NodeRef> {
         self.node_refs()
-            .filter(move |node_i| self.resolved_inputs(&node_i).any(move |p| p == ri))
-            .at_most_one().map_err(|_|()).expect("There should always only be at most one consumer")
+            .filter(move |node_i| self.resolved_inputs(node_i).any(move |p| p == ri))
+            .at_most_one().ok().expect("There should always only be at most one consumer")
     }
 
     fn consumers(&self) -> HashMap<ResolvedInput, NodeRef> {
@@ -362,6 +362,7 @@ impl ResolvedResourcesContainer for GraphResourceResolver {
 }
 
 #[tracing::instrument(level = "trace", skip_all)]
+#[expect(clippy::single_call_fn, reason = "CompiledGraph construction algorithm")]
 fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
     macro_rules! tn {
         ($t:expr) => {{
@@ -413,25 +414,25 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
         }
         let mut claims = HashMap::<(ResourceRef, InputOrNode), ClaimList>::new();
         for (node, node_data) in graph.nodes() {
-            rr_println!("{}[{node:?}] {}", chain!(&this.resolved_inputs[&node], &this.resolved_borrows[&node]).any(Option::is_none).then_some(" ").unwrap_or("*"), nn!(&node));
+            rr_println!("{}[{node:?}] {}", if chain!(&this.resolved_inputs[&node], &this.resolved_borrows[&node]).any(Option::is_none) { " " } else { "*" }, nn!(&node));
             for (input_idx, resource) in node_data.consumes().enumerate() {
                 rr_println!("\tconsumes({})", tn!(resource));
 
                 if let Some(resolved) = &this.resolved_inputs[&node][input_idx] {
                     rr_println!("\t\t*{}", ton!(resolved.producer));
                     continue;
-                };
-                let Some(producers) = producers.get(&resource)
+                }
+                let Some(potential_producers) = producers.get(&resource)
                 else { panic!("Missing producers for {}", tn!(resource)) };
 
-                let producer = producers.iter().filter(|&producer| {
-                    !this.is_after_or_equal(Default::default(), producer, &node)
+                let producer = potential_producers.iter().filter(|&producer| {
+                    !this.is_after_or_equal(ListLink::default(), producer, &node)
                 }).exactly_one();
 
                 match producer {
                     Ok(p) => {
                         rr_println!("\t\t{}", ton!(p));
-                        claims.entry((resource, p.clone())).or_default().inputs.push((node.clone(), input_idx))
+                        claims.entry((resource, p.clone())).or_default().inputs.push((node.clone(), input_idx));
                     },
                     Err(options) => {
                         rr_println!("\t\t{}", options.map(|n| ton!(*n)).join(", "));
@@ -445,20 +446,20 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                     rr_println!("\t\t*{}", ton!(resolved.producer));
                     continue
                 }
-                let Some(producers) = producers_for_borrows.get(&resource)
+                let Some(potential_producers) = producers_for_borrows.get(&resource)
                 else { panic!("Missing producers for {}", tn!(resource)) };
 
-                let producer = producers.iter().filter(|&producer| {
-                    !this.is_after_or_equal(Default::default(), &producer, &node)
+                let producer = potential_producers.iter().filter(|&producer| {
+                    !this.is_after_or_equal(ListLink::default(), producer, &node)
                 }).filter(|&producer| {
                     this.consumer(&ResolvedInput { resource: resource.clone(), producer: producer.clone() })
-                        .is_none_or(|p| !this.is_after_or_equal(Default::default(), &InputOrNode::Node(node.clone()), &p))
+                        .is_none_or(|p| !this.is_after_or_equal(ListLink::default(), &InputOrNode::Node(node.clone()), &p))
                 }).exactly_one();
 
                 match producer {
                     Ok(p) => {
                         rr_println!("\t\t{}", ton!(p));
-                        claims.entry((resource, p.clone())).or_default().borrows.push((node.clone(), borrow_idx))
+                        claims.entry((resource, p.clone())).or_default().borrows.push((node.clone(), borrow_idx));
                     },
                     Err(options) => {
                         rr_println!("\t\t{}", options.map(|n| ton!(*n)).join(", "));
@@ -468,6 +469,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
         }
 
         let mut found_valid = false;
+        #[expect(clippy::iter_over_hash_type, reason = "Iteration order here has no impact")]
         for ((claim_resource, claim_producer), claimers) in claims {
             if claimers.borrows.is_empty() {
                 if let Ok(&(ref node_id, input_idx)) = claimers.inputs.iter().exactly_one() {
@@ -485,7 +487,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                     for (a, _) in &claimers.inputs {
                         for (b, _) in &claimers.inputs {
                             if a == b { continue }
-                            println!("{a:?} is before {b:?} : {}", this.is_after_or_equal(Default::default(), &InputOrNode::Node(b.clone()), &a))
+                            println!("{a:?} is before {b:?} : {}", this.is_after_or_equal(ListLink::default(), &InputOrNode::Node(b.clone()), a));
                         }
                     }
                 }
@@ -502,9 +504,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                 }
             }
         }
-        if !found_valid {
-            panic!("Could not contruct render graph ordering");
-        }
+        assert!(found_valid, "Could not contruct render graph ordering");
     }
 
     ResolvedResources {
@@ -517,6 +517,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
     }
 }
 
+#[expect(clippy::single_call_fn, reason = "CompiledGraph construction algorithm")]
 fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box<[NodeRef]> {
     tracing::debug!("Computing graph total order");
     let mut successors: IndexMap<HashSet<NodeRef>, NodeRef> = vec![HashSet::new(); graph.nodes.len()].into();
@@ -525,12 +526,12 @@ fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box
             successors[node_idx2].insert(node_idx);
         }
     }
-    for (node_idx, borrows) in resolved.borrows.enumerated() {
-        for borrow in borrows.iter() {
-            let consumer = resolved.inputs.enumerated().flat_map(|(node_idx, inputs)| inputs.iter().map(move |input| (node_idx.clone(), input)))
+    for (node, borrows) in resolved.borrows.enumerated() {
+        for borrow in borrows {
+            let consumer = resolved.inputs.enumerated().flat_map(|(consumer, inputs)| inputs.iter().map(move |input| (consumer.clone(), input)))
                 .find(|&(_,p)| p == borrow);
             if let Some((consumer,_)) = consumer {
-                successors[&node_idx].insert(consumer);
+                successors[&node].insert(consumer);
             }
         }
     }
@@ -539,7 +540,7 @@ fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box
     let mut done = IndexMap::<bool, NodeRef>::from(vec![false; graph.nodes.len()]);
     let mut output = Vec::<NodeRef>::new();
     while !done.iter().copied().all(identity) {
-        let Some((node, _)) = successors.enumerated().filter(|(i, _)| !done[i]).find(|(_,succ)| succ.iter().find(|&o| !done[o]).is_none())
+        let Some((node, _)) = successors.enumerated().filter(|(i, _)| !done[i]).find(|(_,succ)| !succ.iter().any(|o| !done[o]))
         else { panic!("Could not resolve graph ordering") };
         done[&node] = true;
         output.push(node);
@@ -560,19 +561,21 @@ pub struct CompiledGraph {
     producers: Producers,
     resolved: ResolvedResources,
     total_order: Box<[NodeRef]>,
-    /// Only contains `permanent` resources
+    /// Only contains `permanent` resources.
     not_dirty: Vec<ResourceRef>,
     cache: RwLock<HashMap<Vec<ResourceRef>, Arc<ComputeResult>>>,
 }
 
 impl CompiledGraph {
+    #[expect(clippy::single_call_fn, reason = "Meant to encapsulate a single usage")]
     pub fn new(graph: &RenderGraph) -> Self {
         let producers = compute_producers(graph);
-        for (k, v) in &producers {
-            if graph.is_resource_ref_permanent(k) {
-                assert!(v.len() == 1, "Permanent resources must have exactly one producer")
-            }
-        }
+        assert!(
+            producers.iter()
+                .filter(|(k, _)| graph.is_resource_ref_permanent(k))
+                .all(|(_, v)| v.len() == 1),
+            "Permanent resources must have exactly one producer"
+        );
         let resolved = resolve_resources(graph);
         if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
             let mut str = String::new();
@@ -586,20 +589,19 @@ impl CompiledGraph {
             producers,
             resolved,
             total_order,
-            not_dirty: Default::default(),
+            not_dirty: Vec::default(),
             cache: RwLock::new(HashMap::new()),
         }
     }
 
-    fn mark_dirty_rec(not_dirty: &mut Vec<ResourceRef>, resolved: &ResolvedResources, graph: &RenderGraph, res: ResolvedInput) {
-        if graph.is_resource_ref_permanent(&res.resource) {
-            if let Some(idx) = not_dirty.iter().position(|p| p == &res.resource) {
+    fn mark_dirty_rec(not_dirty: &mut Vec<ResourceRef>, resolved: &ResolvedResources, graph: &RenderGraph, res: &ResolvedInput) {
+        if graph.is_resource_ref_permanent(&res.resource)
+            && let Some(idx) = not_dirty.iter().position(|p| p == &res.resource) {
                 not_dirty.swap_remove(idx);
             }
-        }
-        for user in resolved.users(&res) {
+        for user in resolved.users(res) {
             for output in graph.node(user).outputs() {
-                Self::mark_dirty_rec(not_dirty, resolved, graph, ResolvedInput {
+                Self::mark_dirty_rec(not_dirty, resolved, graph, &ResolvedInput {
                     resource: output,
                     producer: InputOrNode::Node(user.clone()),
                 });
@@ -612,8 +614,8 @@ impl CompiledGraph {
         assert!(graph.is_resource_ref_permanent(&resource), "Only permanent resources can bbe marked dirty");
         let [producer] = self.producers.get(&resource).map(Vec::as_slice).unwrap_or_default()
         else { panic!("Permanent resources only have one producer") };
-        Self::mark_dirty_rec(&mut self.not_dirty, &self.resolved, graph, ResolvedInput { resource, producer: producer.clone() });
-        self.not_dirty.sort_unstable_by_key(|r#ref| r#ref.as_usize());
+        Self::mark_dirty_rec(&mut self.not_dirty, &self.resolved, graph, &ResolvedInput { resource, producer: producer.clone() });
+        self.not_dirty.sort_unstable_by_key(indexmap::MapIndex::as_usize);
     }
 
     fn is_dirty(&self, graph: &RenderGraph, res: &ResolvedInput) -> bool {
@@ -628,7 +630,8 @@ impl CompiledGraph {
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn compute(&self, graph: &RenderGraph, resource: UntypedResourceHandle) -> Arc<ComputeResult> {
         let resource = graph.resource_ref(resource);
-        if let Some(cached) = self.cache.read().get(&self.not_dirty).map(Arc::clone) {
+        let cached = self.cache.read().get(&self.not_dirty).map(Arc::clone);
+        if let Some(cached) = cached {
             return cached;
         }
         tracing::trace!("Cache miss");
@@ -662,12 +665,12 @@ impl CompiledGraph {
                             if !self.not_dirty.contains(&input.resource) {
                                 created.push(input.resource.clone());
                                 needed[n] = true;
-                                stack.push(&n);
+                                stack.push(n);
                             }
                         }
                         else {
                             needed[n] = true;
-                            stack.push(&n);
+                            stack.push(n);
                         }
                     },
                 }
@@ -681,7 +684,7 @@ impl CompiledGraph {
             steps: self.total_order.iter().filter(|&p| needed[p]).map(|node| graph.node_handle(node)).collect(),
             output_new_permanents: created.into(),
         });
-        debug_assert!(self.not_dirty.is_sorted_by_key(|n| n.as_usize()));
+        debug_assert!(self.not_dirty.is_sorted_by_key(indexmap::MapIndex::as_usize));
         self.cache.write().insert(self.not_dirty.clone(), Arc::clone(&result));
 
         if let Some(path) = option_env!("DEBUG_GRAPH_COMPUTE_PATH") {
@@ -697,6 +700,6 @@ impl CompiledGraph {
     pub fn apply_compute_result(&mut self, _graph: &RenderGraph, result: &ComputeResult) {
         self.not_dirty.extend(result.output_new_permanents.iter().cloned());
         debug_assert!(self.not_dirty.iter().all_unique());
-        self.not_dirty.sort_unstable_by_key(|res| res.as_usize());
+        self.not_dirty.sort_unstable_by_key(indexmap::MapIndex::as_usize);
     }
 }

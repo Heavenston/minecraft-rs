@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, reason = "Refactor to using node handles not done yet")]
 
 mod bundles;
 pub use bundles::*;
@@ -8,7 +8,7 @@ mod compiler;
 #[cfg(test)]
 mod tests;
 
-use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, marker::PhantomData, ops::Deref};
+use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, marker::PhantomData, ops::Deref as _};
 use static_assertions as sa;
 use genmap::{GenMap, Handle};
 use itertools::Itertools as _;
@@ -102,7 +102,7 @@ struct ResourceManager<'a> {
     type_resources_info: &'a mut HashMap<TypeId, ResourceTypeInfo>,
 }
 
-impl<'a> ResourceInfoProvider for ResourceManager<'a> {
+impl ResourceInfoProvider for ResourceManager<'_> {
     fn resource_from_type<R: GraphResourceId>(&mut self) -> ResourceHandle<R::Resource> {
         let handle = self.type_resources_info.entry(TypeId::of::<R>()).or_insert_with(|| {
             let handle = self.resources.insert(ResourceData {
@@ -114,7 +114,10 @@ impl<'a> ResourceInfoProvider for ResourceManager<'a> {
 
             ResourceTypeInfo { handle }
         }).handle;
-        ResourceHandle::new(handle)
+        ResourceHandle {
+            node: PhantomData,
+            inner: handle,
+        }
     }
 }
 
@@ -137,6 +140,7 @@ impl ResourceGatherer for ResourceManager<'_> {
     fn borrow_untyped(&self, handle: UntypedResourceHandle) -> &dyn Any {
         self.resources.get(handle.0).expect("Invalid resource handle")
             .value.as_ref().expect("Missing resource")
+            .deref()
     }
 }
 
@@ -202,13 +206,6 @@ pub struct NodeHandle<N> {
 }
 
 impl<N> NodeHandle<N> {
-    fn new(inner: genmap::Handle<NodeData>) -> Self {
-        Self {
-            node: PhantomData,
-            inner,
-        }
-    }
-
     pub fn to_untyped(&self) -> UntypedNodeHandle {
         self.into()
     }
@@ -224,7 +221,7 @@ impl<N> std::fmt::Debug for NodeHandle<N> {
 
 impl<N> Clone for NodeHandle<N> {
     fn clone(&self) -> Self {
-        Self { node: PhantomData, inner: self.inner.clone() }
+        *self
     }
 }
 impl<N> Copy for NodeHandle<N> { }
@@ -236,15 +233,15 @@ impl<N> PartialEq for NodeHandle<N> {
 }
 impl<N> Eq for NodeHandle<N> { }
 
-impl<N> Into<UntypedNodeHandle> for NodeHandle<N> {
-    fn into(self) -> UntypedNodeHandle {
-        UntypedNodeHandle(self.inner)
+impl<N> From<NodeHandle<N>> for UntypedNodeHandle {
+    fn from(val: NodeHandle<N>) -> Self {
+        Self(val.inner)
     }
 }
 
-impl<N> Into<UntypedNodeHandle> for &NodeHandle<N> {
-    fn into(self) -> UntypedNodeHandle {
-        (*self).into()
+impl<N> From<&NodeHandle<N>> for UntypedNodeHandle {
+    fn from(val: &NodeHandle<N>) -> Self {
+        (*val).into()
     }
 }
 
@@ -258,13 +255,6 @@ pub struct ResourceHandle<R> {
 }
 
 impl<R> ResourceHandle<R> {
-    fn new(inner: genmap::Handle<ResourceData>) -> Self {
-        Self {
-            node: PhantomData,
-            inner,
-        }
-    }
-
     pub fn to_untyped(&self) -> UntypedResourceHandle {
         self.into()
     }
@@ -280,7 +270,7 @@ impl<N> std::fmt::Debug for ResourceHandle<N> {
 
 impl<N> Clone for ResourceHandle<N> {
     fn clone(&self) -> Self {
-        Self { node: PhantomData, inner: self.inner.clone() }
+        *self
     }
 }
 impl<N> Copy for ResourceHandle<N> { }
@@ -292,15 +282,15 @@ impl<N> PartialEq for ResourceHandle<N> {
 }
 impl<N> Eq for ResourceHandle<N> { }
 
-impl<N> Into<UntypedResourceHandle> for ResourceHandle<N> {
-    fn into(self) -> UntypedResourceHandle {
-        UntypedResourceHandle(self.inner)
+impl<N> From<ResourceHandle<N>> for UntypedResourceHandle {
+    fn from(val: ResourceHandle<N>) -> Self {
+        Self(val.inner)
     }
 }
 
-impl<N> Into<UntypedResourceHandle> for &ResourceHandle<N> {
-    fn into(self) -> UntypedResourceHandle {
-        (*self).into()
+impl<N> From<&ResourceHandle<N>> for UntypedResourceHandle {
+    fn from(val: &ResourceHandle<N>) -> Self {
+        (*val).into()
     }
 }
 
@@ -371,7 +361,7 @@ impl RenderGraph {
 
         self.compiled = None;
 
-        NodeHandle::new(handle)
+        NodeHandle { node: PhantomData, inner: handle }
     }
 
     pub fn push_node<N: GraphNode>(&mut self, node: N) -> NodeHandle<N>
@@ -410,7 +400,7 @@ impl RenderGraph {
                 type_resources_info: &mut self.type_resources_info,
             });
         }
-        for resource in self.resources.iter_mut() {
+        for resource in &mut self.resources {
             if !resource.is_permanent {
                 resource.value = None;
             }
