@@ -1,7 +1,7 @@
 use render_graph_macros::{ input_bundle, output_bundle };
 use super::{ graph_resource };
 
-struct NonClone();
+struct NonClone;
 
 graph_resource!(struct First(()));
 graph_resource!(struct Second(NonClone));

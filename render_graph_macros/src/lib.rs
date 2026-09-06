@@ -34,20 +34,19 @@ enum EntryResource {
 impl EntryResource {
     fn needs_dynamic_handle(&self) -> bool {
         match self {
-            EntryResource::FromType(_) => false,
-            EntryResource::Dynamic(_) => true,
-            EntryResource::Untyped => true,
-        }
+            Self::FromType(_) => false,
+            Self::Dynamic(_) | Self::Untyped => true,
+            }
     }
 
     fn handle_type(&self) -> syn::Type {
         let render_graph = get_crate_path();
         match self {
-            EntryResource::FromType(_) | EntryResource::Dynamic(_) => {
+            Self::FromType(_) | Self::Dynamic(_) => {
                 let ty = self.value_type(None);
                 parse_quote! { #render_graph::ResourceHandle<#ty> }
             },
-            EntryResource::Untyped => {
+            Self::Untyped => {
                 parse_quote! { #render_graph::UntypedResourceHandle }
             },
         }
@@ -57,12 +56,12 @@ impl EntryResource {
         let render_graph = get_crate_path();
 
         match (ref_lifetime, self) {
-            (None, EntryResource::FromType(t)) => parse_quote!{ <#t as #render_graph::GraphResourceId>::Resource },
-            (Some(lt), EntryResource::FromType(t)) => parse_quote!{ &#lt <#t as #render_graph::GraphResourceId>::Resource },
-            (None, EntryResource::Dynamic(t)) => parse_quote!{ #t },
-            (Some(lt), EntryResource::Dynamic(t)) => parse_quote!{ &#lt #t },
-            (None, EntryResource::Untyped) => parse_quote!{ Box<dyn ::std::any::Any> },
-            (Some(lt), EntryResource::Untyped) => parse_quote!{ &#lt dyn ::std::any::Any },
+            (None, Self::FromType(t)) => parse_quote!{ <#t as #render_graph::GraphResourceId>::Resource },
+            (Some(lt), Self::FromType(t)) => parse_quote!{ &#lt <#t as #render_graph::GraphResourceId>::Resource },
+            (None, Self::Dynamic(t)) => parse_quote!{ #t },
+            (Some(lt), Self::Dynamic(t)) => parse_quote!{ &#lt #t },
+            (None, Self::Untyped) => parse_quote!{ Box<dyn ::std::any::Any> },
+            (Some(lt), Self::Untyped) => parse_quote!{ &#lt dyn ::std::any::Any },
         }
     }
 }
@@ -71,14 +70,14 @@ impl Parse for EntryResource {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         Ok(if input.peek(Token![dyn]) {
             input.parse::<Token![dyn]>()?;
-            EntryResource::Dynamic(input.parse()?)
+            Self::Dynamic(input.parse()?)
         }
         else if input.peek(kw::untyped) {
             input.parse::<kw::untyped>()?;
-            EntryResource::Untyped
+            Self::Untyped
         }
         else {
-            EntryResource::FromType(input.parse()?)
+            Self::FromType(input.parse()?)
         })
     }
 }

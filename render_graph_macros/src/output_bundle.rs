@@ -22,7 +22,8 @@ impl Parse for Entry {
     }
 }
 
-pub(super) fn output_bundle_macro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+#[expect(clippy::single_call_fn, reason = "only used inside lib.rs macro function")]
+pub fn output_bundle_macro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let render_graph = match proc_macro_crate::crate_name("render_graph").expect("render_graph is present in Cargo.toml") {
         proc_macro_crate::FoundCrate::Itself => quote! { crate },
         proc_macro_crate::FoundCrate::Name(name) => {
@@ -80,14 +81,14 @@ pub(super) fn output_bundle_macro(input: proc_macro::TokenStream) -> proc_macro:
         }).collect::<Box<[_]>>(),
         PseudoStructFields::Unnamed(entries) => entries.iter().scan(0usize, |idx, entry| {
             if entry.resource.needs_dynamic_handle() {
-                let i = syn::Index::from(std::mem::replace(idx, *idx+1));
+                let i = syn::Index::from(std::mem::replace(idx, idx.checked_add(1).unwrap()));
                 Some(quote!{ #i })
             }
             else {
                 Some(quote!{})
             }
         }).collect::<Box<[_]>>(),
-        PseudoStructFields::Unit => Default::default(),
+        PseudoStructFields::Unit => Box::<[_]>::default(),
     };
     let value_struct_fields_names = match &fields {
         PseudoStructFields::Named(fields) => fields.iter().map(|field| {
@@ -95,15 +96,14 @@ pub(super) fn output_bundle_macro(input: proc_macro::TokenStream) -> proc_macro:
             quote!{ #name }
         }).collect::<Box<[_]>>(),
         PseudoStructFields::Unnamed(entries) => entries.iter().scan(0usize, |idx, entry| {
-            if !entry.is_default {
-                let i = syn::Index::from(std::mem::replace(idx, *idx+1));
+            if entry.is_default {
+                Some(quote!{})
+            } else {
+                let i = syn::Index::from(std::mem::replace(idx, idx.checked_add(1).unwrap()));
                 Some(quote!{ #i })
             }
-            else {
-                Some(quote!{})
-            }
         }).collect::<Box<[_]>>(),
-        PseudoStructFields::Unit => Default::default(),
+        PseudoStructFields::Unit => Box::<[_]>::default(),
     };
 
     let handles = zip(&struct_fields_names, fields.iter()).map(|(field_name, entry)| {

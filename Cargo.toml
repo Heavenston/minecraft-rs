@@ -64,3 +64,4 @@ missing_panics_doc = "allow" # I like this one but it has way-too annoying false
 too_many_lines = "allow"
 items_after_statements = "allow"
 missing_const_for_fn = "allow"
+iter_on_empty_collections = "allow" # False positives

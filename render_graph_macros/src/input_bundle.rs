@@ -1,6 +1,6 @@
 use std::iter::zip;
 
-use itertools::{Either, Itertools};
+use itertools::{ Either, Itertools as _ };
 use proc_macro2::{ TokenStream };
 use quote::{ format_ident, quote };
 use syn::{ Token, parse::Parse, parse_quote };
@@ -12,13 +12,14 @@ enum EntryKind {
     Consume,
 }
 
-pub(super) struct Entry {
+pub struct Entry {
     is_ignored: bool,
     kind: EntryKind,
     resource: EntryResource,
 }
 
 impl Entry {
+    #[expect(clippy::single_call_fn, reason="?")]
     fn value_type(&self) -> syn::Type {
         match self.kind {
             EntryKind::Borrow => self.resource.value_type(Some(&parse_quote!{ 'a })),
@@ -46,7 +47,8 @@ impl Parse for Entry {
     }
 }
 
-pub(super) fn input_bundle_macro(input: PseudoStruct<Entry>) -> TokenStream {
+#[expect(clippy::single_call_fn, reason = "only used inside lib.rs macro function")]
+pub fn input_bundle_macro(input: PseudoStruct<Entry>) -> TokenStream {
     let render_graph = super::get_crate_path();
 
     let PseudoStruct::<Entry> {
@@ -85,7 +87,7 @@ pub(super) fn input_bundle_macro(input: PseudoStruct<Entry>) -> TokenStream {
             quote!{ { #(#handle_fields,)* } }
         },
         PseudoStructFields::Unnamed(fields) => {
-            let handle_fields = fields.iter().filter(|entry| !entry.is_ignored).map(|entry| entry.value_type());
+            let handle_fields = fields.iter().filter(|entry| !entry.is_ignored).map(Entry::value_type);
             quote!{ ( #(#handle_fields,)* ); }
         },
         PseudoStructFields::Unit => quote!{ ; },
@@ -106,14 +108,14 @@ pub(super) fn input_bundle_macro(input: PseudoStruct<Entry>) -> TokenStream {
         }).collect::<Box<[_]>>(),
         PseudoStructFields::Unnamed(entries) => entries.iter().scan(0usize, |idx, entry| {
             if entry.resource.needs_dynamic_handle() {
-                let i = syn::Index::from(std::mem::replace(idx, *idx+1));
+                let i = syn::Index::from(std::mem::replace(idx, idx.checked_add(1).unwrap()));
                 Some(quote!{ #i })
             }
             else {
                 Some(quote!{})
             }
         }).collect::<Box<[_]>>(),
-        PseudoStructFields::Unit => Default::default(),
+        PseudoStructFields::Unit => Box::<[_]>::default(),
     };
 
     let resource_handles = fields.iter().zip(&struct_fields_names).map(|(entry, field_name)| {
