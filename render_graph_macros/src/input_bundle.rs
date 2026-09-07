@@ -57,7 +57,6 @@ impl Parse for Entry {
     }
 }
 
-#[expect(clippy::single_call_fn, reason = "only used inside lib.rs macro function")]
 pub fn input_bundle_macro(input: PseudoStruct<Entry>) -> TokenStream {
     let render_graph = super::get_crate_path();
 

@@ -13,6 +13,7 @@ struct StoredMaterial {
 }
 
 impl StoredMaterial {
+    #[expect(clippy::single_call_fn, reason = "Just a wrapper used once")]
     fn new<M: Material>(material: M) -> Self {
         Self {
             material: Box::new(material),
@@ -40,6 +41,11 @@ impl<M: Material> std::fmt::Debug for MaterialHandle<M> {
             .field(&self.handle)
             .finish()
     }
+}
+
+impl<M: Material> Copy for MaterialHandle<M> { }
+impl<M: Material> Clone for MaterialHandle<M> {
+    fn clone(&self) -> Self { *self }
 }
 
 pub struct World {
