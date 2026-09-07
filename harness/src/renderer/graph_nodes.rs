@@ -1,85 +1,79 @@
 use super::resources as res;
 
 pub(super) fn register(graph: &mut render_graph::RenderGraph) {
-    graph.push_node(BeginFrame);
-    graph.push_node(EndFrame);
-    let a = graph.push_node(EndFrameMustHaveSubmitted);
-    let b = graph.push_node(EndFrameMustHavePresented);
-    graph.define_explicit_ordering(b, a);
+    macro_rules! node {
+        () => {};
+        ($name: ident($($arg:tt: $(ref $marker:vis)?$input:ty),*$(,)?) -> ($($output:tt)*) $body: block;$($rest:tt)*) => {
+            mod ${ concat($name, _module) } {
+                #[allow(unused, reason = "macro-generated")]
+                #[expect(clippy::allow_attributes, reason = "")]
+                use super::*;
 
-    graph.push_node(CreateSurfaceTextureView);
-    graph.push_node(DestroySurfaceTextureView);
-    graph.push_node(CreateFrameCommandEncoder);
-    graph.push_node(SubmitFrameCommandEncoder);
-    graph.push_node(PresentSurface);
-}
-
-struct BeginFrame;
-impl render_graph::GraphNode for BeginFrame {
-    render_graph::declare_graph_deps!(() -> (res::ComputingFrame,));
-    fn run(&mut self, _: Self::Inputs<'_>) -> Self::Outputs { Default::default() }
-}
-
-struct EndFrame;
-impl render_graph::GraphNode for EndFrame {
-    render_graph::declare_graph_deps!((res::ComputingFrame,) -> (res::FrameFinished,));
-    fn run(&mut self, _: Self::Inputs<'_>) -> Self::Outputs { Default::default() }
-}
-
-struct EndFrameMustHavePresented;
-impl render_graph::GraphNode for EndFrameMustHavePresented {
-    render_graph::declare_graph_deps!((res::ComputingFrame, res::SurfacePresented,) -> (res::ComputingFrame,));
-    fn run(&mut self, _: Self::Inputs<'_>) -> Self::Outputs { Default::default() }
-}
-
-struct EndFrameMustHaveSubmitted;
-impl render_graph::GraphNode for EndFrameMustHaveSubmitted {
-    render_graph::declare_graph_deps!((res::ComputingFrame, res::FrameCommandEncoderSubmitted,) -> (res::ComputingFrame,));
-    fn run(&mut self, _: Self::Inputs<'_>) -> Self::Outputs { Default::default() }
-}
-
-struct CreateSurfaceTextureView;
-impl render_graph::GraphNode for CreateSurfaceTextureView {
-    render_graph::declare_graph_deps!((res::SurfaceTexture,) -> (res::BorrowedSurfaceTexture,res::SurfaceTextureView,));
-    fn run(&mut self, (surface_texture,): Self::Inputs<'_>) -> Self::Outputs {
-        let view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (surface_texture,view,)
+                render_graph::input_bundle!(struct Input($($(ref${ ignore($marker) })?$input),*));
+                render_graph::output_bundle!(struct Output($($output)*));
+                pub struct $name;
+                impl render_graph::GraphNode for $name {
+                    type InputBundle = Input;
+                    type OutputBundle = Output;
+                    fn run(&mut self, InputValue($($arg),*): InputValue) -> OutputValue {
+                        $body
+                    }
+                }
+            }
+            use ${ concat($name, _module) }::$name;
+            graph.push_node($name);
+            node!($($rest)*)
+        };
     }
+
+    node!(
+        BeginFrame
+        () -> (res::ComputingFrame)
+        { OutputValue(()) };
+
+        EndFrame
+        (_: res::ComputingFrame) -> ()
+        { OutputValue() };
+
+        EndFrameMustHavePresented
+        (_: res::ComputingFrame, _: res::SurfacePresented) -> (res::ComputingFrame)
+        { OutputValue(()) };
+
+        EndFrameMustHaveSubmitted
+        (_: res::ComputingFrame, _: res::FrameCommandEncoderSubmitted) -> (res::ComputingFrame)
+        { OutputValue(()) };
+
+        CreateSurfaceTextureView
+        (surface_texture: res::SurfaceTexture) -> (res::BorrowedSurfaceTexture, res::SurfaceTextureView)
+        {
+            let view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+            OutputValue(surface_texture,view)
+        };
+
+        DestroySurfaceTextureView
+        (_: res::SurfaceTextureView, surface_texture: res::BorrowedSurfaceTexture) -> (res::BorrowedSurfaceTexture)
+        { OutputValue(surface_texture) };
+
+        CreateFrameCommandEncoder
+        (device: ref res::Device) -> (res::FrameCommandEncoder) {
+            OutputValue(
+                device.create_command_encoder(&wgpu::wgt::CommandEncoderDescriptor { label: Some("frame command encoder") })
+            )
+        };
+
+        SubmitFrameCommandEncoder
+        (queue: ref res::Queue, command_encoder: res::FrameCommandEncoder, _: ref res::SurfaceTextureView) -> (res::FrameCommandEncoderSubmitted)
+        {
+            queue.submit(std::iter::once(command_encoder.finish()));
+            OutputValue(())
+        };
+
+        PresentSurface
+        (queue: ref res::Queue, output: res::SurfaceTexture) -> (res::SurfacePresented)
+        {
+            queue.present(output);
+            OutputValue(())
+        };
+    );
 }
 
-struct DestroySurfaceTextureView;
-impl render_graph::GraphNode for DestroySurfaceTextureView {
-    render_graph::declare_graph_deps!((res::SurfaceTextureView,res::BorrowedSurfaceTexture,) -> (res::SurfaceTexture,));
-    fn run(&mut self, (_,surface_texture,): Self::Inputs<'_>) -> Self::Outputs {
-        (surface_texture,)
-    }
-}
-
-struct CreateFrameCommandEncoder;
-impl render_graph::GraphNode for CreateFrameCommandEncoder {
-    render_graph::declare_graph_deps!((ref res::Device,) -> (res::FrameCommandEncoder,));
-    fn run(&mut self, (device,): Self::Inputs<'_>) -> Self::Outputs {
-        let encoder = device.create_command_encoder(&wgpu::wgt::CommandEncoderDescriptor { label: Some("frame command encoder") });
-        (encoder,)
-    }
-}
-
-struct SubmitFrameCommandEncoder;
-impl render_graph::GraphNode for SubmitFrameCommandEncoder {
-    // We borrow SurfaceTextureView to prevent the surface texture from being presented
-    // until after this node
-    render_graph::declare_graph_deps!((res::FrameCommandEncoder, ref res::Queue, ref res::SurfaceTextureView,) -> (res::FrameCommandEncoderSubmitted,));
-    fn run(&mut self, (command_encoder, queue, _): Self::Inputs<'_>) -> Self::Outputs {
-        queue.submit(std::iter::once(command_encoder.finish()));
-        ((),)
-    }
-}
-
-struct PresentSurface;
-impl render_graph::GraphNode for PresentSurface {
-    render_graph::declare_graph_deps!((res::SurfaceTexture,ref res::Queue,) -> (res::SurfacePresented,));
-    fn run(&mut self, (output,queue): Self::Inputs<'_>) -> Self::Outputs {
-        queue.present(output);
-        ((),)
-    }
-}
