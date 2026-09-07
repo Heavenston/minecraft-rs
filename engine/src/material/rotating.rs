@@ -25,11 +25,12 @@ pub struct Rotating {
 
 #[expect(clippy::single_call_fn, reason = "Extracted into function to avoid long type names")]
 fn register(config: RotatingConfig, render_graph: &mut super::RenderGraphWrapper<'_>) {
+    use render_graph::ResourceConfig as Cfg;
     render_graph::node_helper!(into render_graph;
-        using @shader_module: wgpu::ShaderModule = render_graph.create_resource("rotating::shader_module", true);
-        using @render_pipeline_layout: wgpu::PipelineLayout = render_graph.create_resource("rotating::render_pipeline_layout", true);
-        using @render_pipeline: wgpu::RenderPipeline = render_graph.create_resource("rotating::render_pipeline", true);
-        using @config: RotatingConfig = render_graph.create_resource("rotating::config", true);
+        using @shader_module: wgpu::ShaderModule = render_graph.create_resource("rotating::shader_module", Cfg::permanent());
+        using @render_pipeline_layout: wgpu::PipelineLayout = render_graph.create_resource("rotating::render_pipeline_layout", Cfg::permanent());
+        using @render_pipeline: wgpu::RenderPipeline = render_graph.create_resource("rotating::render_pipeline", Cfg::permanent());
+        using @config: RotatingConfig = render_graph.create_resource("rotating::config", Cfg::permanent());
 
         CreateShaderModule
         (device: ref render_res::Device) -> (@shader_module) {

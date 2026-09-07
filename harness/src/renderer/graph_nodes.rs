@@ -22,7 +22,7 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
         };
 
         DestroySurfaceTextureView
-        (_: res::SurfaceTextureView, surface_texture: res::BorrowedSurfaceTexture) -> (res::BorrowedSurfaceTexture)
+        (_: res::SurfaceTextureView, surface_texture: res::BorrowedSurfaceTexture) -> (res::SurfaceTexture)
         { OutputValue(surface_texture) };
 
         CreateFrameCommandEncoder

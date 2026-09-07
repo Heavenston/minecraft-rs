@@ -2,10 +2,10 @@ use std::{collections::{HashMap, HashSet}, convert::identity, rc::Rc, sync::{Arc
 
 use genmap::{AssumeAlive, DenseIdx};
 use indexmap::{IndexMap, IndexSlice, MapIndex as _};
-use itertools::{Itertools as _, chain};
+use itertools::{Either, Itertools as _, chain};
 use parking_lot::RwLock;
 
-use crate::{Label, NodeData, RenderGraph, ResourceData, UncheckedNodeHandle, UncheckedResourceHandle};
+use crate::{Label, NodeData, RenderGraph, ResourceConfig, ResourceData, UncheckedNodeHandle, UncheckedResourceHandle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeRef(DenseIdx);
@@ -55,12 +55,17 @@ impl<'a> NodeDataWrapper<'a> {
     fn outputs(&self) -> impl Iterator<Item = ResourceRef> + use<'a> {
         self.data.outputs.iter().map(|&handle| self.graph.resource_ref(handle))
     }
+
+    fn is_mutator(&self, resource: ResourceRef) -> bool {
+        self.consumes().contains(&resource) && self.outputs().contains(&resource)
+    }
 }
 
 trait RenderGraphExt {
     fn nodes(&self) -> impl Iterator<Item = (NodeRef, NodeDataWrapper<'_>)>;
     fn node(&self, node: NodeRef) -> NodeDataWrapper<'_>;
     fn resources(&self) -> &IndexSlice<ResourceData, ResourceRef>;
+    fn resource_cfg(&self, resource: ResourceRef) -> &ResourceConfig;
     fn node_ref(&self, handle: impl Into<UncheckedNodeHandle>) -> NodeRef;
     fn node_handle(&self, node: NodeRef) -> UncheckedNodeHandle;
     fn resource_ref(&self, resource: impl Into<UncheckedResourceHandle>) -> ResourceRef;
@@ -86,6 +91,10 @@ impl RenderGraphExt for RenderGraph {
         self.resources.values().as_with_index()
     }
 
+    fn resource_cfg(&self, resource: ResourceRef) -> &ResourceConfig {
+        &self.resources.with(resource.0).expect("valid dense index").get().config
+    }
+
     fn node_ref(&self, handle: impl Into<UncheckedNodeHandle>) -> NodeRef {
         NodeRef(self.nodes.with(AssumeAlive(handle.into().0)).dense_idx())
     }
@@ -103,7 +112,7 @@ impl RenderGraphExt for RenderGraph {
     }
 
     fn is_resource_ref_permanent(&self, resource: ResourceRef) -> bool {
-        self.resources()[resource].is_permanent
+        self.resources()[resource].config.permanent
     }
 }
 
@@ -364,14 +373,17 @@ impl ResolvedResourcesContainer for GraphResourceResolver {
 #[tracing::instrument(level = "trace", skip_all)]
 #[expect(clippy::single_call_fn, reason = "CompiledGraph construction algorithm")]
 fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
+    let node_labels = graph.get_simplified_node_labels();
+    let resource_labels = graph.get_simplified_resource_labels();
     macro_rules! rn {
         ($t:expr) => {{
-            &graph.resources.with($t.0).unwrap().get().label
+            // &graph.resources.with($t.0).unwrap().get().label
+            resource_labels[&graph.resource_handle($t)].clone()
         }};
     }
     macro_rules! nn {
         ($n:expr) => {
-            graph.node($n).label().to_string()
+            node_labels[&graph.node_handle($n)].clone()
         };
     }
     macro_rules! ton {
@@ -405,14 +417,20 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
 
     while !this.is_complete() {
         rr_println!("\n\n##############################");
-        #[derive(Default)]
+        #[derive(Debug, Clone, Copy)]
+        struct ConsumeClaim {
+            node: NodeRef,
+            input_idx: usize,
+            is_from_unordered: bool,
+        }
+        #[derive(Default, Clone)]
         struct ClaimList {
             borrows: Vec<(NodeRef, usize)>,
-            inputs: Vec<(NodeRef, usize)>,
+            consumes: Vec<ConsumeClaim>,
         }
         let mut claims = HashMap::<(ResourceRef, InputOrNode), ClaimList>::new();
         for (node, node_data) in graph.nodes() {
-            rr_println!("{}[{node:?}] {}", if chain!(&this.resolved_inputs[&node], &this.resolved_borrows[&node]).any(Option::is_none) { " " } else { "*" }, nn!(node));
+            rr_println!("{}{}", if chain!(&this.resolved_inputs[&node], &this.resolved_borrows[&node]).any(Option::is_none) { " " } else { "*" }, nn!(node));
             for (input_idx, resource) in node_data.consumes().enumerate() {
                 rr_println!("\tconsumes({})", rn!(resource));
 
@@ -427,10 +445,23 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                     !this.is_after_or_equal(ListLink::default(), producer, node)
                 }).exactly_one();
 
+                let is_mutator = node_data.outputs().contains(&resource);
+                let is_unordered = graph.resource_cfg(resource).unordered;
+                let producer = if is_mutator && is_unordered && let Err(options) = producer {
+                    options.filter(|&&other| match other {
+                        InputOrNode::Input => true,
+                        InputOrNode::Node(other) => {
+                            !graph.node(other).is_mutator(resource)
+                        }
+                    }).exactly_one().map(|p| (p, true)).map_err(Either::Right)
+                } else {
+                    producer.map(|p| (p, false)).map_err(Either::Left)
+                };
+
                 match producer {
-                    Ok(&p) => {
-                        rr_println!("\t\t{}", ton!(p));
-                        claims.entry((resource, p)).or_default().inputs.push((node, input_idx));
+                    Ok((&p, is_from_unordered)) => {
+                        rr_println!("\t\t{}{}", ton!(p), if is_unordered { " (using unordered)" } else { "" });
+                        claims.entry((resource, p)).or_default().consumes.push(ConsumeClaim { node, input_idx, is_from_unordered });
                     },
                     Err(options) => {
                         rr_println!("\t\t{}", options.map(|&n| ton!(n)).join(", "));
@@ -470,24 +501,23 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
         #[expect(clippy::iter_over_hash_type, reason = "Iteration order here has no impact")]
         for ((claim_resource, claim_producer), claimers) in claims {
             if claimers.borrows.is_empty() {
-                if let Ok(&(node_id, input_idx)) = claimers.inputs.iter().exactly_one() {
-                    rr_println!("REVOLED {} consumes {} from {}", nn!(node_id), rn!(claim_resource), ton!(claim_producer));
+                let wining_claim = claimers.consumes.iter().exactly_one()
+                    .map_or_else(|mut options| {
+                        options.all(|o| o.is_from_unordered)
+                            .then_some(&claimers.consumes[0])
+                    }, Some);
+                if let Some(&ConsumeClaim { node, input_idx, .. }) = wining_claim {
+                    rr_println!("REVOLED {} consumes {} from {}", nn!(node), rn!(claim_resource), ton!(claim_producer));
                     found_valid = true;
-                    debug_assert!(this.resolved_inputs[node_id][input_idx].is_none());
-                    this.resolved_inputs[node_id][input_idx] = Some(ResolvedInput {
+                    debug_assert!(this.resolved_inputs[node][input_idx].is_none());
+                    this.resolved_inputs[node][input_idx] = Some(ResolvedInput {
                         resource: claim_resource,
                         producer: claim_producer,
                     });
                     producers.get_mut(&claim_resource).unwrap().retain(|p| p != &claim_producer);
                 }
                 else {
-                    tracing::warn!(?claim_resource, ?claim_producer, ?claimers.inputs, "Consumer conflict");
-                    for &(a, _) in &claimers.inputs {
-                        for &(b, _) in &claimers.inputs {
-                            if a == b { continue }
-                            println!("{a:?} is before {b:?} : {}", this.is_after_or_equal(ListLink::default(), InputOrNode::Node(b), a));
-                        }
-                    }
+                    tracing::warn!(resource = %rn!(claim_resource), producer = %ton!(claim_producer), claimers = ?claimers.consumes, "Consumer conflict");
                 }
             }
             else {

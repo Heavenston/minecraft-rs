@@ -11,7 +11,7 @@ mod tests;
 mod label;
 pub use label::Label;
 
-use std::{any::{ Any, TypeId }, borrow::Cow, collections::{HashMap, HashSet, hash_map}, marker::PhantomData, ops::Deref as _};
+use std::{any::{ Any, TypeId }, borrow::Cow, collections::{HashMap, HashSet, hash_map}, marker::PhantomData, ops::{BitOr, Deref as _}};
 use static_assertions as sa;
 use genmap::{AssumeAlive, GenMap, Handle};
 use itertools::Itertools as _;
@@ -61,10 +61,47 @@ fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: &HashMap<K, La
     node_labels
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ResourceConfig {
+    pub permanent: bool,
+    pub unordered: bool,
+}
+
+impl ResourceConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn permanent() -> Self {
+        Self {
+            permanent: true,
+            ..Default::default()
+        }
+    }
+
+    pub fn unordered() -> Self {
+        Self {
+            unordered: true,
+            ..Default::default()
+        }
+    }
+}
+
+impl BitOr for ResourceConfig {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self {
+            permanent: self.permanent | rhs.permanent,
+            unordered: self.unordered | rhs.unordered,
+        }
+    }
+}
+
 pub trait GraphResourceId: Any {
     type Resource
         where Self: Sized;
-    fn is_permanent() -> bool
+    fn config() -> ResourceConfig
         where Self: Sized;
     fn new_resource(val: Self::Resource) -> Self
         where Self: Sized;
@@ -77,17 +114,24 @@ typemap::impl_dyn_trait!(GraphResourceId);
 
 #[macro_export]
 macro_rules! graph_resource {
-    (@permanence) => { false };
-    (@permanence; permanent) => { true };
+    (@permanence; permanent$($rest:tt)*) => { $crate::ResourceConfig::permanent() };
+    (@permanence; $ident:ident$($rest:tt)*) => { $crate::graph_resource!(@permanence $($rest)*) };
+    (@permanence) => { $crate::ResourceConfig::default() };
+
+    (@unordered; unordered$($rest:tt)*) => { $crate::ResourceConfig::unordered() };
+    (@unordered; $ident:ident$($rest:tt)*) => { $crate::graph_resource!(@unordered $($rest)*) };
+    (@unordered) => { $crate::ResourceConfig::default() };
+
     ($(#[$attrs:meta])* $vis:vis struct $name:ident($val_vis:vis $content:ty)$($parameters:tt)*) => {
         $(#[$attrs])* $vis struct $name($val_vis $content);
         impl $crate::GraphResourceId for $name {
             type Resource = $content
                 where Self: Sized;
-            fn is_permanent() -> bool
+            fn config() -> $crate::ResourceConfig
                 where Self: Sized,
             {
-                $crate::graph_resource!(@permanence $($parameters)*)
+                $crate::graph_resource!(@permanence $($parameters)*) |
+                $crate::graph_resource!(@unordered $($parameters)*)
             }
             fn new_resource(val: Self::Resource) -> Self
                 where Self: Sized
@@ -135,7 +179,7 @@ impl ResourceInfoProvider for ResourceManager<'_> {
             let handle = self.resources.insert(ResourceData {
                 label: Label::TypeName(std::any::type_name::<R>()),
                 storage: TypeId::of::<R::Resource>(),
-                is_permanent: R::is_permanent(),
+                config: R::config(),
                 value: None,
             });
 
@@ -217,7 +261,7 @@ impl NodeData {
 struct ResourceData {
     label: Label<'static>,
     storage: TypeId,
-    is_permanent: bool,
+    config: ResourceConfig,
     value: Option<Box<dyn Any>>,
 }
 
@@ -385,7 +429,7 @@ impl RenderGraph {
     }
 
     fn is_resource_permanent(&self, resource: UntypedResourceHandle) -> bool {
-        self.resources.get(resource.0).is_some_and(|r| r.is_permanent)
+        self.resources.get(resource.0).is_some_and(|r| r.config.permanent)
     }
 
     pub fn resource_from_type<R: GraphResourceId>(&mut self) -> ResourceHandle<R::Resource> {
@@ -395,15 +439,15 @@ impl RenderGraph {
         }.resource_from_type::<R>()
     }
 
-    pub fn create_resource<S: Any>(&mut self, label: Cow<'static, str>, is_permanent: bool) -> ResourceHandle<S> {
-        ResourceHandle { node: PhantomData, inner: self.create_resource_untyped(label, TypeId::of::<S>(), is_permanent).0 }
+    pub fn create_resource<S: Any>(&mut self, label: Cow<'static, str>, config: ResourceConfig) -> ResourceHandle<S> {
+        ResourceHandle { node: PhantomData, inner: self.create_resource_untyped(label, TypeId::of::<S>(), config).0 }
     }
 
-    pub fn create_resource_untyped(&mut self, label: Cow<'static, str>, storage: TypeId, is_permanent: bool) -> UntypedResourceHandle {
+    pub fn create_resource_untyped(&mut self, label: Cow<'static, str>, storage: TypeId, config: ResourceConfig) -> UntypedResourceHandle {
         let handle = self.resources.insert(ResourceData {
             label: Label::Other(label),
             storage,
-            is_permanent,
+            config,
             value: None,
         });
         UntypedResourceHandle(handle)
@@ -453,7 +497,7 @@ impl RenderGraph {
 
         let shared = consumes.iter().filter(|o| borrows.contains(o)).collect_vec();
         assert!(shared.is_empty(), "Error pushing Node {} into render graph, the following resources are both consumed and borrowed: {shared:?}", std::any::type_name::<N>());
-        let consumed_permanents = consumes.iter().filter(|p| self.resources.with(AssumeAlive(p.0)).get().is_permanent).collect_vec();
+        let consumed_permanents = consumes.iter().filter(|p| self.resources.with(AssumeAlive(p.0)).get().config.permanent).collect_vec();
         assert!(consumed_permanents.is_empty(), "Error pushing Node {} into render graph, the following resources cannot be consumed because they are permanent: {consumed_permanents:?}", std::any::type_name::<N>());
 
         let handle = self.nodes.insert(NodeData {
@@ -516,7 +560,7 @@ impl RenderGraph {
             });
         }
         for resource in &mut self.resources {
-            if !resource.is_permanent {
+            if !resource.config.permanent {
                 resource.value = None;
             }
         }
@@ -551,7 +595,18 @@ impl RenderGraph {
     }
 
     fn get_simplified_resource_labels(&self) -> HashMap<UncheckedResourceHandle, String> {
-        get_simplified_labels(&self.resources.enumerated().map(|(sparse_idx,_,n)| (UncheckedResourceHandle(sparse_idx), n.label.to_static())).collect())
+        let mut simplified = get_simplified_labels(&self.resources.enumerated().map(|(sparse_idx,_,n)| (UncheckedResourceHandle(sparse_idx), n.label.to_static())).collect());
+        #[expect(clippy::iter_over_hash_type, reason = "Iteration order is not observable")]
+        for (k, v) in &mut simplified {
+            let cfg = &self.resources.with(AssumeAlive(k.0)).get().config;
+            if cfg.unordered {
+                v.push('~');
+            }
+            if cfg.permanent {
+                v.push('*');
+            }
+        }
+        simplified
     }
 
     fn write_to_dot(&self, f: &mut impl std::fmt::Write, steps: Option<&[UncheckedNodeHandle]>) -> std::fmt::Result {
@@ -561,14 +616,7 @@ impl RenderGraph {
         let resource_labels = self.get_simplified_resource_labels();
 
         macro_rules! rn {
-            ($t:expr) => {{
-                let suffix = if self.resources.with(AssumeAlive($t.0)).get().is_permanent {
-                    "*"
-                } else {
-                    ""
-                };
-                format!("{}{suffix}", &resource_labels[&$t])
-            }};
+            ($t:expr) => { &resource_labels[&$t] };
         }
 
         writeln!(f, "digraph {{")?;

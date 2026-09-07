@@ -22,12 +22,12 @@ impl<'a> RenderGraphWrapper<'a> {
         self.added_nodes
     }
 
-    pub fn create_resource<S: std::any::Any>(&mut self, label: impl Into<Cow<'static, str>>, is_permanent: bool) -> render_graph::ResourceHandle<S> {
-        self.render_graph.create_resource::<S>(label.into(), is_permanent)
+    pub fn create_resource<S: std::any::Any>(&mut self, label: impl Into<Cow<'static, str>>, config: render_graph::ResourceConfig) -> render_graph::ResourceHandle<S> {
+        self.render_graph.create_resource::<S>(label.into(), config)
     }
 
-    pub fn create_resource_untyped(&mut self, label: impl Into<Cow<'static, str>>, storage: std::any::TypeId, is_permanent: bool) -> render_graph::UntypedResourceHandle {
-        self.render_graph.create_resource_untyped(label.into(), storage, is_permanent)
+    pub fn create_resource_untyped(&mut self, label: impl Into<Cow<'static, str>>, storage: std::any::TypeId, config: render_graph::ResourceConfig) -> render_graph::UntypedResourceHandle {
+        self.render_graph.create_resource_untyped(label.into(), storage, config)
     }
 
     pub fn push_node<N: render_graph::GraphNode>(&mut self, node: N) -> render_graph::NodeHandle<N>

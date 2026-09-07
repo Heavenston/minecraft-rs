@@ -21,6 +21,9 @@ version = "0.1.0"
 authors = ["Heavenstone <contact@heav.fr>"]
 edition = "2024"
 
+[workspace.lints.rust]
+refining_impl_trait = "allow"
+
 [workspace.lints.clippy]
 # all = { level = "allow", priority = -2 }
 pedantic = { level = "warn", priority = -1 }

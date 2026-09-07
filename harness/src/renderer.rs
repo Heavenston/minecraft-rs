@@ -19,7 +19,7 @@ pub mod resources {
     res!(pub struct FrameCommandEncoder(pub wgpu::CommandEncoder));
     res!(pub struct FrameCommandEncoderSubmitted(pub ()));
     res!(pub struct SurfacePresented(pub ()));
-    res!(#[derive(Default)] pub struct ComputingFrame(pub ()));
+    res!(#[derive(Default)] pub struct ComputingFrame(pub ()); unordered);
     res!(pub struct FrameFinished(pub ()); permanent);
 }
 use resources as res;
