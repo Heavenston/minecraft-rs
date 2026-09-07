@@ -612,7 +612,11 @@ impl RenderGraph {
         let mut compiled = self.compiled.take().unwrap_or_else(|| CompiledGraph::new(self));
         let result = compiled.compute(self, resource.into());
 
-        assert!(result.required_inputs.iter().all(|&p| self.resources.get(AssumeAlive(p.0)).value.dyn_is_some()), "Cannot run, missing inputs!");
+        let missing_inputs = result.required_inputs.iter()
+            .filter(|&p| !self.resources.get(AssumeAlive(p.0)).value.dyn_is_some())
+            .map(|p| self.resources.get(AssumeAlive(p.0)).label.to_string())
+            .join(", ");
+        assert!(missing_inputs.is_empty(), "Cannot run, missing inputs! {missing_inputs}");
         self.execute(&result.steps);
         compiled.apply_compute_result(self, &result);
         

@@ -3,7 +3,8 @@ pub mod world;
 pub mod material;
 use std::sync::Arc;
 
-pub use harness::{ Renderer, InputsState };
+pub use harness::{ Renderer, renderer, InputsState, KeyCode };
+pub use wgpu;
 
 use anyhow::Result;
 use parking_lot::RwLock;

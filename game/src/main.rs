@@ -1,13 +1,14 @@
 #![allow(dead_code)]
 
 use anyhow::Result;
+use engine::wgpu;
 use glam::Vec4;
 
 mod chunk;
 mod resource_location;
 
 struct App {
-    
+    vsync: bool,
 }
 
 impl engine::App for App {
@@ -18,21 +19,34 @@ impl engine::App for App {
             speed: 60.,
         });
         ctx.world.add_material(material);
+
+        ctx.renderer.render_graph().set_input::<engine::renderer::resources::PresentMode>(wgpu::PresentMode::AutoVsync);
+        
         Ok(())
     }
-    // fn resume(&mut self, renderer: &mut engine::Renderer, world: &mut engine::world::World) -> Result<()> {
-        // world.clear_color = Vec4::new(0., 0., 0., 1.);
-        // world.add_material(engine::material::Rotating::new(renderer, engine::material::RotatingConfig {
-        //     color: todo!(),
-        //     speed: todo!(),
-        // }));
 
-    //     Ok(())
-    // }
+    fn update(&mut self, ctx: engine::Ctx<'_>) -> Result<()> {
+        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyV) {
+            if self.vsync {
+                self.vsync = false;
+                println!("DISABLE");
+                ctx.renderer.render_graph().set_input::<engine::renderer::resources::PresentMode>(wgpu::PresentMode::AutoNoVsync);
+            }
+            else {
+                self.vsync = true;
+                println!("ENABLE");
+                ctx.renderer.render_graph().set_input::<engine::renderer::resources::PresentMode>(wgpu::PresentMode::AutoVsync);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    engine::start(App { })
+    engine::start(App {
+        vsync: true,
+    })
 }

@@ -90,8 +90,12 @@ impl Renderer {
         define_inputs(&mut render_graph);
         graph_nodes::register(&mut render_graph);
 
+        render_graph.set_input::<res::Instance>(instance.clone());
+        render_graph.set_input::<res::Surface>(surface);
         render_graph.set_input::<res::Device>(device.clone());
         render_graph.set_input::<res::Queue>(queue.clone());
+
+        render_graph.set_input::<res::PresentMode>(wgpu::PresentMode::AutoVsync);
 
         Ok(Self {
             device,
