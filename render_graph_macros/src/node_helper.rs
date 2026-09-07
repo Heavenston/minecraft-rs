@@ -1,3 +1,4 @@
+use convert_case::ccase;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::{Ident, Token, parenthesized, parse::Parse, parse_quote};
@@ -262,7 +263,9 @@ fn process_entry(input: &Input, entry: &Entry) -> TokenStream {
     });
 
     let node_name = &entry.name;
-    let module_name = format_ident!("{}_mod", entry.name);
+    let snake_node_name = &ccase!(pascal -> snake, node_name.to_string());
+    let module_name = syn::Ident::new(&format!("{snake_node_name}_mod"), node_name.span());
+    let var_name = syn::Ident::new(snake_node_name, node_name.span());
 
     let arg_pats = entry.input_fields.iter().map(|e| &e.pat).filter(|pat| !matches!(pat, syn::Pat::Wild(_)));
     
@@ -270,7 +273,6 @@ fn process_entry(input: &Input, entry: &Entry) -> TokenStream {
     let output_dyns = entry.output_fields.iter().filter_map(|p| p.output_entry.alias_name()).map(|name| format_ident!("{name}_resource"));
 
     quote! {
-        #[allow(non_snake_case)]
         mod #module_name {
             use super::*;
 
@@ -284,7 +286,9 @@ fn process_entry(input: &Input, entry: &Entry) -> TokenStream {
                 fn run(&mut self, InputValue(#(#arg_pats),*): InputValue) -> OutputValue #body
             }
         }
-        #graph_ident.push_node_complete(#module_name::#node_name, #module_name::Input(#(#input_dyns),*), #module_name::Output(#(#output_dyns),*));
+
+        #[allow(unused_variables)]
+        let #var_name = #graph_ident.push_node_complete(#module_name::#node_name, #module_name::Input(#(#input_dyns),*), #module_name::Output(#(#output_dyns),*));
     }
 }
 

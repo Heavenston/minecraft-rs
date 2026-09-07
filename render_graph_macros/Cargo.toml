@@ -8,6 +8,7 @@ edition.workspace = true
 proc-macro = true
 
 [dependencies]
+convert_case = "0.12.0"
 itertools = { workspace = true }
 proc-macro-crate = "3.5.0"
 proc-macro2 = "1.0.107"
