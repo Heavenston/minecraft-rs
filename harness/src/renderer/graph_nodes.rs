@@ -6,7 +6,7 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
         BeginFrame
         () -> (default res::ComputingFrame);
         EndFrame
-        (_: res::ComputingFrame) -> ();
+        (_: res::ComputingFrame) -> (default res::FrameFinished);
 
         EndFrameMustHavePresented
         (_: res::ComputingFrame, _: res::SurfacePresented) -> (default res::ComputingFrame);
