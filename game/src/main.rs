@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use anyhow::Result;
-use engine::wgpu;
+use engine::{wgpu, world::MaterialHandle};
 use glam::Vec4;
 
 mod chunk;
@@ -9,6 +9,7 @@ mod resource_location;
 
 struct App {
     vsync: bool,
+    material: Option<MaterialHandle<engine::material::Rotating>>,
 }
 
 impl engine::App for App {
@@ -18,7 +19,7 @@ impl engine::App for App {
             color: Vec4::new(1., 1., 1., 1.),
             speed: 60.,
         });
-        ctx.world.add_material(material);
+        self.material = Some(ctx.world.add_material(material));
 
         ctx.renderer.render_graph().set_input::<engine::renderer::resources::PresentMode>(wgpu::PresentMode::AutoVsync);
         
@@ -26,6 +27,9 @@ impl engine::App for App {
     }
 
     fn update(&mut self, ctx: engine::Ctx<'_>) -> Result<()> {
+        let Some(material) = self.material
+        else { return Ok(()); };
+
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyV) {
             if self.vsync {
                 self.vsync = false;
@@ -39,6 +43,13 @@ impl engine::App for App {
             }
         }
 
+        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyC) {
+            ctx.world.get_material_mut(material).unwrap().set_config(engine::material::RotatingConfig {
+                color: Vec4::new(1., 0., 0., 1.),
+                speed: 0.5,
+            });
+        }
+
         Ok(())
     }
 }
@@ -48,5 +59,6 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     engine::start(App {
         vsync: true,
+        material: None,
     })
 }

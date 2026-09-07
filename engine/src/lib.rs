@@ -19,6 +19,7 @@ pub struct ResumeCtx<'a> {
 pub struct Ctx<'a> {
     pub inputs_state: &'a mut InputsState,
     pub renderer: &'a mut Renderer,
+    pub world: &'a mut World,
 }
 
 pub trait App: 'static {
@@ -49,13 +50,20 @@ impl<A: App> harness::App for HarnessApp<A> {
     }
 
     fn update(&mut self, ctx: harness::Ctx<'_>) -> anyhow::Result<()> {
-        self.world.write().update_render_graph(ctx.renderer.render_graph());
+        {
+            let mut world = self.world.write();
+            world.update_render_graph(ctx.renderer.render_graph());
         
+            self.app.update(Ctx {
+                inputs_state: ctx.inputs_state,
+                renderer: ctx.renderer,
+                world: &mut world,
+            })?;
+        }
+
         ctx.renderer.render_graph().set_input::<render_graph_nodes::WorldResource>(self.world.read_arc());
-        self.app.update(Ctx {
-            inputs_state: ctx.inputs_state,
-            renderer: ctx.renderer,
-        })
+
+        Ok(())
     }
 }
 
