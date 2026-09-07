@@ -35,7 +35,7 @@ pub fn register(graph: &mut RenderGraph) {
             tracing::debug!("Created a staging belt");
             OutputValue(RwLock::new(wgpu::util::StagingBelt::new(device.clone(), 128)))
         };
-        CreateUsingStagingBelt(_: ref StagingBelt) -> (default UsingStagingBelt);
+        CreateUsingStagingBelt(_: ref StagingBelt, _: ref render_res::ComputingFrame) -> (default UsingStagingBelt);
         FinishStagingBelt(_: UsingStagingBelt, staging_belt: ref StagingBelt, command_encoder: ref render_res::FrameCommandEncoder,) -> (default BeforeRenderPass) {
             staging_belt.write().finish_and_recall_on_submit(command_encoder);
         };

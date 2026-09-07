@@ -26,7 +26,7 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
         };
 
         AcquireSurfaceTexture
-        (surface: ref res::Surface, _: ref res::ConfiguredSurface) -> (res::SurfaceTexture) {
+        (surface: ref res::Surface, _: ref res::ConfiguredSurface) -> (default res::ComputingFrame, res::SurfaceTexture) {
             let output = match surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
                 wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => {
@@ -50,8 +50,6 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
             OutputValue(output)
         };
 
-        BeginFrame
-        () -> (default res::ComputingFrame);
         EndFrame
         (_: res::ComputingFrame) -> (default res::FrameFinished);
 
@@ -73,7 +71,7 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
         { OutputValue(surface_texture) };
 
         CreateFrameCommandEncoder
-        (device: ref res::Device) -> (res::FrameCommandEncoder) {
+        (device: ref res::Device, _: ref res::ComputingFrame) -> (res::FrameCommandEncoder) {
             OutputValue(
                 device.create_command_encoder(&wgpu::wgt::CommandEncoderDescriptor { label: Some("frame command encoder") })
             )

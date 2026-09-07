@@ -659,6 +659,12 @@ impl CompiledGraph {
         let resource = graph.resource_ref(resource);
         let cached = self.cache.read().get(&self.not_dirty).map(Arc::clone);
         if let Some(cached) = cached {
+            if let Some(path) = option_env!("DEBUG_GRAPH_COMPUTE_PATH") {
+                let mut str = String::new();
+                graph.write_to_dot(&mut str, Some(&cached.steps)).unwrap();
+                std::fs::write(path, str).unwrap();
+                tracing::debug!(output = path, "Stored compute() dot graph");
+            }
             return cached;
         }
         tracing::trace!("Cache miss");
