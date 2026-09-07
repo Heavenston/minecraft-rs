@@ -3,12 +3,15 @@
 mod bundles;
 pub use bundles::*;
 mod node;
+use indexmap::MapIndex as _;
 pub use node::*;
 mod compiler;
 #[cfg(test)]
 mod tests;
+mod label;
+pub use label::Label;
 
-use std::{any::{ Any, TypeId }, collections::{HashMap, HashSet}, marker::PhantomData, ops::Deref as _};
+use std::{any::{ Any, TypeId }, borrow::Cow, collections::{HashMap, HashSet, hash_map}, marker::PhantomData, ops::Deref as _};
 use static_assertions as sa;
 use genmap::{AssumeAlive, GenMap, Handle};
 use itertools::Itertools as _;
@@ -16,6 +19,47 @@ use itertools::Itertools as _;
 pub use render_graph_macros::{ input_bundle, output_bundle, node_helper };
 
 use crate::compiler::CompiledGraph;
+
+fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: &HashMap<K, Label>) -> HashMap<K, String> {
+    let mut node_labels = HashMap::<K, String>::new();
+    let mut todo_stack: Vec<K> = values.keys().cloned().collect();
+    let mut taken_node_labels = HashMap::<String, Vec<K>>::new();
+    while let Some(handle) = todo_stack.pop() {
+        let full_name = match &values[&handle] {
+            &Label::TypeName(tn) => tn,
+            Label::Other(cow) => {
+                node_labels.insert(handle, cow.to_string());
+                continue;
+            },
+        };
+        let possible_names = [
+            full_name.split("::").last().unwrap(),
+            full_name,
+        ];
+        let possible_names = if full_name.contains(['<', '>']) {
+            &possible_names[1..]
+        } else {
+            &possible_names[..]
+        };
+        for name in possible_names {
+            let takeners = taken_node_labels.entry(name.to_string());
+            match takeners {
+                hash_map::Entry::Occupied(mut entry) => {
+                    for t in entry.get_mut().drain(..) {
+                        node_labels.remove(&t);
+                        todo_stack.push(t);
+                    }
+                },
+                hash_map::Entry::Vacant(entry) => {
+                    entry.insert(vec![handle.clone()]);
+                    node_labels.insert(handle, name.to_string());
+                    break;
+                },
+            }
+        }
+    }
+    node_labels
+}
 
 pub trait GraphResourceId: Any {
     type Resource
@@ -89,7 +133,7 @@ impl ResourceInfoProvider for ResourceManager<'_> {
     fn resource_from_type<R: GraphResourceId>(&mut self) -> ResourceHandle<R::Resource> {
         let handle = self.type_resources_info.entry(TypeId::of::<R>()).or_insert_with(|| {
             let handle = self.resources.insert(ResourceData {
-                label: std::any::type_name::<R>(),
+                label: Label::TypeName(std::any::type_name::<R>()),
                 storage: TypeId::of::<R::Resource>(),
                 is_permanent: R::is_permanent(),
                 value: None,
@@ -138,12 +182,12 @@ impl ResourceStorer for ResourceManager<'_> {
 }
 
 trait GraphNodeWrapperTrait: std::any::Any {
-    fn label(&self) -> &str;
+    fn label(&self) -> Label<'_>;
     fn run(&mut self, manager: &mut ResourceManager<'_>);
 }
 sa::assert_obj_safe!(GraphNodeWrapperTrait);
 impl<N: GraphNode> GraphNodeWrapperTrait for (N::InputBundle, N, N::OutputBundle) {
-    fn label(&self) -> &str {
+    fn label(&self) -> Label<'_> {
         self.1.label()
     }
     fn run(&mut self, manager: &mut ResourceManager<'_>) {
@@ -165,13 +209,13 @@ impl NodeData {
         self.node.as_ref().type_id()
     }
 
-    fn label(&self) -> &str {
+    fn label(&self) -> Label<'_> {
         self.node.label()
     }
 }
 
 struct ResourceData {
-    label: &'static str,
+    label: Label<'static>,
     storage: TypeId,
     is_permanent: bool,
     value: Option<Box<dyn Any>>,
@@ -351,13 +395,13 @@ impl RenderGraph {
         }.resource_from_type::<R>()
     }
 
-    pub fn create_resource<S: Any>(&mut self, is_permanent: bool) -> ResourceHandle<S> {
-        ResourceHandle { node: PhantomData, inner: self.create_resource_untyped(std::any::type_name::<S>(), TypeId::of::<S>(), is_permanent).0 }
+    pub fn create_resource<S: Any>(&mut self, label: Cow<'static, str>, is_permanent: bool) -> ResourceHandle<S> {
+        ResourceHandle { node: PhantomData, inner: self.create_resource_untyped(label, TypeId::of::<S>(), is_permanent).0 }
     }
 
-    pub fn create_resource_untyped(&mut self, label: &'static str, storage: TypeId, is_permanent: bool) -> UntypedResourceHandle {
+    pub fn create_resource_untyped(&mut self, label: Cow<'static, str>, storage: TypeId, is_permanent: bool) -> UntypedResourceHandle {
         let handle = self.resources.insert(ResourceData {
-            label,
+            label: Label::Other(label),
             storage,
             is_permanent,
             value: None,
@@ -452,6 +496,13 @@ impl RenderGraph {
     }
 
     pub fn prepare_run(&mut self) {
+        if let Some(path) = option_env!("DEBUG_GRAPH_PRECOMPUTE_PATH") {
+            let mut str = String::new();
+            self.write_to_dot(&mut str, None).unwrap();
+            std::fs::write(path, str).unwrap();
+            tracing::debug!(output = path, "Stored prepare_run() dot graph");
+        }
+
         if self.compiled.is_some() { return; }
         let compiled = CompiledGraph::new(self);
         self.compiled = Some(compiled);
@@ -495,66 +546,84 @@ impl RenderGraph {
         self.resources.get_mut(resource.0).expect("valid resource handle").value.take().expect("value was created during compute")
     }
 
+    fn get_simplified_node_labels(&self) -> HashMap<UncheckedNodeHandle, String> {
+        get_simplified_labels(&self.nodes.enumerated().map(|(sparse_idx,_,n)| (UncheckedNodeHandle(sparse_idx), n.label().to_static())).collect())
+    }
+
+    fn get_simplified_resource_labels(&self) -> HashMap<UncheckedResourceHandle, String> {
+        get_simplified_labels(&self.resources.enumerated().map(|(sparse_idx,_,n)| (UncheckedResourceHandle(sparse_idx), n.label.to_static())).collect())
+    }
+
     fn write_to_dot(&self, f: &mut impl std::fmt::Write, steps: Option<&[UncheckedNodeHandle]>) -> std::fmt::Result {
-        let _ = &mut *f;
-        let _ = steps;
-        todo!()
-        // const INDENT: &'static str = "  ";
+        const INDENT: &str = "  ";
 
-        // writeln!(f, "digraph {{")?;
-        // let mut names = HashMap::<&'static str, HashMap<TypeId, String>>::new();
-        // macro_rules! get_name { ($n: expr, $pref: expr) => {{
-        //     let p = names.entry($pref).or_default();
-        //     let c = p.len();
-        //     p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
-        // }}; }
-        // let mut printed_resources = HashSet::<TypeId>::new();
-        // macro_rules! write_node { ($name:expr$(,$key:expr=>$val:expr)*) => {{
-        //     write!(f, "{INDENT}{} [", $name)?;
-        //     $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
-        //     writeln!(f, "]")?;
-        // }}; }
-        // macro_rules! write_resource { ($tid:expr) => {{
-        //     let tid = $tid;
-        //     if printed_resources.insert(tid) {
-        //         let type_name = self.type_name_registry.get_name(tid);
-        //         write_node!(get_name!(tid, "R"), shape=>"plain", label=>type_name);
-        //     }
-        // }}; }
+        let node_labels = self.get_simplified_node_labels();
+        let resource_labels = self.get_simplified_resource_labels();
 
-        // for &tid in self.inputs.iter().sorted_by_key(|p| self.type_name_registry.get_name(**p)) {
-        //     printed_resources.insert(tid);
-        //     let type_name = self.type_name_registry.get_name(tid);
-        //     write_node!(get_name!(tid, "R"), shape=>"rectangle", label=>type_name);
-        // }
-        // for (i, n) in self.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.label()) {
-        //     let name = format!("N{i}");
-        //     write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.label()));
-        //     for &input in n.inputs {
-        //         write_resource!(input);
-        //         let input = get_name!(input, "R");
-        //         writeln!(f, "{INDENT}{input} -> {name}")?;
-        //     }
-        //     for &borrowed_input in n.borrowed_inputs {
-        //         write_resource!(borrowed_input);
-        //         let borrowed_input = get_name!(borrowed_input, "R");
-        //         writeln!(f, "{INDENT}{borrowed_input} -> {name} [style=dashed]")?;
-        //     }
-        //     for &output in n.outputs {
-        //         write_resource!(output);
-        //         let output = get_name!(output, "R");
-        //         writeln!(f, "{INDENT}{name} -> {output}")?;
-        //     }
-        // }
+        macro_rules! rn {
+            ($t:expr) => {{
+                let suffix = if self.resources.with(AssumeAlive($t.0)).get().is_permanent {
+                    "*"
+                } else {
+                    ""
+                };
+                format!("{}{suffix}", &resource_labels[&$t])
+            }};
+        }
 
-        // if let Some(steps) = steps {
-        //     for [a, b] in steps.iter().copied().array_windows() {
-        //         writeln!(f, "{INDENT}N{a} -> N{b} [color=blue]")?;
-        //     }
-        // }
+        writeln!(f, "digraph {{")?;
+        let mut names = HashMap::<&'static str, HashMap<UncheckedResourceHandle, String>>::new();
+        macro_rules! get_name { ($n: expr, $pref: expr) => {{
+            let p = names.entry($pref).or_default();
+            let c = p.len();
+            p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
+        }}; }
+        let mut printed_resources = HashSet::<UncheckedResourceHandle>::new();
+        macro_rules! write_node { ($name:expr$(,$key:expr=>$val:expr)*) => {{
+            write!(f, "{INDENT}{} [", $name)?;
+            $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
+            writeln!(f, "]")?;
+        }}; }
+        macro_rules! write_resource { ($resource:expr) => {{
+            let resource = $resource;
+            if printed_resources.insert(resource) {
+                write_node!(get_name!(resource, "R"), shape=>"plain", label=>rn!($resource));
+            }
+        }}; }
+
+        for &resource in self.inputs.iter().sorted_by_key(|resource| rn!(resource)) {
+            printed_resources.insert(resource);
+            write_node!(get_name!(resource, "R"), shape=>"rectangle", label=>rn!(resource));
+        }
+        for (i,_,n) in self.nodes.enumerated() {
+            let i = UncheckedNodeHandle(i);
+            let name = format!("N{}", i.0.as_usize());
+            write_node!(name, shape=>"cylinder", label=>&node_labels[&i]);
+            for &resource in &n.consumes {
+                write_resource!(resource);
+                let resource_node = get_name!(resource, "R");
+                writeln!(f, "{INDENT}{resource_node} -> {name}")?;
+            }
+            for &resource in &n.borrows {
+                write_resource!(resource);
+                let resource_node = get_name!(resource, "R");
+                writeln!(f, "{INDENT}{resource_node} -> {name} [style=dashed]")?;
+            }
+            for &resource in &n.outputs {
+                write_resource!(resource);
+                let resource_node = get_name!(resource, "R");
+                writeln!(f, "{INDENT}{name} -> {resource_node}")?;
+            }
+        }
+
+        if let Some(steps) = steps {
+            for [a, b] in steps.iter().copied().array_windows() {
+                writeln!(f, "{INDENT}N{} -> N{} [color=blue]", a.0.as_usize(), b.0.as_usize())?;
+            }
+        }
         
-        // write!(f, "}}")?;
+        write!(f, "}}")?;
 
-        // Ok(())
+        Ok(())
     }
 }

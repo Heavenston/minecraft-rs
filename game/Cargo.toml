@@ -15,4 +15,4 @@ tracing-subscriber = "0.3.23"
 ordermap = "1.2.1"
 
 [lints]
-workspace = true
+clippy.all = "allow"

@@ -5,7 +5,7 @@ use indexmap::{IndexMap, IndexSlice, MapIndex as _};
 use itertools::{Itertools as _, chain};
 use parking_lot::RwLock;
 
-use crate::{NodeData, RenderGraph, ResourceData, UncheckedNodeHandle, UncheckedResourceHandle};
+use crate::{Label, NodeData, RenderGraph, ResourceData, UncheckedNodeHandle, UncheckedResourceHandle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeRef(DenseIdx);
@@ -33,13 +33,14 @@ impl indexmap::MapIndex for ResourceRef {
     }
 }
 
+/// Wrapper to provide access to a node input/outputs as `ResourceRef`.
 struct NodeDataWrapper<'a> {
     data: &'a NodeData,
     graph: &'a RenderGraph,
 }
 
 impl<'a> NodeDataWrapper<'a> {
-    fn label(&self) -> &'a str {
+    fn label(&self) -> Label<'a> {
         self.data.node.label()
     }
 
@@ -236,66 +237,65 @@ impl ResolvedResources {
     }
 
     fn write_to_dot(&self, graph: &RenderGraph, f: &mut impl std::fmt::Write) -> std::fmt::Result {
-        let _ = graph;
-        let _ = &mut *f;
-        todo!()
-        // const INDENT: &'static str = "  ";
+        const INDENT: &str = "  ";
 
-        // writeln!(f, "digraph {{")?;
-        // let mut names = HashMap::<&'static str, HashMap<TypeId, String>>::new();
-        // macro_rules! tn { ($t:expr) => {
-        //     graph.type_name_registry.get_name($t)
-        // }; }
-        // let mut printed_resources = HashSet::<TypeId>::new();
-        // macro_rules! get_name { ($n: expr, $pref: expr) => {{
-        //     let p = names.entry($pref).or_default();
-        //     let c = p.len();
-        //     p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
-        // }}; }
-        // macro_rules! write_resource { ($tid:expr) => {{
-        //     let tid = $tid;
-        //     if printed_resources.insert(tid) {
-        //         let type_name = graph.type_name_registry.get_name(tid);
-        //         write_node!(get_name!(tid, "R"), shape=>"rectangle", label=>type_name);
-        //     }
-        // }}; }
-        // macro_rules! write_node { ($name:expr$(,$key:expr=>$val:expr)*) => {{
-        //     write!(f, "{INDENT}{} [", $name)?;
-        //     $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
-        //     writeln!(f, "]")?;
-        // }}; }
-        // macro_rules! write_edge {
-        //     ($i:ident -> $n:ident$(,$key:expr=>$val:expr)*) => {{
-        //         let name = $n.clone();
-        //         let input = $i;
-        //         match input.producer {
-        //             InputOrNode::Input => {
-        //                 write_resource!($i.resource);
-        //                 write!(f, "{INDENT}{} -> {name} [", get_name!(input.resource, "R"))?;
-        //             },
-        //             InputOrNode::Node(n) => {
-        //                 write!(f, "{INDENT}{} -> {name} [label=\"{}\"", format!("N{n}"), tn!(input.resource))?;
-        //             }
-        //         };
-        //         $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
-        //         writeln!(f, "]")?;
-        //     }};
-        // }
+        macro_rules! rn {
+            ($t:expr) => {{
+                &graph.resources.with($t.0).unwrap().get().label
+            }};
+        }
 
-        // for (i, n) in graph.nodes.iter().enumerate().sorted_by_key(|(_, n)| n.label()) {
-        //     let name = format!("N{i}");
-        //     write_node!(name, shape=>"cylinder", label=>format!("{i} {}", n.label()));
-        //     for input in self.resolved_inputs(i) {
-        //         write_edge!(input -> name);
-        //     }
-        //     for input in self.resolved_borrows(i) {
-        //         write_edge!(input -> name, style=>"dashed");
-        //     }
-        // }
+        writeln!(f, "digraph {{")?;
+        let mut names = HashMap::<&'static str, HashMap<ResourceRef, String>>::new();
+        let mut printed_resources = HashSet::<ResourceRef>::new();
+        macro_rules! get_name { ($n: expr, $pref: expr) => {{
+            let p = names.entry($pref).or_default();
+            let c = p.len();
+            p.entry($n).or_insert_with(|| format!("{}{c}", $pref)).clone()
+        }}; }
+        macro_rules! write_resource { ($resource:expr) => {{
+            let resource = $resource;
+            if printed_resources.insert(resource) {
+                write_node!(get_name!(resource, "R"), shape=>"rectangle", label=>rn!(resource));
+            }
+        }}; }
+        macro_rules! write_node { ($name:expr$(,$key:expr=>$val:expr)*) => {{
+            write!(f, "{INDENT}{} [", $name)?;
+            $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
+            writeln!(f, "]")?;
+        }}; }
+        macro_rules! write_edge {
+            ($i:ident -> $n:ident$(,$key:expr=>$val:expr)*) => {{
+                let name = $n.clone();
+                let input = $i;
+                match input.producer {
+                    InputOrNode::Input => {
+                        write_resource!($i.resource);
+                        write!(f, "{INDENT}{} -> {name} [", get_name!(input.resource, "R"))?;
+                    },
+                    InputOrNode::Node(n) => {
+                        write!(f, "{INDENT}{} -> {name} [label=\"{}\"", format!("N{}", n.as_usize()), rn!(input.resource))?;
+                    }
+                };
+                $(write!(f, " {}=\"{}\"", stringify!($key), $val)?;)*
+                writeln!(f, "]")?;
+            }};
+        }
+
+        for (i,n) in graph.nodes().sorted_by_key(|(_,n)| n.label()) {
+            let name = format!("N{}", i.as_usize());
+            write_node!(name, shape=>"cylinder", label=>format!("{} {}", i.as_usize(), n.label()));
+            for input in self.resolved_inputs(i) {
+                write_edge!(input -> name);
+            }
+            for input in self.resolved_borrows(i) {
+                write_edge!(input -> name, style=>"dashed");
+            }
+        }
         
-        // write!(f, "}}")?;
+        write!(f, "}}")?;
 
-        // Ok(())
+        Ok(())
     }
 }
 
@@ -366,18 +366,18 @@ impl ResolvedResourcesContainer for GraphResourceResolver {
 fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
     macro_rules! rn {
         ($t:expr) => {{
-            graph.resources.with($t.0).unwrap().get().label
+            &graph.resources.with($t.0).unwrap().get().label
         }};
     }
     macro_rules! nn {
         ($n:expr) => {
-            graph.node($n).label()
+            graph.node($n).label().to_string()
         };
     }
     macro_rules! ton {
         ($n:expr) => {
             match $n {
-                InputOrNode::Input => "<input>",
+                InputOrNode::Input => "<input>".to_string(),
                 InputOrNode::Node(n) => nn!(n),
             }
         };
