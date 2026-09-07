@@ -89,6 +89,7 @@ pub fn register(graph: &mut RenderGraph) {
         ) -> (render_res::FrameCommandEncoder) {
             let data = WorldUniform {
                 view_projection_matrix: world.camera_transform.inverse_or_zero() * world.camera_projection,
+                time: world.created_at.elapsed().as_secs_f32(),
             }.as_std140();
             let bytes = data.as_bytes();
 

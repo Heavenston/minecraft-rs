@@ -15,6 +15,7 @@ tracing = "0.1.44"
 winit = "0.30.13"
 glam = { version = "0.33.6", features = ["bytemuck"] }
 itertools = "0.15.0"
+crevice = { version = "0.20.1", features = ["glam"] }
 
 [workspace.package]
 version = "0.1.0"

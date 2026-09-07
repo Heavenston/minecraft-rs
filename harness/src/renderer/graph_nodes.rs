@@ -3,6 +3,53 @@ use super::resources as res;
 #[expect(clippy::single_call_fn, reason = "only called when creating graph")]
 pub(super) fn register(graph: &mut render_graph::RenderGraph) {
     render_graph::node_helper!(into graph;
+        CreateSurfaceConfiguration
+        (window_size: ref res::WindowSize, &present_mode: ref res::PresentMode) -> (res::SurfaceConfiguration) {
+            assert_ne!(window_size.0, 0, "Window width cannot be 0");
+            assert_ne!(window_size.1, 0, "Window height cannot be 0");
+            OutputValue(wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                width: window_size.0,
+                height: window_size.1,
+                present_mode,
+                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+                color_space: wgpu::SurfaceColorSpace::Auto,
+            })  
+        };
+
+        ConfigureSurface
+        (device: ref res::Device, surface: ref res::Surface, surface_config: ref res::SurfaceConfiguration) -> (default res::ConfiguredSurface) {
+            surface.configure(device, surface_config);
+        };
+
+        AcquireSurfaceTexture
+        (surface: ref res::Surface, _: ref res::ConfiguredSurface) -> (res::SurfaceTexture) {
+            let output = match surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+                wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => {
+                    surface_texture
+                }
+                wgpu::CurrentSurfaceTexture::Timeout
+                | wgpu::CurrentSurfaceTexture::Occluded
+                | wgpu::CurrentSurfaceTexture::Validation => {
+                    // Skip this frame
+                    todo!()
+                }
+                wgpu::CurrentSurfaceTexture::Outdated => {
+                    todo!()
+                }
+                wgpu::CurrentSurfaceTexture::Lost => {
+                    // You could recreate the devices and all resources
+                    // created with it here, but we'll just bail
+                    panic!("Lost device");
+                }
+            };
+            OutputValue(output)
+        };
+
         BeginFrame
         () -> (default res::ComputingFrame);
         EndFrame

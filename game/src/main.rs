@@ -15,7 +15,7 @@ impl engine::App for App {
         ctx.world.clear_color = Vec4::new(0., 0., 0., 1.);
         let material = engine::material::Rotating::new(ctx, engine::material::RotatingConfig {
             color: Vec4::new(1., 1., 1., 1.),
-            speed: 1.,
+            speed: 60.,
         });
         ctx.world.add_material(material);
         Ok(())

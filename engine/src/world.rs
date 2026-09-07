@@ -1,4 +1,4 @@
-use std::{ any::Any, marker::PhantomData };
+use std::{ any::Any, marker::PhantomData, time::Instant };
 
 use crevice::std140::AsStd140;
 use glam::{ Mat4, Vec4 };
@@ -49,6 +49,8 @@ impl<M: Material> Clone for MaterialHandle<M> {
 }
 
 pub struct World {
+    pub(crate) created_at: Instant,
+
     pub clear_color: Vec4,
     pub camera_transform: Mat4,
     pub camera_projection: Mat4,
@@ -99,6 +101,8 @@ impl World {
 impl Default for World {
     fn default() -> Self {
         Self {
+            created_at: Instant::now(),
+
             clear_color: Vec4::new(0., 0., 0., 1.),
             camera_transform: Mat4::IDENTITY,
             camera_projection: Mat4::IDENTITY,
@@ -108,9 +112,9 @@ impl Default for World {
     }
 }
 
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable, AsStd140)]
-#[repr(C)]
+#[derive(Debug, Copy, Clone, AsStd140)]
 #[expect(clippy::module_name_repetitions, reason = "It is probably not in the correct module, as 'World' here has slightly different meaning")]
 pub struct WorldUniform {
     pub view_projection_matrix: Mat4,
+    pub time: f32,
 }
