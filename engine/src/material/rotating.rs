@@ -45,7 +45,7 @@ fn register(config: RotatingConfig, render_graph: &mut super::RenderGraphWrapper
             OutputValue(device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Rotating pipeline layout"),
                 bind_group_layouts: &[Some(world_bind_group_layout)],
-                immediate_size: 0,
+                immediate_size: Immediates::std140_size_static().try_into().unwrap(),
             }))
         };
 
