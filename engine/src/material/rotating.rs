@@ -7,6 +7,7 @@ use harness::renderer::resources as render_res;
 
 const SHADER_CODE: &str = include_str!("rotating.wgsl");
 
+#[derive(Debug, Clone)]
 pub struct RotatingConfig {
     pub color: Vec4,
     pub speed: f64,
@@ -18,11 +19,13 @@ struct Immediates {
     speed: f64,
 }
 
-pub struct Rotating;
+pub struct Rotating {
+    config: RotatingConfig,
+}
 
 impl Rotating {
-    pub fn new(_ctx: &mut ResumeCtx<'_>, _data: RotatingConfig) -> Self {
-        Self { }
+    pub fn new(_ctx: &mut ResumeCtx<'_>, config: RotatingConfig) -> Self {
+        Self { config }
     }
 }
 
@@ -32,7 +35,7 @@ impl Material for Rotating {
             using @shader_module: wgpu::ShaderModule = render_graph.create_resource(true);
             using @render_pipeline_layout: wgpu::PipelineLayout = render_graph.create_resource(true);
             using @render_pipeline: wgpu::RenderPipeline = render_graph.create_resource(true);
-            using @config: RotatingConfig = render_graph.create_resource(false);
+            using @config: RotatingConfig = render_graph.create_resource(true);
 
             CreateShaderModule
             (device: ref render_res::Device) -> (@shader_module) {
@@ -94,5 +97,7 @@ impl Material for Rotating {
                 OutputValue(render_pass)
             };
         );
+
+        render_graph.set_resource_input(config_resource, self.config.clone());
     }
 }

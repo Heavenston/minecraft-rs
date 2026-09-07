@@ -364,16 +364,14 @@ impl ResolvedResourcesContainer for GraphResourceResolver {
 #[tracing::instrument(level = "trace", skip_all)]
 #[expect(clippy::single_call_fn, reason = "CompiledGraph construction algorithm")]
 fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
-    macro_rules! tn {
+    macro_rules! rn {
         ($t:expr) => {{
-            // graph.type_name_registry.get_name($t)
-            let _ = $t;
-            ""
+            graph.resources.with($t.0).unwrap().get().label
         }};
     }
     macro_rules! nn {
         ($n:expr) => {
-            tn!(graph.node($n).label())
+            graph.node($n).label()
         };
     }
     macro_rules! ton {
@@ -416,14 +414,14 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
         for (node, node_data) in graph.nodes() {
             rr_println!("{}[{node:?}] {}", if chain!(&this.resolved_inputs[&node], &this.resolved_borrows[&node]).any(Option::is_none) { " " } else { "*" }, nn!(node));
             for (input_idx, resource) in node_data.consumes().enumerate() {
-                rr_println!("\tconsumes({})", tn!(resource));
+                rr_println!("\tconsumes({})", rn!(resource));
 
                 if let Some(resolved) = &this.resolved_inputs[&node][input_idx] {
                     rr_println!("\t\t*{}", ton!(resolved.producer));
                     continue;
                 }
                 let Some(potential_producers) = producers.get(&resource)
-                else { panic!("Missing producers for {}", tn!(resource)) };
+                else { panic!("Missing producers for {}", rn!(resource)) };
 
                 let producer = potential_producers.iter().filter(|&&producer| {
                     !this.is_after_or_equal(ListLink::default(), producer, node)
@@ -440,14 +438,14 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                 }
             }
             for (borrow_idx, resource) in node_data.borrows().enumerate() {
-                rr_println!("\tborrows({})", tn!(resource));
+                rr_println!("\tborrows({})", rn!(resource));
 
                 if let Some(resolved) = &this.resolved_borrows[&node][borrow_idx] {
                     rr_println!("\t\t*{}", ton!(resolved.producer));
                     continue
                 }
                 let Some(potential_producers) = producers_for_borrows.get(&resource)
-                else { panic!("Missing producers for {}", tn!(resource)) };
+                else { panic!("Missing producers for {}", rn!(resource)) };
 
                 let producer = potential_producers.iter().filter(|&&producer| {
                     !this.is_after_or_equal(ListLink::default(), producer, node)
@@ -473,7 +471,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
         for ((claim_resource, claim_producer), claimers) in claims {
             if claimers.borrows.is_empty() {
                 if let Ok(&(node_id, input_idx)) = claimers.inputs.iter().exactly_one() {
-                    rr_println!("REVOLED {} consumes {} from {}", nn!(node_id), tn!(claim_resource), ton!(claim_producer));
+                    rr_println!("REVOLED {} consumes {} from {}", nn!(node_id), rn!(claim_resource), ton!(claim_producer));
                     found_valid = true;
                     debug_assert!(this.resolved_inputs[node_id][input_idx].is_none());
                     this.resolved_inputs[node_id][input_idx] = Some(ResolvedInput {
@@ -495,7 +493,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
             else {
                 found_valid = true;
                 for (node_id, input_idx) in claimers.borrows {
-                    rr_println!("REVOLED {} borrows {} from {}", nn!(node_id), tn!(claim_resource), ton!(claim_producer));
+                    rr_println!("REVOLED {} borrows {} from {}", nn!(node_id), rn!(claim_resource), ton!(claim_producer));
                     debug_assert!(this.resolved_borrows[&node_id][input_idx].is_none());
                     this.resolved_borrows[&node_id][input_idx] = Some(ResolvedInput {
                         resource: claim_resource,

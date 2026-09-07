@@ -42,6 +42,18 @@ impl<'a> RenderGraphWrapper<'a> {
         self.added_nodes.push(handle.to_untyped());
         handle
     }
+
+    pub fn set_input<R: render_graph::GraphResourceId>(&mut self, val: R::Resource) {
+        self.render_graph.set_input::<R>(val);
+    }
+
+    pub fn set_resource_input<R: std::any::Any>(&mut self, handle: render_graph::ResourceHandle<R>, value: R) {
+        self.render_graph.set_resource_input(handle, value);
+    }
+
+    pub fn set_resource_input_untyped(&mut self, handle: render_graph::UntypedResourceHandle, value: Box<dyn std::any::Any>) {
+        self.render_graph.set_resource_input_untyped(handle, value);
+    }
 }
 
 pub trait Material: std::any::Any {
