@@ -21,6 +21,9 @@ pub mod resources {
 
     res!(pub(crate) struct ConfiguredSurface(pub ()); permanent);
 
+    res!(pub struct FrameSubmitList(pub Vec<wgpu::CommandBuffer>));
+    res!(pub struct FrameSubmitListSubmitted(pub ()); unordered);
+
     res!(pub(crate) struct BorrowedSurfaceTexture(pub wgpu::SurfaceTexture));
     res!(pub struct SurfaceTextureView(pub wgpu::TextureView));
     res!(pub struct FrameCommandEncoder(pub wgpu::CommandEncoder); unordered);

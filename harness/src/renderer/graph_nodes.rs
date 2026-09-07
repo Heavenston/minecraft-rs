@@ -57,12 +57,15 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
         (_: res::ComputingFrame, _: res::SurfacePresented) -> (default res::ComputingFrame);
 
         EndFrameMustHaveSubmitted
-        (_: res::ComputingFrame, _: res::FrameCommandEncoderSubmitted) -> (default res::ComputingFrame);
+        (_: res::ComputingFrame, _: res::FrameSubmitListSubmitted) -> (default res::ComputingFrame);
 
         CreateSurfaceTextureView
         (surface_texture: res::SurfaceTexture) -> (res::BorrowedSurfaceTexture, res::SurfaceTextureView)
         {
-            let view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("surface texture view"),
+                ..wgpu::TextureViewDescriptor::default()
+            });
             OutputValue(surface_texture,view)
         };
 
@@ -77,9 +80,22 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
             )
         };
 
-        SubmitFrameCommandEncoder
-        (queue: ref res::Queue, command_encoder: res::FrameCommandEncoder, _: ref res::SurfaceTextureView) -> (default res::FrameCommandEncoderSubmitted)
-        { queue.submit(std::iter::once(command_encoder.finish())); };
+        CreateFrameSubmitList
+        () -> (default res::FrameSubmitList);
+
+        SubmitFrameSubmitList (
+            queue: ref res::Queue, list: res::FrameSubmitList,
+        ) -> (default res::FrameSubmitListSubmitted) {
+            queue.submit(list);
+        };
+        
+        FinishFrameCommandEncoder (mut list: res::FrameSubmitList, command_encoder: res::FrameCommandEncoder) -> (res::FrameSubmitList) {
+            list.push(command_encoder.finish());
+            OutputValue(list)
+        };
+
+        // Define that FrameSubmitListSubmitted must have happen before SurfaceTexture is destroyed
+        SubmitListBorrowsSurfaceTexture(_: ref res::FrameSubmitListSubmitted, _: ref res::SurfaceTexture) -> ();
 
         PresentSurface
         (queue: ref res::Queue, output: res::SurfaceTexture) -> (default res::SurfacePresented)
