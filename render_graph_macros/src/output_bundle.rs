@@ -8,8 +8,8 @@ use crate::{EntryResource, PseudoStruct, PseudoStructFields, kw};
 
 #[derive(Clone)]
 pub struct Entry {
-    is_default: bool,
-    resource: EntryResource,
+    pub is_default: bool,
+    pub resource: EntryResource,
 }
 
 impl Parse for Entry {
@@ -20,12 +20,6 @@ impl Parse for Entry {
             is_default,
             resource,
         })
-    }
-}
-
-impl PseudoStructFields<Entry> {
-    pub fn value_impl_default(&self) -> bool {
-        self.iter().all(|entry| entry.is_default)
     }
 }
 
@@ -43,14 +37,14 @@ pub fn output_bundle_macro(input: PseudoStruct::<Entry>) -> TokenStream {
             let handle_fields = fields.iter().filter(|field| field.val.resource.needs_dynamic_handle()).map(|field| {
                 let name = &field.name;
                 let ty = field.val.resource.handle_type();
-                quote!{ #name: #ty }
+                quote!{ pub #name: #ty }
             });
             quote!{ { #(#handle_fields,)* } }
         },
         PseudoStructFields::Unnamed(fields) => {
             let handle_fields = fields.iter().filter(|entry| entry.resource.needs_dynamic_handle()).map(|entry| {
                 let ty = entry.resource.handle_type();
-                quote!{ #ty }
+                quote!{ pub #ty }
             });
             quote!{ ( #(#handle_fields,)* ); }
         },

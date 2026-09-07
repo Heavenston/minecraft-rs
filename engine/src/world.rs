@@ -105,6 +105,7 @@ impl Default for World {
 
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable, AsStd140)]
 #[repr(C)]
+#[expect(clippy::module_name_repetitions, reason = "It is probably not in the correct module, as 'World' here has slightly different meaning")]
 pub struct WorldUniform {
     pub view_projection_matrix: Mat4,
 }

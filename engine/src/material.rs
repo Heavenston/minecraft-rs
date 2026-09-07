@@ -36,6 +36,12 @@ impl<'a> RenderGraphWrapper<'a> {
         self.added_nodes.push(handle.to_untyped());
         handle
     }
+
+    pub fn push_node_complete<N: render_graph::GraphNode>(&mut self, node: N, input_bundle: N::InputBundle, output_bundle: N::OutputBundle) -> render_graph::NodeHandle<N> {
+        let handle = self.render_graph.push_node_complete(node, input_bundle, output_bundle);
+        self.added_nodes.push(handle.to_untyped());
+        handle
+    }
 }
 
 pub trait Material: std::any::Any {

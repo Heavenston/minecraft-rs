@@ -169,5 +169,5 @@ pub fn output_bundle(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn node_helper(input: TokenStream) -> TokenStream {
-    node_helper::node_helper_macro(parse_macro_input!(input)).into()
+    node_helper::node_helper_macro(&parse_macro_input!(input)).into()
 }

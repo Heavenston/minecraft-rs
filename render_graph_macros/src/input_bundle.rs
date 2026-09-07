@@ -8,7 +8,7 @@ use syn::{ Token, parse::Parse, parse_quote };
 use crate::{EntryResource, PseudoStruct, PseudoStructFields, kw};
 
 #[derive(Clone)]
-enum EntryKind {
+pub enum EntryKind {
     Borrow,
     Consume,
 }
@@ -16,8 +16,8 @@ enum EntryKind {
 #[derive(Clone)]
 pub struct Entry {
     pub is_ignored: bool,
-    kind: EntryKind,
-    resource: EntryResource,
+    pub kind: EntryKind,
+    pub resource: EntryResource,
 }
 
 impl Entry {
@@ -71,14 +71,14 @@ pub fn input_bundle_macro(input: PseudoStruct<Entry>) -> TokenStream {
             let handle_fields = fields.iter().filter(|field| field.val.resource.needs_dynamic_handle()).map(|field| {
                 let name = &field.name;
                 let ty = field.val.resource.handle_type();
-                quote!{ #name: #ty }
+                quote!{ pub #name: #ty }
             });
             quote!{ { #(#handle_fields,)* } }
         },
         PseudoStructFields::Unnamed(fields) => {
             let handle_fields = fields.iter().filter(|entry| entry.resource.needs_dynamic_handle()).map(|entry| {
                 let ty = entry.resource.handle_type();
-                quote!{ #ty }
+                quote!{ pub #ty }
             });
             quote!{ ( #(#handle_fields,)* ); }
         },
