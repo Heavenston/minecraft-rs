@@ -1,3 +1,5 @@
+#![allow(clippy::all, reason = "fixing errors first")]
+
 mod graph_nodes;
 
 use std::sync::Arc;
@@ -22,6 +24,7 @@ pub mod resources {
 }
 use resources as res;
 
+#[expect(clippy::single_call_fn, reason = "only used when creating graph")]
 fn define_inputs(graph: &mut RenderGraph) {
     graph.define_input::<res::WindowSize>();
     graph.define_input::<res::Device>();
@@ -45,13 +48,13 @@ impl Renderer {
     pub async fn new(display_handle: winit::event_loop::OwnedDisplayHandle, window: Arc<winit::window::Window>) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
-            flags: Default::default(),
-            memory_budget_thresholds: Default::default(),
-            backend_options: Default::default(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            backend_options: wgpu::BackendOptions::default(),
             display: Some(Box::new(display_handle)),
         });
         
-        let surface = instance.create_surface(window.clone()).unwrap();
+        let surface = instance.create_surface(Arc::clone(&window)).unwrap();
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -71,7 +74,7 @@ impl Renderer {
                     max_immediate_size: 128,
                     ..wgpu::Limits::default()
                 },
-                memory_hints: Default::default(),
+                memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
             })
             .await?;
@@ -174,7 +177,7 @@ impl Renderer {
         };
 
         self.render_graph.set_input::<res::SurfaceTexture>(output);
-        let res::FrameFinished(()) = self.render_graph.compute();
+        let () = self.render_graph.compute::<res::FrameFinished>();
 
         Ok(())
     }

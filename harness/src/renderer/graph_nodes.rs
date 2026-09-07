@@ -1,46 +1,22 @@
 use super::resources as res;
 
+#[expect(clippy::single_call_fn, reason = "only called when creating graph")]
 pub(super) fn register(graph: &mut render_graph::RenderGraph) {
-    macro_rules! node {
-        () => {};
-        ($name: ident($($arg:tt: $(ref $marker:vis)?$input:ty),*$(,)?) -> ($($output:tt)*) $body: block;$($rest:tt)*) => {
-            mod ${ concat($name, _module) } {
-                #[allow(unused, reason = "macro-generated")]
-                #[expect(clippy::allow_attributes, reason = "")]
-                use super::*;
-
-                render_graph::input_bundle!(struct Input($($(ref${ ignore($marker) })?$input),*));
-                render_graph::output_bundle!(struct Output($($output)*));
-                pub struct $name;
-                impl render_graph::GraphNode for $name {
-                    type InputBundle = Input;
-                    type OutputBundle = Output;
-                    fn run(&mut self, InputValue($($arg),*): InputValue) -> OutputValue {
-                        $body
-                    }
-                }
-            }
-            use ${ concat($name, _module) }::$name;
-            graph.push_node($name);
-            node!($($rest)*)
-        };
-    }
-
-    node!(
+    node!(in graph;
         BeginFrame
         () -> (res::ComputingFrame)
         { OutputValue(()) };
 
         EndFrame
-        (_: res::ComputingFrame) -> ()
+        ((): res::ComputingFrame) -> ()
         { OutputValue() };
 
         EndFrameMustHavePresented
-        (_: res::ComputingFrame, _: res::SurfacePresented) -> (res::ComputingFrame)
+        ((): res::ComputingFrame, (): res::SurfacePresented) -> (res::ComputingFrame)
         { OutputValue(()) };
 
         EndFrameMustHaveSubmitted
-        (_: res::ComputingFrame, _: res::FrameCommandEncoderSubmitted) -> (res::ComputingFrame)
+        ((): res::ComputingFrame, (): res::FrameCommandEncoderSubmitted) -> (res::ComputingFrame)
         { OutputValue(()) };
 
         CreateSurfaceTextureView

@@ -179,7 +179,7 @@ pub fn input_bundle_macro(input: PseudoStruct<Entry>) -> TokenStream {
     quote! {
         #struct_derives
         #visibility struct #struct_name #struct_fields
-        struct #value_struct_name #value_struct_gen_params #value_struct_fields
+        #visibility struct #value_struct_name #value_struct_gen_params #value_struct_fields
 
         #[automatically_derived]
         impl #render_graph::ResourceInputBundle for #struct_name {

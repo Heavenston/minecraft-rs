@@ -153,7 +153,7 @@ pub fn output_bundle_macro(input: proc_macro::TokenStream) -> proc_macro::TokenS
         #struct_derives
         #visibility struct #struct_name #struct_fields
         #value_struct_derives
-        struct #value_struct_name #value_struct_fields
+        #visibility struct #value_struct_name #value_struct_fields
 
         #[automatically_derived]
         impl #render_graph::ResourceOutputBundle for #struct_name {

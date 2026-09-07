@@ -13,6 +13,7 @@ pub struct WinitLoopHandler<A> {
 }
 
 impl<A: App> WinitLoopHandler<A> {
+    #[expect(clippy::single_call_fn, reason = "only for starting engine")]
     pub fn new(app: A, #[cfg(target_arch = "wasm32")] event_loop: &EventLoop<State>) -> Self {
         #[cfg(target_arch = "wasm32")]
         let proxy = Some(event_loop.create_proxy());
@@ -28,7 +29,8 @@ impl<A: App> WinitLoopHandler<A> {
 
 impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        #[allow(unused_mut)]
+        #[expect(clippy::allow_attributes, reason = "only for wasm32")]
+        #[allow(unused_mut, reason = "Mut required for wasm32")]
         let mut window_attributes = Window::default_attributes();
 
         #[cfg(target_arch = "wasm32")]
@@ -72,7 +74,8 @@ impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
         }
     }
 
-    #[allow(unused_mut)]
+    #[expect(clippy::allow_attributes, reason = "only for wasm32")]
+    #[allow(unused_mut, reason = "Mut required for wasm32")]
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: Renderer) {
         // This is where proxy.send_event() ends up
         #[cfg(target_arch = "wasm32")]
@@ -93,11 +96,10 @@ impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        let renderer = match &mut self.renderer {
-            Some(renderer) => renderer,
-            None => return,
-        };
+        let Some(renderer) = &mut self.renderer
+        else { return };
 
+        #[expect(clippy::wildcard_enum_match_arm, reason = "Not catching most variants is expected")]
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => renderer.resize(size.width, size.height),
@@ -106,7 +108,7 @@ impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
                     inputs_state: &mut self.inputs_state,
                     renderer,
                 }) {
-                    Ok(_) => {}
+                    Ok(()) => {}
                     Err(e) => {
                         // Log the error and exit gracefully
                         tracing::error!("{e}");
@@ -115,7 +117,7 @@ impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
                 }
                 self.inputs_state.clear_just_pressed_keys();
                 match renderer.render() {
-                    Ok(_) => {}
+                    Ok(()) => {}
                     Err(e) => {
                         // Log the error and exit gracefully
                         tracing::error!("{e}");
