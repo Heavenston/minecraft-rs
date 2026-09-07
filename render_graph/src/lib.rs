@@ -11,7 +11,7 @@ mod tests;
 mod label;
 pub use label::Label;
 
-use std::{any::{ Any, TypeId }, borrow::Cow, collections::{HashMap, HashSet, hash_map}, marker::PhantomData, ops::{BitOr, Deref as _}};
+use std::{ any::{ Any, TypeId }, borrow::Cow, collections::{HashMap, HashSet, hash_map}, marker::PhantomData, ops::BitOr };
 use static_assertions as sa;
 use genmap::{AssumeAlive, GenMap, Handle};
 use itertools::Itertools as _;
@@ -180,7 +180,7 @@ impl ResourceInfoProvider for ResourceManager<'_> {
                 label: Label::TypeName(std::any::type_name::<R>()),
                 storage: TypeId::of::<R::Resource>(),
                 config: R::config(),
-                value: None,
+                value: Box::new(None::<R::Resource>),
             });
 
             ResourceTypeInfo { handle }
@@ -194,34 +194,34 @@ impl ResourceInfoProvider for ResourceManager<'_> {
 
 impl ResourceGatherer for ResourceManager<'_> {
     fn consume<R: Any>(&mut self, handle: ResourceHandle<R>) -> R {
-        *self.consume_untyped(handle.to_untyped())
-            .downcast().expect("Stored resource of invalid type")
+        self.resources.get_mut(handle.inner).expect("valid resource handle")
+            .get_mut().take().expect("resource present")
     }
 
     fn consume_untyped(&mut self, handle: UntypedResourceHandle) -> Box<dyn Any> {
-        self.resources.get_mut(handle.0).expect("Invalid resource handle")
-            .value.take().expect("Missing resource")
+        self.resources.get_mut(handle.0).expect("valid resource handle")
+            .value.dyn_take().expect("resource present")
     }
 
     fn borrow<R: Any>(&self, handle: ResourceHandle<R>) -> &R {
-        self.borrow_untyped(handle.to_untyped())
-            .downcast_ref().expect("Stored resource of invalid type")
+        self.resources.get(handle.inner).expect("valid resource handle")
+            .get().as_ref().expect("resource present")
     }
 
     fn borrow_untyped(&self, handle: UntypedResourceHandle) -> &dyn Any {
-        self.resources.get(handle.0).expect("Invalid resource handle")
-            .value.as_ref().expect("Missing resource")
-            .deref()
+        self.resources.get(handle.0).expect("valid resource handle")
+            .value.dyn_as_ref().expect("resource present")
     }
 }
 
 impl ResourceStorer for ResourceManager<'_> {
     fn store<R: Any>(&mut self, handle: ResourceHandle<R>, value: R) {
-        self.store_untyped(handle.to_untyped(), Box::new(value));
+        *self.resources.get_mut(handle.inner).expect("valid resource handle").get_mut() = Some(value);
     }
 
     fn store_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>) {
-        self.resources.get_mut(handle.0).expect("Invalid resource handle").checked_insert(value);
+        self.resources.get_mut(handle.0).expect("valid resource handle")
+            .value.dyn_insert(value);
     }
 }
 
@@ -258,17 +258,50 @@ impl NodeData {
     }
 }
 
+trait DynOption: Any {
+    fn dyn_is_some(&self) -> bool;
+    fn dyn_insert(&mut self, other: Box<dyn Any>);
+    fn dyn_take(&mut self) -> Option<Box<dyn Any>>;
+    fn dyn_as_ref(&self) -> Option<&dyn Any>;
+    fn dyn_clear(&mut self);
+}
+impl<T: Any> DynOption for Option<T> {
+    fn dyn_is_some(&self) -> bool {
+        self.is_some()
+    }
+
+    fn dyn_insert(&mut self, other: Box<dyn Any>) {
+        *self = Some(*other.downcast().expect("correct type"));
+    }
+
+    fn dyn_take(&mut self) -> Option<Box<dyn Any>> {
+        self.take().map(|val| Box::new(val) as Box<dyn Any>)
+    }
+
+    fn dyn_as_ref(&self) -> Option<&dyn Any> {
+        self.as_ref().map(|p| p as &dyn Any)
+    }
+
+    fn dyn_clear(&mut self) {
+        *self = None;
+    }
+}
+
 struct ResourceData {
     label: Label<'static>,
     storage: TypeId,
     config: ResourceConfig,
-    value: Option<Box<dyn Any>>,
+    value: Box<dyn DynOption>,
 }
 
 impl ResourceData {
-    fn checked_insert(&mut self, value: Box<dyn Any>) {
-        debug_assert_eq!(self.storage, value.deref().type_id(), "given value type does not match expected storage type of resource");
-        self.value = Some(value);
+    fn get<T: 'static>(&self) -> Option<&T> {
+        (self.value.as_ref() as &dyn Any).downcast_ref::<Option<T>>().expect("resource value slot has correct type").as_ref()
+    }
+
+    fn get_mut<T: 'static>(&mut self) -> &mut Option<T> {
+        assert_eq!(self.value.as_ref().type_id(), TypeId::of::<Option<T>>());
+        (self.value.as_mut() as &mut dyn Any).downcast_mut::<Option<T>>().expect("resource value slot has correct type")
     }
 }
 
@@ -440,17 +473,13 @@ impl RenderGraph {
     }
 
     pub fn create_resource<S: Any>(&mut self, label: Cow<'static, str>, config: ResourceConfig) -> ResourceHandle<S> {
-        ResourceHandle { node: PhantomData, inner: self.create_resource_untyped(label, TypeId::of::<S>(), config).0 }
-    }
-
-    pub fn create_resource_untyped(&mut self, label: Cow<'static, str>, storage: TypeId, config: ResourceConfig) -> UntypedResourceHandle {
         let handle = self.resources.insert(ResourceData {
             label: Label::Other(label),
-            storage,
+            storage: TypeId::of::<S>(),
             config,
-            value: None,
+            value: Box::new(None::<S>),
         });
-        UntypedResourceHandle(handle)
+        ResourceHandle { node: PhantomData, inner: handle }
     }
 
     pub fn define_input<R: GraphResourceId>(&mut self) {
@@ -465,15 +494,18 @@ impl RenderGraph {
 
     pub fn set_input<R: GraphResourceId>(&mut self, val: R::Resource) {
         let res = self.resource_from_type::<R>();
-        self.set_resource_input(res, val);
+        self.set_resource_input::<R::Resource>(res, val);
     }
 
     pub fn set_resource_input<R: Any>(&mut self, handle: ResourceHandle<R>, value: R) {
-        self.set_resource_input_untyped(handle.to_untyped(), Box::new(value));
+        *self.resources.get_mut(handle.inner).expect("Invalid resource handle").get_mut() = Some(value);
+        if self.inputs.insert(handle.into()) {
+            self.compiled = None;
+        }
     }
 
     pub fn set_resource_input_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>) {
-        self.resources.get_mut(handle.0).expect("Invalid resource handle").checked_insert(value);
+        self.resources.get_mut(handle.0).expect("Invalid resource handle").value.dyn_insert(value);
         if self.inputs.insert(handle.into()) {
             self.compiled = None;
         }
@@ -561,9 +593,22 @@ impl RenderGraph {
         }
         for resource in &mut self.resources {
             if !resource.config.permanent {
-                resource.value = None;
+                resource.value.dyn_clear();
             }
         }
+    }
+
+    fn compute_inner(&mut self, resource: UntypedResourceHandle) {
+        assert!(self.resources.has(resource.0), "Invalid resource handle");
+
+        let mut compiled = self.compiled.take().unwrap_or_else(|| CompiledGraph::new(self));
+        let result = compiled.compute(self, resource.into());
+
+        assert!(result.required_inputs.iter().all(|&p| self.resources.get(AssumeAlive(p.0)).value.dyn_is_some()), "Cannot run, missing inputs!");
+        self.execute(&result.steps);
+        compiled.apply_compute_result(self, &result);
+        
+        self.compiled = Some(compiled);
     }
 
     pub fn compute<T: GraphResourceId>(&mut self) -> T::Resource {
@@ -572,22 +617,13 @@ impl RenderGraph {
     }
 
     pub fn compute_resource<T: 'static>(&mut self, resource: ResourceHandle<T>) -> T {
-        *self.compute_untyped(resource.to_untyped()).downcast().expect("correct type inside storage")
+        self.compute_inner(resource.to_untyped());
+        self.resources.get_mut(resource.inner).expect("valid resource handle").get_mut().take().expect("value was created during compute")
     }
 
     pub fn compute_untyped(&mut self, resource: UntypedResourceHandle) -> Box<dyn Any> {
-        assert!(self.resources.has(resource.0), "Invalid resource handle");
-
-        let mut compiled = self.compiled.take().unwrap_or_else(|| CompiledGraph::new(self));
-        let result = compiled.compute(self, resource.into());
-
-        assert!(result.required_inputs.iter().all(|&p| self.resources.get(AssumeAlive(p.0)).value.is_some()), "Cannot run, missing inputs!");
-        self.execute(&result.steps);
-        compiled.apply_compute_result(self, &result);
-        
-        self.compiled = Some(compiled);
-
-        self.resources.get_mut(resource.0).expect("valid resource handle").value.take().expect("value was created during compute")
+        self.compute_inner(resource);
+        self.resources.get_mut(resource.0).expect("valid resource handle").value.dyn_take().expect("value was created during compute")
     }
 
     fn get_simplified_node_labels(&self) -> HashMap<UncheckedNodeHandle, String> {

@@ -10,13 +10,13 @@ const SHADER_CODE: &str = include_str!("rotating.wgsl");
 #[derive(Debug, Clone)]
 pub struct RotatingConfig {
     pub color: Vec4,
-    pub speed: f64,
+    pub speed: f32,
 }
 
 #[derive(AsStd140)]
 struct Immediates {
     color: Vec4,
-    speed: f64,
+    speed: f32,
 }
 
 pub struct Rotating {

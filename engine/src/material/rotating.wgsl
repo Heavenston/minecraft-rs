@@ -1,3 +1,10 @@
+struct Immediates {
+    color: vec4f,
+    speed: f32,
+};
+
+var<immediate> immediates: Immediates;
+
 @vertex fn vs(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
     let pos = array(
         vec2f( 0.0,  0.5),  // top center
@@ -9,5 +16,5 @@
 }
 
 @fragment fn fs() -> @location(0) vec4f {
-    return vec4f(1.0, 0.0, 0.0, 1.0);
+    return immediates.color;
 }

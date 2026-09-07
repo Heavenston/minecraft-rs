@@ -26,10 +26,6 @@ impl<'a> RenderGraphWrapper<'a> {
         self.render_graph.create_resource::<S>(label.into(), config)
     }
 
-    pub fn create_resource_untyped(&mut self, label: impl Into<Cow<'static, str>>, storage: std::any::TypeId, config: render_graph::ResourceConfig) -> render_graph::UntypedResourceHandle {
-        self.render_graph.create_resource_untyped(label.into(), storage, config)
-    }
-
     pub fn push_node<N: render_graph::GraphNode>(&mut self, node: N) -> render_graph::NodeHandle<N>
         where N::InputBundle: Default,
               N::OutputBundle: Default,
