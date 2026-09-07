@@ -351,6 +351,20 @@ impl RenderGraph {
         }.resource_from_type::<R>()
     }
 
+    pub fn create_resource<S: Any>(&mut self, is_permanent: bool) -> ResourceHandle<S> {
+        ResourceHandle { node: PhantomData, inner: self.create_resource_untyped(std::any::type_name::<S>(), TypeId::of::<S>(), is_permanent).0 }
+    }
+
+    pub fn create_resource_untyped(&mut self, label: &'static str, storage: TypeId, is_permanent: bool) -> UntypedResourceHandle {
+        let handle = self.resources.insert(ResourceData {
+            label,
+            storage,
+            is_permanent,
+            value: None,
+        });
+        UntypedResourceHandle(handle)
+    }
+
     pub fn define_input<R: GraphResourceId>(&mut self) {
         let res = self.resource_from_type::<R>();
         self.define_resource_input(res.to_untyped());
