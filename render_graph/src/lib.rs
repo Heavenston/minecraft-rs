@@ -11,7 +11,7 @@ mod tests;
 mod label;
 pub use label::Label;
 
-use std::{ any::{ Any, TypeId }, borrow::Cow, collections::{HashMap, HashSet, hash_map}, marker::PhantomData, ops::BitOr };
+use std::{ any::{ Any, TypeId }, borrow::Cow, collections::{HashMap, HashSet, hash_map}, marker::PhantomData, ops::BitOr, sync::atomic::AtomicPtr };
 use static_assertions as sa;
 use genmap::{AssumeAlive, GenMap, Handle};
 use itertools::Itertools as _;
@@ -611,6 +611,18 @@ impl RenderGraph {
 
         let mut compiled = self.compiled.take().unwrap_or_else(|| CompiledGraph::new(self));
         let result = compiled.compute(self, resource.into());
+
+        if let Some(path) = option_env!("DEBUG_GRAPH_COMPUTE_PATH") {
+            static PREVIOUS_WRITEN_RESULT: AtomicPtr<compiler::ComputeResult> = AtomicPtr::new(std::ptr::null_mut());
+            let new = std::ptr::from_ref(result.as_ref()).cast_mut();
+            let previous = PREVIOUS_WRITEN_RESULT.swap(new, std::sync::atomic::Ordering::Relaxed);
+            if previous != new {
+                let mut str = String::new();
+                self.write_to_dot(&mut str, Some(&result.steps)).unwrap();
+                std::fs::write(path, str).unwrap();
+                tracing::debug!(output = path, "Stored compute() dot graph");
+            }
+        }
 
         let missing_inputs = result.required_inputs.iter()
             .filter(|&p| !self.resources.get(AssumeAlive(p.0)).value.dyn_is_some())
