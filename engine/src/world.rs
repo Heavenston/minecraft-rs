@@ -83,10 +83,15 @@ impl World {
             },
         });
 
-        for m in self.materials.values_mut().iter_mut().filter(|m| m.registered_nodes.is_none()) {
-            let mut wrapper = RenderGraphWrapper::new(render_graph);
-            m.material.register(&mut wrapper);
-            m.registered_nodes = Some(wrapper.finish());
+        for m in self.materials.values_mut().iter_mut() {
+            if m.registered_nodes.is_none() {
+                let mut wrapper = RenderGraphWrapper::new(render_graph);
+                m.material.register(&mut wrapper);
+                m.registered_nodes = Some(wrapper.finish());
+            }
+            else {
+                m.material.update(render_graph);
+            }
         }
     }
 }

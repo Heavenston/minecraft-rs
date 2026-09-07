@@ -92,7 +92,8 @@ pub fn register(graph: &mut RenderGraph) {
             }.as_std140();
             let bytes = data.as_bytes();
 
-            staging_belt.write().write_buffer(&mut command_encoder, world_uniform_buffer, 0, NonZero::new(bytes.len() as u64).unwrap());
+            staging_belt.write().write_buffer(&mut command_encoder, world_uniform_buffer, 0, NonZero::new(bytes.len() as u64).unwrap())
+                .copy_from_slice(bytes);
     
             OutputValue(command_encoder)
         };

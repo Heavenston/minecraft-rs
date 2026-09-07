@@ -1,9 +1,9 @@
-struct Immediates {
+struct Uniform {
     color: vec4f,
     speed: f32,
 };
 
-var<immediate> immediates: Immediates;
+@group(1) @binding(0) var<uniform> uni: Uniform;
 
 @vertex fn vs(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
     let pos = array(
@@ -16,5 +16,5 @@ var<immediate> immediates: Immediates;
 }
 
 @fragment fn fs() -> @location(0) vec4f {
-    return immediates.color;
+    return uni.color;
 }

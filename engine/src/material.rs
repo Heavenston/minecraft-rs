@@ -56,4 +56,7 @@ impl<'a> RenderGraphWrapper<'a> {
 
 pub trait Material: std::any::Any {
     fn register(&mut self, render_graph: &mut RenderGraphWrapper<'_>);
+    fn update(&mut self, render_graph: &mut RenderGraph) {
+        let _ = render_graph;
+    }
 }

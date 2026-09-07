@@ -502,12 +502,20 @@ impl RenderGraph {
         if self.inputs.insert(handle.into()) {
             self.compiled = None;
         }
+        if self.is_resource_permanent(handle.to_untyped()) && let Some(mut compiled) = self.compiled.take() {
+            compiled.mark_resource_dirty(self, handle.into());
+            self.compiled = Some(compiled);
+        }
     }
 
     pub fn set_resource_input_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>) {
         self.resources.get_mut(handle.0).expect("Invalid resource handle").value.dyn_insert(value);
         if self.inputs.insert(handle.into()) {
             self.compiled = None;
+        }
+        if self.is_resource_permanent(handle) && let Some(mut compiled) = self.compiled.take() {
+            compiled.mark_resource_dirty(self, handle.into());
+            self.compiled = Some(compiled);
         }
     }
 
