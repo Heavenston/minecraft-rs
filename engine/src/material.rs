@@ -20,7 +20,10 @@ impl<'a> RenderGraphWrapper<'a> {
         self.added_nodes
     }
 
-    pub fn push_node<N: render_graph::GraphNode>(&mut self, node: N) -> render_graph::NodeHandle<N>  {
+    pub fn push_node<N: render_graph::GraphNode>(&mut self, node: N) -> render_graph::NodeHandle<N>
+        where N::InputBundle: Default,
+              N::OutputBundle: Default,
+    {
         let handle = self.render_graph.push_node(node);
         self.added_nodes.push(handle.to_untyped());
         handle

@@ -1,6 +1,3 @@
-#![feature(macro_metavar_expr_concat)]
-#![feature(macro_metavar_expr)]
-
 mod render_graph_nodes;
 pub mod world;
 pub mod material;
@@ -46,7 +43,7 @@ impl<A: App> harness::App for HarnessApp<A> {
 
         self.app.resume(&mut ResumeCtx {
             renderer,
-            world: &mut *self.world.write(),
+            world: &mut self.world.write(),
         })
     }
 
@@ -64,7 +61,7 @@ impl<A: App> harness::App for HarnessApp<A> {
 pub fn start<A: App>(app: A) -> anyhow::Result<()> {
     harness::start(HarnessApp {
         app,
-        world: Default::default(),
+        world: Arc::<RwLock<World>>::default(),
     })?;
     Ok(())
 }

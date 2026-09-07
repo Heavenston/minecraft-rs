@@ -15,8 +15,7 @@ pub struct RotatingConfig {
     pub speed: f64,
 }
 
-pub struct Rotating {
-}
+pub struct Rotating;
 
 impl Rotating {
     pub fn new(_ctx: &mut ResumeCtx<'_>, _data: RotatingConfig) -> Self {
@@ -48,9 +47,9 @@ impl Material for Rotating {
             (device: ref render_res::Device, shader_module: ref ShaderModule, render_pipeline_layout: ref RenderPipelineLayout) -> (RenderPipeline) {
                 OutputValue(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("Rotating pipeline"),
-                    layout: Some(&render_pipeline_layout),
+                    layout: Some(render_pipeline_layout),
                     vertex: wgpu::VertexState {
-                        module: &shader_module,
+                        module: shader_module,
                         entry_point: None,
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                         buffers: &[],
@@ -59,7 +58,7 @@ impl Material for Rotating {
                     depth_stencil: None,
                     multisample: wgpu::MultisampleState::default(),
                     fragment: Some(wgpu::FragmentState {
-                        module: &shader_module,
+                        module: shader_module,
                         entry_point: None,
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
                         targets: &[
@@ -77,7 +76,7 @@ impl Material for Rotating {
 
             Draw
             (mut render_pass: engine_graph::RenderPass, render_pipeline: ref RenderPipeline,) -> (engine_graph::RenderPass) {
-                render_pass.set_pipeline(&render_pipeline);
+                render_pass.set_pipeline(render_pipeline);
                 render_pass.draw(0..3, 0..1);
                 OutputValue(render_pass)
             };
