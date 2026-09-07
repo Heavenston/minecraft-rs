@@ -1,12 +1,13 @@
 use std::iter::zip;
 
-use proc_macro2::{ Span };
+use proc_macro2::TokenStream;
 use quote::{ format_ident, quote };
-use syn::{ Ident, parse::Parse, parse_macro_input };
+use syn::parse::Parse;
 
 use crate::{EntryResource, PseudoStruct, PseudoStructFields, kw};
 
-struct Entry {
+#[derive(Clone)]
+pub struct Entry {
     is_default: bool,
     resource: EntryResource,
 }
@@ -22,21 +23,20 @@ impl Parse for Entry {
     }
 }
 
-#[expect(clippy::single_call_fn, reason = "only used inside lib.rs macro function")]
-pub fn output_bundle_macro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let render_graph = match proc_macro_crate::crate_name("render_graph").expect("render_graph is present in Cargo.toml") {
-        proc_macro_crate::FoundCrate::Itself => quote! { crate },
-        proc_macro_crate::FoundCrate::Name(name) => {
-            let ident = Ident::new(&name, Span::call_site());
-            quote! { #ident }
-        }
-    };
+impl PseudoStructFields<Entry> {
+    pub fn value_impl_default(&self) -> bool {
+        self.iter().all(|entry| entry.is_default)
+    }
+}
+
+pub fn output_bundle_macro(input: PseudoStruct::<Entry>) -> TokenStream {
+    let render_graph = crate::get_crate_path();
 
     let PseudoStruct::<Entry> {
         visibility,
         name: struct_name,
         fields,
-    } = parse_macro_input!(input);
+    } = input;
 
     let struct_fields = match &fields {
         PseudoStructFields::Named(fields) => {
@@ -168,5 +168,5 @@ pub fn output_bundle_macro(input: proc_macro::TokenStream) -> proc_macro::TokenS
                 #(#values_store)*
             }
         }
-    }.into()
+    }
 }

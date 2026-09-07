@@ -1,3 +1,4 @@
+#![feature(macro_metavar_expr_concat)]
 #![feature(macro_metavar_expr)]
 
 mod render_graph_nodes;

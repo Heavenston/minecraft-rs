@@ -5,6 +5,7 @@ use quote::quote;
 
 mod input_bundle;
 mod output_bundle;
+mod node_helper;
 
 fn get_crate_path() -> proc_macro2::TokenStream {
     if cfg!(test) {
@@ -25,6 +26,7 @@ mod kw {
     syn::custom_keyword!(default);
 }
 
+#[derive(Clone)]
 enum EntryResource {
     FromType(syn::Type),
     Dynamic(syn::Type),
@@ -82,6 +84,7 @@ impl Parse for EntryResource {
     }
 }
 
+#[derive(Clone)]
 struct PseudoStructNamedField<E> {
     name: Ident,
     val: E,
@@ -99,6 +102,7 @@ impl<E: Parse> Parse for PseudoStructNamedField<E> {
     }
 }
 
+#[derive(Clone)]
 enum PseudoStructFields<E> {
     Named(Vec<PseudoStructNamedField<E>>),
     Unnamed(Vec<E>),
@@ -117,6 +121,22 @@ impl<E> PseudoStructFields<E> {
     }
 }
 
+impl<E: Parse> Parse for PseudoStructFields<E> {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        Ok(if input.peek(syn::token::Brace) {
+            let content;
+            braced!(content in input);
+            Self::Named(content.parse_terminated(PseudoStructNamedField::parse, Token![,])?.into_iter().collect())
+        } else if input.peek(syn::token::Paren) {
+            let content;
+            parenthesized!(content in input);
+            Self::Unnamed(content.parse_terminated(E::parse, Token![,])?.into_iter().collect())
+        } else {
+            Self::Unit
+        })
+    }
+}
+
 struct PseudoStruct<E> {
     visibility: Visibility,
     name: Ident,
@@ -128,17 +148,7 @@ impl<E: Parse> Parse for PseudoStruct<E> {
         let visibility = input.parse()?;
         input.parse::<Token![struct]>()?;
         let name = input.parse()?;
-        let fields = if input.peek(syn::token::Brace) {
-            let content;
-            braced!(content in input);
-            PseudoStructFields::Named(content.parse_terminated(PseudoStructNamedField::parse, Token![,])?.into_iter().collect())
-        } else if input.peek(syn::token::Paren) {
-            let content;
-            parenthesized!(content in input);
-            PseudoStructFields::Unnamed(content.parse_terminated(E::parse, Token![,])?.into_iter().collect())
-        } else {
-            PseudoStructFields::Unit
-        };
+        let fields = input.parse()?;
         Ok(Self {
             visibility,
             name,
@@ -154,5 +164,10 @@ pub fn input_bundle(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn output_bundle(input: TokenStream) -> TokenStream {
-    output_bundle::output_bundle_macro(input)
+    output_bundle::output_bundle_macro(parse_macro_input!(input)).into()
+}
+
+#[proc_macro]
+pub fn node_helper(input: TokenStream) -> TokenStream {
+    node_helper::node_helper_macro(parse_macro_input!(input)).into()
 }

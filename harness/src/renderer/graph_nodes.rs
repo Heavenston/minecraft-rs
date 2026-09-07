@@ -2,22 +2,17 @@ use super::resources as res;
 
 #[expect(clippy::single_call_fn, reason = "only called when creating graph")]
 pub(super) fn register(graph: &mut render_graph::RenderGraph) {
-    node!(in graph;
+    render_graph::node_helper!(into graph;
         BeginFrame
-        () -> (res::ComputingFrame)
-        { OutputValue(()) };
-
+        () -> (default res::ComputingFrame);
         EndFrame
-        ((): res::ComputingFrame) -> ()
-        { OutputValue() };
+        (_: res::ComputingFrame) -> ();
 
         EndFrameMustHavePresented
-        ((): res::ComputingFrame, (): res::SurfacePresented) -> (res::ComputingFrame)
-        { OutputValue(()) };
+        (_: res::ComputingFrame, _: res::SurfacePresented) -> (default res::ComputingFrame);
 
         EndFrameMustHaveSubmitted
-        ((): res::ComputingFrame, (): res::FrameCommandEncoderSubmitted) -> (res::ComputingFrame)
-        { OutputValue(()) };
+        (_: res::ComputingFrame, _: res::FrameCommandEncoderSubmitted) -> (default res::ComputingFrame);
 
         CreateSurfaceTextureView
         (surface_texture: res::SurfaceTexture) -> (res::BorrowedSurfaceTexture, res::SurfaceTextureView)
@@ -38,18 +33,12 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
         };
 
         SubmitFrameCommandEncoder
-        (queue: ref res::Queue, command_encoder: res::FrameCommandEncoder, _: ref res::SurfaceTextureView) -> (res::FrameCommandEncoderSubmitted)
-        {
-            queue.submit(std::iter::once(command_encoder.finish()));
-            OutputValue(())
-        };
+        (queue: ref res::Queue, command_encoder: res::FrameCommandEncoder, _: ref res::SurfaceTextureView) -> (default res::FrameCommandEncoderSubmitted)
+        { queue.submit(std::iter::once(command_encoder.finish())); };
 
         PresentSurface
-        (queue: ref res::Queue, output: res::SurfaceTexture) -> (res::SurfacePresented)
-        {
-            queue.present(output);
-            OutputValue(())
-        };
+        (queue: ref res::Queue, output: res::SurfaceTexture) -> (default res::SurfacePresented)
+        { queue.present(output); };
     );
 }
 

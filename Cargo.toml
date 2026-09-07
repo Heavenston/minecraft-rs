@@ -65,3 +65,4 @@ too_many_lines = "allow"
 items_after_statements = "allow"
 missing_const_for_fn = "allow"
 iter_on_empty_collections = "allow" # False positives
+missing_errors_doc = "allow"

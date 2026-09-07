@@ -13,7 +13,7 @@ use static_assertions as sa;
 use genmap::{AssumeAlive, GenMap, Handle};
 use itertools::Itertools as _;
 
-pub use render_graph_macros::{ input_bundle, output_bundle };
+pub use render_graph_macros::{ input_bundle, output_bundle, node_helper };
 
 use crate::compiler::CompiledGraph;
 

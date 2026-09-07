@@ -7,13 +7,15 @@ use syn::{ Token, parse::Parse, parse_quote };
 
 use crate::{EntryResource, PseudoStruct, PseudoStructFields, kw};
 
+#[derive(Clone)]
 enum EntryKind {
     Borrow,
     Consume,
 }
 
+#[derive(Clone)]
 pub struct Entry {
-    is_ignored: bool,
+    pub is_ignored: bool,
     kind: EntryKind,
     resource: EntryResource,
 }
@@ -26,11 +28,8 @@ impl Entry {
             EntryKind::Consume => self.resource.value_type(None),
         }
     }
-}
 
-impl Parse for Entry {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let is_ignored = if input.peek(kw::ignore) { input.parse::<kw::ignore>()?; true } else { false };
+    pub fn parse_no_ignore(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let kind = if input.peek(Token![ref]) {
             input.parse::<Token![ref]>()?;
             EntryKind::Borrow
@@ -40,9 +39,20 @@ impl Parse for Entry {
         let resource = input.parse()?;
 
         Ok(Self {
-            is_ignored,
+            is_ignored: false,
             kind,
             resource,
+        })
+    }
+}
+
+impl Parse for Entry {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let is_ignored = if input.peek(kw::ignore) { input.parse::<kw::ignore>()?; true } else { false };
+
+        Ok(Self {
+            is_ignored,
+            ..Self::parse_no_ignore(input)?
         })
     }
 }
