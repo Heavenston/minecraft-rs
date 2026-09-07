@@ -351,6 +351,16 @@ impl RenderGraph {
         }.resource_from_type::<R>()
     }
 
+    pub fn define_input<R: GraphResourceId>(&mut self) {
+        let res = self.resource_from_type::<R>();
+        self.define_resource_input(res.to_untyped());
+    }
+
+    pub fn define_resource_input(&mut self, handle: UntypedResourceHandle) {
+        assert!(self.resources.has(handle.0), "Invalid resource handle");
+        self.inputs.insert(handle.into());
+    }
+
     pub fn set_input<R: GraphResourceId>(&mut self, val: R::Resource) {
         let res = self.resource_from_type::<R>();
         self.set_resource_input(res, val);
@@ -447,11 +457,18 @@ impl RenderGraph {
         }
     }
 
-    pub fn compute<T: 'static>(&mut self, resource: ResourceHandle<T>) -> T {
+    pub fn compute<T: GraphResourceId>(&mut self) -> T::Resource {
+        let resource = self.resource_from_type::<T>();
+        self.compute_resource(resource)
+    }
+
+    pub fn compute_resource<T: 'static>(&mut self, resource: ResourceHandle<T>) -> T {
         *self.compute_untyped(resource.to_untyped()).downcast().expect("correct type inside storage")
     }
 
     pub fn compute_untyped(&mut self, resource: UntypedResourceHandle) -> Box<dyn Any> {
+        assert!(self.resources.has(resource.0), "Invalid resource handle");
+
         let mut compiled = self.compiled.take().unwrap_or_else(|| CompiledGraph::new(self));
         let result = compiled.compute(self, resource.into());
 
