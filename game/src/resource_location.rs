@@ -14,7 +14,7 @@ const fn is_valid_char(b: char) -> bool {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ResourceLocation {
     string: Cow<'static, str>,
     colon: usize,
@@ -101,6 +101,12 @@ impl ResourceLocation {
 
     pub fn as_str(&self) -> &str {
         &self.string
+    }
+}
+
+impl std::fmt::Debug for ResourceLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_str().fmt(f)
     }
 }
 

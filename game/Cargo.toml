@@ -13,6 +13,8 @@ tracing = { workspace = true }
 itertools = { workspace = true }
 tracing-subscriber = "0.3.23"
 ordermap = "1.2.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 
 [lints]
 clippy.all = "allow"

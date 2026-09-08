@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![feature(try_blocks)]
 
 use anyhow::Result;
 use engine::{wgpu, world::MaterialHandle};
@@ -6,6 +7,8 @@ use glam::Vec4;
 
 mod chunk;
 mod resource_location;
+
+mod data_extractor;
 
 struct App {
     vsync: bool,
@@ -57,8 +60,14 @@ impl engine::App for App {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    engine::start(App {
-        vsync: true,
-        material: None,
-    })
+    data_extractor::run();
+
+    if false {
+        engine::start(App {
+            vsync: true,
+            material: None,
+        })?;
+    }
+
+    Ok(())
 }
