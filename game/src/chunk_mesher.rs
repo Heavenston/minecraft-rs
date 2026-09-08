@@ -1,6 +1,6 @@
 use static_assertions as ca;
 
-use crate::{chunk::{CHUNK_SIZE, Chunk}, resource_location::ResourceLocation};
+use crate::{chunk::{CHUNK_SIZE, Chunk}, resource_location::ResourceLocation, utils::CardinalDirection};
 
 ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
@@ -15,21 +15,12 @@ const CHUNK_TEXTURE_BITS: u32 = FaceInstanceData::BITS - CHUNK_OFFSET_BITS;
 ca::const_assert!(CHUNK_TEXTURE_BITS > 0);
 const CHUNK_TEXTURE_COUNT: u32 = 2u32.pow(CHUNK_TEXTURE_BITS);
 
-pub enum ChunkSubMeshKind {
-    PosX,
-    NegX,
-    PosY,
-    NegY,
-    PosZ,
-    NegZ,
-}
-
 pub struct ChunkTexture {
     pub id: ResourceLocation,
 }
 
 pub struct ChunkSubMesh {
-    pub kind: ChunkSubMeshKind,
+    pub face: CardinalDirection,
     pub textures: [ChunkTexture; CHUNK_TEXTURE_COUNT as usize],
     pub instances: Box<[FaceInstanceData]>,
 }
