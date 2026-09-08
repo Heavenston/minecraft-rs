@@ -22,6 +22,8 @@ graph_resource!(pub struct BeforeRenderPass(pub ()));
 graph_resource!(pub struct RenderPass(pub wgpu::RenderPass<'static>));
 graph_resource!(pub struct RenderPassCommandEncoder(pub wgpu::CommandEncoder));
 
+graph_resource!(pub struct DepthBuffer(pub wgpu::Texture); permanent);
+
 graph_resource!(pub struct StagingBelt(pub RwLock<wgpu::util::StagingBelt>); permanent);
 graph_resource!(pub struct UsingStagingBelt(pub ()));
 
@@ -99,8 +101,30 @@ pub(crate) fn register(graph: &mut RenderGraph) {
             OutputValue(command_encoder)
         };
 
+        CreateDepthBuffer(
+            device: ref render_res::Device,
+            &window_size: ref render_res::WindowSize,
+        ) -> (DepthBuffer) {
+            OutputValue(device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("depth buffer"),
+                size: wgpu::Extent3d {
+                    width: window_size.0.max(1),
+                    height: window_size.1.max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TRANSIENT_ATTACHMENT,
+                view_formats: &[],
+            }))
+        };
+
         StartRenderPass(
             config: RenderPassConfigResource,
+
+            depth_buffer: ref DepthBuffer,
 
             mut command_encoder: render_res::FrameCommandEncoder,
             world_bind_group: ref WorldBindGroup,
@@ -116,7 +140,11 @@ pub(crate) fn register(graph: &mut RenderGraph) {
                     resolve_target: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(config.clear_color), store: wgpu::StoreOp::Store },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_buffer.create_view(&wgpu::TextureViewDescriptor::default()),
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.), store: wgpu::StoreOp::Discard }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
