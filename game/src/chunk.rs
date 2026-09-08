@@ -6,7 +6,7 @@ use ordermap::{OrderSet, orderset};
 
 use crate::resource_location::ResourceLocation;
 
-pub const CHUNK_SIZE: USizeVec3 = USizeVec3::new(32, 32, 32);
+pub const CHUNK_SIZE: USizeVec3 = USizeVec3::new(16, 16, 16);
 pub const CHUNK_BLOCK_COUNT: usize = CHUNK_SIZE.x * CHUNK_SIZE.y * CHUNK_SIZE.z;
 
 #[derive(Debug, Clone)]
