@@ -1,4 +1,4 @@
-mod render_graph_nodes;
+pub mod render_graph_nodes;
 pub mod world;
 pub mod material;
 use std::sync::Arc;

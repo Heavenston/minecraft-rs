@@ -81,6 +81,11 @@ impl Chunk {
         Some(self.pallette.blocks.get_index(palette_idx).expect("Stored pallette index is valid"))
     }
 
+    /// Returns an iterator over all (unique) block data in this chunk.
+    pub fn block_states(&self) -> impl DoubleEndedIterator<Item = &BlockData> + ExactSizeIterator {
+        self.pallette.blocks.iter()
+    }
+
     pub fn get(&self, pos: USizeVec3) -> &BlockData {
         self.try_get(pos).expect("Out of bound chunk position")
     }

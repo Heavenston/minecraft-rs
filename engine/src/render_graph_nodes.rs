@@ -11,22 +11,22 @@ pub struct RenderPassConfig {
     pub clear_color: wgpu::Color,
 }
 
-graph_resource!(pub(crate) struct WorldUniformBuffer(pub wgpu::Buffer); permanent);
-graph_resource!(pub(crate) struct WorldBindGroupLayout(pub wgpu::BindGroupLayout); permanent);
-graph_resource!(pub(crate) struct WorldBindGroup(pub wgpu::BindGroup); permanent);
+graph_resource!(pub struct WorldUniformBuffer(pub wgpu::Buffer); permanent);
+graph_resource!(pub struct WorldBindGroupLayout(pub wgpu::BindGroupLayout); permanent);
+graph_resource!(pub struct WorldBindGroup(pub wgpu::BindGroup); permanent);
 
-graph_resource!(pub(crate) struct RenderPassConfigResource(pub RenderPassConfig));
-graph_resource!(pub(crate) struct WorldResource(ArcRwLockReadGuard<RawRwLock, World>));
+graph_resource!(pub struct RenderPassConfigResource(pub RenderPassConfig));
+graph_resource!(pub struct WorldResource(ArcRwLockReadGuard<RawRwLock, World>));
 
-graph_resource!(pub(crate) struct BeforeRenderPass(pub ()));
-graph_resource!(pub(crate) struct RenderPass(pub wgpu::RenderPass<'static>));
-graph_resource!(pub(crate) struct RenderPassCommandEncoder(pub wgpu::CommandEncoder));
+graph_resource!(pub struct BeforeRenderPass(pub ()));
+graph_resource!(pub struct RenderPass(pub wgpu::RenderPass<'static>));
+graph_resource!(pub struct RenderPassCommandEncoder(pub wgpu::CommandEncoder));
 
-graph_resource!(pub(crate) struct StagingBelt(pub RwLock<wgpu::util::StagingBelt>); permanent);
-graph_resource!(pub(crate) struct UsingStagingBelt(pub ()));
+graph_resource!(pub struct StagingBelt(pub RwLock<wgpu::util::StagingBelt>); permanent);
+graph_resource!(pub struct UsingStagingBelt(pub ()));
 
 #[expect(clippy::single_call_fn, reason = "registered only in engine")]
-pub fn register(graph: &mut RenderGraph) {
+pub(crate) fn register(graph: &mut RenderGraph) {
     graph.define_input::<RenderPassConfigResource>();
     graph.define_input::<WorldResource>();
 

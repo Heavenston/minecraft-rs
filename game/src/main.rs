@@ -17,6 +17,7 @@ use anyhow::Result;
 use engine::{wgpu, world::MaterialHandle};
 use enum_map::EnumMap;
 use glam::{ISizeVec3, Vec4};
+use itertools::Itertools as _;
 
 use crate::{chunk::Chunk, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, utils::{CardinalDirection, ISizeVec3Range, Vec3Range}};
 
@@ -25,6 +26,7 @@ mod chunk_mesher;
 mod resource_location;
 mod utils;
 mod proc_gen;
+mod materials;
 
 mod data_extractor;
 
@@ -101,9 +103,8 @@ async fn main() -> Result<()> {
     let generator = proc_gen::Generator::new(0);
 
     tracing::info!("Generating start chunks");
-    for p in ISizeVec3Range(ISizeVec3::new(-2, -2, -8), ISizeVec3::new(2, 2, 8)) {
-        let chunk = generator.generate_chunk(glam::ISizeVec3::ZERO);
-        chunks.insert(p, chunk);
+    for p in ISizeVec3Range(ISizeVec3::new(-2, -8, -2), ISizeVec3::new(2, 8, 2)) {
+        chunks.insert(p, generator.generate_chunk(p));
     }
     tracing::info!("Finished");
 

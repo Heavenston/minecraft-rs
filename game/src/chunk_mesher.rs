@@ -20,7 +20,10 @@ type FaceInstanceData = u16;
 const CHUNK_OFFSET_BITS: u32 = CHUNK_SIZE.x.ilog2() + CHUNK_SIZE.y.ilog2() + CHUNK_SIZE.z.ilog2();
 const CHUNK_TEXTURE_BITS: u32 = FaceInstanceData::BITS - CHUNK_OFFSET_BITS;
 ca::const_assert!(CHUNK_TEXTURE_BITS > 0);
+#[cfg(feature = "chunk_texture_array")]
 const CHUNK_TEXTURE_COUNT: u32 = 2u32.pow(CHUNK_TEXTURE_BITS);
+#[cfg(not(feature = "chunk_texture_array"))]
+const CHUNK_TEXTURE_COUNT: u32 = 1;
 
 fn create_face_instance_data(offset: USizeVec3, texture_idx: usize) -> FaceInstanceData {
     const CHUNK_TEXTURE_MASK: u16 = (1 << CHUNK_TEXTURE_BITS) - 1;
@@ -135,7 +138,7 @@ struct ChunkMesher<'mc, 'chunk, 'neighbor> {
 }
 
 impl<'mc> ChunkMesher<'mc, '_, '_> {
-    fn get_block_texture(&self, block_data: &BlockData) -> &'mc ResourceLocation {
+    fn get_block_texture(&self, block_data: &BlockData) -> Option<&'mc ResourceLocation> {
         let blockstate = self.mcdata.blockstate(&block_data.id);
 
         let model_choice = match blockstate {
@@ -146,6 +149,9 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
             ModelChoice::Single(model) => model,
             ModelChoice::Multiple(models) => models.first().expect("at leats one model"),
         };
+        if blockstate_model.location == location!("minecraft:block/air") {
+            return None;
+        }
         let model = self.mcdata.model(&blockstate_model.location);
         assert_eq!(blockstate_model.x, 0, "Model rotation not suported");
         assert_eq!(blockstate_model.y, 0, "Model rotation not suported");
@@ -156,7 +162,7 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
         match texture {
             Texture::Reference(reference) => panic!("Unknown texture reference {reference}"),
             Texture::Detailed { sprite: _, force_translucent: true } => panic!("Unsuported transslucent textures"),
-            Texture::Detailed { sprite: resource_location, force_translucent: false } | Texture::Location(resource_location) => resource_location,
+            Texture::Detailed { sprite: resource_location, force_translucent: false } | Texture::Location(resource_location) => Some(resource_location),
         }
     }
 
@@ -171,8 +177,9 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
     fn mesh_for_direction(&mut self, direction: CardinalDirection) {
         for pos in INTERIOR_RANGES[direction] {
             let neighbor = pos + direction;
-            if self.is_transparent(neighbor) { continue }
-            let texture = self.get_block_texture(self.chunk.get(pos));
+            if !self.is_transparent(neighbor) { continue }
+            let Some(texture) = self.get_block_texture(self.chunk.get(pos))
+            else { continue };
             self.builder.push_face(direction, pos, texture);
         }
 
@@ -188,8 +195,9 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
                 neighbor
             };
 
-            if self.is_transparent_neighbor(direction, neighbor) { continue }
-            let texture = self.get_block_texture(self.chunk.get(pos));
+            if !self.is_transparent_neighbor(direction, neighbor) { continue }
+            let Some(texture) = self.get_block_texture(self.chunk.get(pos))
+            else { continue };
             self.builder.push_face(direction, pos, texture);
         }
     }

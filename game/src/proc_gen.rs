@@ -6,8 +6,8 @@ use noise::{NoiseFn as _, Perlin};
 use rand::{Rng as _, RngExt as _, SeedableRng as _, rngs::SmallRng};
 use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::blockstate::BlockState, resource_location::{ResourceLocation, location}, utils::Vec3Range};
 
-const MAX_HEIGHT: f64 = 32.;
-const MIN_HEIGHT: f64 = -32.;
+const MAX_HEIGHT: f64 = 16.;
+const MIN_HEIGHT: f64 = -16.;
 
 pub struct Generator {
     rng: SmallRng,
@@ -32,7 +32,7 @@ impl Generator {
     fn height_at(&self, pos: DVec2) -> f64 {
         let pos = pos * 10e-4 + self.heightmap_offset;
         let height = self.heightmap_noise.get(pos.to_array());
-        f64::mul_add(f64::midpoint(height, 1.), MAX_HEIGHT, MIN_HEIGHT)
+        f64::mul_add(f64::midpoint(height, 1.), MAX_HEIGHT - MIN_HEIGHT, MIN_HEIGHT)
     }
 
     fn backbone_at(&self, pos: DVec3) -> f64 {
@@ -46,7 +46,7 @@ impl Generator {
 
         let pos = pos.as_dvec3();
         let height = self.height_at(pos.xz());
-        let diff = height - pos.y;
+        let diff = pos.y - height;
         let final_value = (diff / 16.) + self.backbone_at(pos);
 
         final_value < 0.
