@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use glam::USizeVec3;
 use itertools::Itertools as _;
@@ -65,11 +64,6 @@ impl Chunk {
         pos.cmplt(CHUNK_SIZE).all().then_some(pos.x + (pos.y + pos.z * CHUNK_SIZE.y) * CHUNK_SIZE.x)
     }
 
-    pub fn is_filled(&self) -> Option<&BlockData> {
-        matches!(self.blocks, ChunkData::Filled)
-            .then(|| &self.pallette.blocks[0])
-    }
-
     pub fn try_get(&self, pos: USizeVec3) -> Option<&BlockData> {
         let idx = Self::pos_to_idx(pos)?;
         let palette_idx = match &self.blocks {
@@ -79,11 +73,6 @@ impl Chunk {
             ChunkData::U32(d) => d[idx] as usize,
         };
         Some(self.pallette.blocks.get_index(palette_idx).expect("Stored pallette index is valid"))
-    }
-
-    /// Returns an iterator over all (unique) block data in this chunk.
-    pub fn block_states(&self) -> impl DoubleEndedIterator<Item = &BlockData> + ExactSizeIterator {
-        self.pallette.blocks.iter()
     }
 
     pub fn get(&self, pos: USizeVec3) -> &BlockData {

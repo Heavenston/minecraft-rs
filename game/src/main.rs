@@ -6,20 +6,18 @@
 #![feature(const_index)]
 #![feature(array_try_map)]
 
-#![allow(dead_code, reason = "in development")]
-#![allow(unused_imports, reason = "in development")]
 #![allow(clippy::single_call_fn, reason = "in development")]
 
 use std::{cell::RefCell, collections::HashMap, time::Instant};
 
-use anyhow::{Context, Result};
-use engine::{wgpu::{self, util::DeviceExt}, world::MaterialHandle};
+use anyhow::{Context as _, Result};
+use engine::{wgpu::{self, util::DeviceExt as _}, world::MaterialHandle};
 use enum_map::EnumMap;
-use glam::{ISizeVec3, Mat4, Vec3, Vec4};
-use image::EncodableLayout;
+use glam::{ISizeVec3, Vec3, Vec4};
+use image::EncodableLayout as _;
 use itertools::Itertools as _;
 
-use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::{ChunkSubMesh, mesh_chunk}, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::ResourceLocation, utils::{CardinalDirection, ISizeVec3Range, Vec3Range}};
+use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::ResourceLocation, utils::{CardinalDirection, ISizeVec3Range}};
 
 mod chunk;
 mod chunk_mesher;
@@ -35,6 +33,7 @@ struct App {
 
     mc_data: MinecraftData,
     chunks: HashMap<ISizeVec3, Chunk>,
+    #[expect(dead_code, reason = "not yet used")]
     generator: proc_gen::Generator,
 
     start: Instant,
@@ -47,7 +46,7 @@ impl App {
             return Ok(material);
         }
 
-        let image = self.mc_data.read_texture(location).with_context(|| format!("reading mc texture {location}"))?.to_rgba8();
+        let image = MinecraftData::read_texture(location).with_context(|| format!("reading mc texture {location}"))?.to_rgba8();
         let texture = ctx.renderer.device().create_texture_with_data(ctx.renderer.queue(), &wgpu::wgt::TextureDescriptor {
             label: Some(location.as_str()),
             size: wgpu::Extent3d { width: image.width(), height: image.height(), depth_or_array_layers: 1 },

@@ -1,3 +1,5 @@
+#![allow(dead_code, reason = "follows schema, even if not everything is used")]
+
 use serde::Deserialize;
 use std::collections::HashMap;
 

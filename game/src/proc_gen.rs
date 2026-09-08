@@ -1,15 +1,16 @@
 #![allow(clippy::default_numeric_fallback, reason = "math")]
 
-use glam::{DVec2, DVec3, ISizeVec2, ISizeVec3, Vec3Swizzles as _};
+use glam::{DVec2, DVec3, ISizeVec3, Vec3Swizzles as _};
 
 use noise::{NoiseFn as _, Perlin};
 use rand::{Rng as _, RngExt as _, SeedableRng as _, rngs::SmallRng};
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::blockstate::BlockState, resource_location::{ResourceLocation, location}, utils::Vec3Range};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, resource_location::location, utils::Vec3Range};
 
 const MAX_HEIGHT: f64 = 16.;
 const MIN_HEIGHT: f64 = -16.;
 
 pub struct Generator {
+    #[expect(dead_code, reason = "not yet used")]
     rng: SmallRng,
     backbone_offset: DVec3,
     backbone_noise: Perlin,
@@ -41,9 +42,6 @@ impl Generator {
     }
 
     fn generate_block(&self, pos: ISizeVec3) -> bool {
-        const NOISE_REACH_LOW: f64 = -16.;
-        const NOISE_REACH_HIGH: f64 = 16.;
-
         let pos = pos.as_dvec3();
         let height = self.height_at(pos.xz());
         let diff = pos.y - height;

@@ -1,10 +1,6 @@
-use std::{mem::take, ops::Sub};
 
-use arrayvec::ArrayVec;
 use enum_map::EnumMap;
-use glam::{U16Vec3, USizeVec3};
-use itertools::Itertools as _;
-use ordermap::OrderSet;
+use glam::USizeVec3;
 use static_assertions as ca;
 
 use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftData, blockstate::{BlockState, ModelChoice}, model::Texture}, resource_location::{ResourceLocation, location}, utils::{CardinalDirection, Vec3Range}};
@@ -13,10 +9,7 @@ ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.z.is_power_of_two());
 
-/// First [`CHUNK_OFFSET_BITS`] bits are offset into the chunk.
 type FaceInstanceData = u16;
-
-const CHUNK_OFFSET_BITS: u32 = CHUNK_SIZE.x.ilog2() + CHUNK_SIZE.y.ilog2() + CHUNK_SIZE.z.ilog2();
 
 fn create_face_instance_data(offset: USizeVec3) -> FaceInstanceData {
     debug_assert_eq!(offset.as_u16vec3().as_usizevec3(), offset);

@@ -1,5 +1,4 @@
-use glam::{I8Vec3, ISizeVec3, U8Vec3, USizeVec3};
-use itertools::Itertools as _;
+use glam::{ISizeVec3, USizeVec3};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vec3Range(pub USizeVec3, pub USizeVec3);
@@ -91,6 +90,8 @@ impl Iterator for ISizeVec3RangeIter {
 
 #[test]
 fn test_vec3_iter() {
+    use itertools::Itertools as _;
+
     assert_eq!(
         Vec3Range(USizeVec3::new(0, 4, 3), USizeVec3::new(5, 5, 5)).into_iter().map(|p| p.to_array()).collect_vec().as_slice(), &[
         [0, 4, 3], [1, 4, 3], [2, 4, 3], [3, 4, 3], [4, 4, 3],
