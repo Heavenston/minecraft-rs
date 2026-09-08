@@ -16,6 +16,16 @@ fn get_cube_vertex(uv: vec2f, dir: u32) -> vec3f {
         default: { return vec3f(1.0 - u, v, 0.0); } // -Z
     }
 }
+fn get_cube_normal(dir: u32) -> vec3f {
+    switch (dir) {
+        case 0u: { return vec3f(1.0, 0.0, 0.0); }    // +X
+        case 1u: { return vec3f(-1.0, 0.0, 0.0); }   // -X
+        case 2u: { return vec3f(0.0, 1.0, 0.0); }    // +Y
+        case 3u: { return vec3f(0.0, -1.0, 0.0); }   // -Y
+        case 4u: { return vec3f(0.0, 0.0, 1.0); }    // +Z
+        default: { return vec3f(0.0, 0.0, -1.0); }   // -Z
+    }
+}
 
 struct WorldUniform {
     view_projection_matrix: mat4x4f,
@@ -59,6 +69,10 @@ struct VertexOutput {
     return output;
 }
 
+const lights: array<f32, 6> = array(0.77694196, 0.9730581, 0.8504855, 0.8995145, 0.94854355, 0.875);
+
 @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
-    return textureSample(texture, texture_sampler, input.texcoord);
+    var tex = textureSample(texture, texture_sampler, input.texcoord);
+    tex = vec4f(tex.rgb * lights[imm.direction], tex.a);
+    return tex;
 }
