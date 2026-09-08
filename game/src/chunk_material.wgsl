@@ -33,6 +33,14 @@ struct Immediates {
 
 var<immediate> imm: Immediates;
 
+fn extract_offset(data: u32) -> vec3f {
+    var output: vec3f;
+    output.x = f32((data >> 8) & 0x0F);
+    output.y = f32((data >> 4) & 0x0F);
+    output.z = f32((data >> 0) & 0x0F);
+    return output;
+}
+
 struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) texcoord: vec2f,
@@ -43,10 +51,10 @@ struct VertexOutput {
     @builtin(vertex_index) vertex_index: u32,
 ) -> VertexOutput {
     let uv = get_cube_uv(vertex_index);
-    let pos = get_cube_vertex(uv, imm.direction);
+    let pos = get_cube_vertex(uv, imm.direction) + extract_offset(face_data) + imm.position;
 
     var output: VertexOutput;
-    output.position = vec4f((pos + imm.position), 1.0) * world.view_projection_matrix;
+    output.position = world.view_projection_matrix * vec4f(pos, 1.0);
     output.texcoord = uv;
     return output;
 }

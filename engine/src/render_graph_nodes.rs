@@ -88,7 +88,7 @@ pub(crate) fn register(graph: &mut RenderGraph) {
             _: ref UsingStagingBelt,
         ) -> (render_res::FrameCommandEncoder) {
             let data = WorldUniform {
-                view_projection_matrix: world.camera_transform.inverse_or_zero() * world.camera_projection,
+                view_projection_matrix: world.camera_projection * world.camera_transform.inverse_or_zero(),
                 time: world.created_at.elapsed().as_secs_f32(),
             }.as_std140();
             let bytes = data.as_bytes();

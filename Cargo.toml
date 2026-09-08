@@ -1,6 +1,3 @@
-[profile.dev]
-opt-level = 2
-
 [workspace]
 resolver = "3"
 members = ["harness", "game", "render_graph", "typemap", "engine", "genmap", "render_graph_macros"]

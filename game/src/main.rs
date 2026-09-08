@@ -15,7 +15,7 @@ use std::{cell::RefCell, collections::HashMap};
 use anyhow::{Context, Result};
 use engine::{wgpu::{self, util::DeviceExt}, world::MaterialHandle};
 use enum_map::EnumMap;
-use glam::{ISizeVec3, Vec4};
+use glam::{ISizeVec3, Mat4, Vec3, Vec4};
 use image::EncodableLayout;
 use itertools::Itertools as _;
 
@@ -80,7 +80,7 @@ impl engine::App for App {
             let mesh = mesh_chunk(&self.mc_data, chunk, neighbors);
             for submesh in mesh.sub_meshes {
                 let buffer = ctx.renderer.device().create_buffer(&wgpu::wgt::BufferDescriptor {
-                    label: Some("chunk instance data"),
+                    label: Some(&format!("chunk,{chunk_position},{:?},{}", submesh.face, submesh.texture)),
                     size: (submesh.instances.len() * 4).try_into().unwrap(),
                     usage: wgpu::BufferUsages::VERTEX,
                     mapped_at_creation: true,
@@ -107,6 +107,10 @@ impl engine::App for App {
     fn update(&mut self, ctx: engine::Ctx<'_>) -> Result<()> {
         let Some(material) = self.material
         else { return Ok(()); };
+
+        ctx.world.camera_transform = glam::camera::rh::view::look_at_mat4(Vec3::new(0., 100., 0.), Vec3::ZERO, Vec3::Y);
+        // ctx.world.camera_transform = Mat4::IDENTITY;
+        ctx.world.camera_projection = glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1., 0.01, 10_000.);
 
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyV) {
             if self.vsync {
