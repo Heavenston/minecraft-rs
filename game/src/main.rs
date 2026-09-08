@@ -10,7 +10,7 @@
 #![allow(unused_imports, reason = "in development")]
 #![allow(clippy::single_call_fn, reason = "in development")]
 
-use std::{cell::RefCell, collections::HashMap};
+use std::{cell::RefCell, collections::HashMap, time::Instant};
 
 use anyhow::{Context, Result};
 use engine::{wgpu::{self, util::DeviceExt}, world::MaterialHandle};
@@ -32,12 +32,12 @@ mod data_extractor;
 
 struct App {
     vsync: bool,
-    material: Option<MaterialHandle<engine::material::Rotating>>,
 
     mc_data: MinecraftData,
     chunks: HashMap<ISizeVec3, Chunk>,
     generator: proc_gen::Generator,
 
+    start: Instant,
     chunk_materials: RefCell<HashMap<ResourceLocation, MaterialHandle<ChunkMaterial>>>,
 }
 
@@ -105,12 +105,16 @@ impl engine::App for App {
     }
 
     fn update(&mut self, ctx: engine::Ctx<'_>) -> Result<()> {
-        let Some(material) = self.material
-        else { return Ok(()); };
+        let time = self.start.elapsed().as_secs_f32();
 
-        ctx.world.camera_transform = glam::camera::rh::view::look_at_mat4(Vec3::new(0., 100., 0.), Vec3::ZERO, Vec3::Y);
-        // ctx.world.camera_transform = Mat4::IDENTITY;
-        ctx.world.camera_projection = glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1., 0.01, 10_000.);
+        let window_size = ctx.renderer.window().outer_size();
+        #[expect(clippy::cast_precision_loss, reason = "")]
+        let aspect_ratio = window_size.width as f32 / window_size.height as f32;
+
+        let distance = 20.;
+        let height = 10.;
+        ctx.world.camera_transform = glam::camera::rh::view::look_at_mat4(Vec3::new((time / 2.).cos() * distance, height, (time / 2.).sin() * distance), Vec3::ZERO, Vec3::Y).inverse_or_zero();
+        ctx.world.camera_projection = glam::camera::rh::proj::directx::perspective(50f32.to_radians(), aspect_ratio, 0.01, 1_000.);
 
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyV) {
             if self.vsync {
@@ -123,13 +127,6 @@ impl engine::App for App {
                 println!("ENABLE");
                 ctx.renderer.render_graph().set_input::<engine::renderer::resources::PresentMode>(wgpu::PresentMode::AutoVsync);
             }
-        }
-
-        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyC) {
-            ctx.world.get_material_mut(material).unwrap().set_config(engine::material::RotatingConfig {
-                color: Vec4::new(1., 0., 0., 1.),
-                speed: 0.5,
-            });
         }
 
         Ok(())
@@ -147,19 +144,19 @@ async fn main() -> Result<()> {
     let generator = proc_gen::Generator::new(0);
 
     tracing::info!("Generating start chunks");
-    for p in ISizeVec3Range(ISizeVec3::new(-2, -8, -2), ISizeVec3::new(2, 8, 2)) {
+    for p in ISizeVec3Range(ISizeVec3::new(-4, -2, -4), ISizeVec3::new(4, 2, 4)) {
         chunks.insert(p, generator.generate_chunk(p));
     }
     tracing::info!("Finished");
 
     engine::start(App {
         vsync: true,
-        material: None,
 
         mc_data,
         chunks,
         generator,
 
+        start: Instant::now(),
         chunk_materials: RefCell::new(HashMap::new()),
     })?;
 

@@ -119,6 +119,10 @@ impl Renderer {
         &self.queue
     }
 
+    pub fn window(&self) -> &Arc<winit::window::Window> {
+        &self.window
+    }
+
     pub fn render_graph(&mut self) -> &mut RenderGraph {
         &mut self.render_graph
     }
