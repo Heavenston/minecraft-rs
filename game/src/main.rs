@@ -110,8 +110,8 @@ impl engine::App for App {
         #[expect(clippy::cast_precision_loss, reason = "")]
         let aspect_ratio = window_size.width as f32 / window_size.height as f32;
 
-        let distance = 20.;
-        let height = 10.;
+        let distance = 80.;
+        let height = 25.;
         ctx.world.camera_transform = glam::camera::rh::view::look_at_mat4(Vec3::new((time / 2.).cos() * distance, height, (time / 2.).sin() * distance), Vec3::ZERO, Vec3::Y).inverse_or_zero();
         ctx.world.camera_projection = glam::camera::rh::proj::directx::perspective(50f32.to_radians(), aspect_ratio, 0.01, 1_000.);
 
@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
     let generator = proc_gen::Generator::new(0);
 
     tracing::info!("Generating start chunks");
-    for p in ISizeVec3Range(ISizeVec3::new(-4, -2, -4), ISizeVec3::new(4, 2, 4)) {
+    for p in ISizeVec3Range(ISizeVec3::new(-6, -4, -6), ISizeVec3::new(6, 4, 6)) {
         chunks.insert(p, generator.generate_chunk(p));
     }
     tracing::info!("Finished");

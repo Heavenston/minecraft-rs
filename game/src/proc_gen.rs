@@ -2,7 +2,7 @@
 
 use glam::{DVec2, DVec3, ISizeVec3, Vec3Swizzles as _};
 
-use noise::{NoiseFn as _, Perlin};
+use noise::{HybridMulti, NoiseFn as _, Perlin, Simplex};
 use rand::{Rng as _, RngExt as _, SeedableRng as _, rngs::SmallRng};
 use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, resource_location::location, utils::Vec3Range};
 
@@ -13,32 +13,34 @@ pub struct Generator {
     #[expect(dead_code, reason = "not yet used")]
     rng: SmallRng,
     backbone_offset: DVec3,
-    backbone_noise: Perlin,
+    backbone_noise: HybridMulti<Simplex>,
     heightmap_offset: DVec2,
-    heightmap_noise: Perlin,
+    heightmap_noise: HybridMulti<Simplex>,
 }
 
 impl Generator {
     pub fn new(seed: u64) -> Self {
         let mut rng = SmallRng::seed_from_u64(seed);
         Self {
-            backbone_offset: DVec3::new(rng.random_range(-1f64..=1f64), rng.random_range(-1f64..=1f64), rng.random_range(-1f64..=1f64)),
-            backbone_noise: Perlin::new(rng.next_u32()),
-            heightmap_offset: DVec2::new(rng.random_range(-1f64..=1f64), rng.random_range(-1f64..=1f64)),
-            heightmap_noise: Perlin::new(rng.next_u32()),
+            backbone_offset: rng.random(),
+            backbone_noise: HybridMulti::new(rng.next_u32())
+                .set_sources(std::iter::repeat_with(|| Simplex::new(rng.next_u32())).take(32).collect()),
+            heightmap_offset: rng.random(),
+            heightmap_noise: HybridMulti::new(rng.next_u32())
+                .set_sources(std::iter::repeat_with(|| Simplex::new(rng.next_u32())).take(32).collect()),
             rng,
         }
     }
 
     fn height_at(&self, pos: DVec2) -> f64 {
-        let pos = pos * 10e-4 + self.heightmap_offset;
+        let pos = pos * 0.003 + self.heightmap_offset;
         let height = self.heightmap_noise.get(pos.to_array());
         f64::mul_add(f64::midpoint(height, 1.), MAX_HEIGHT - MIN_HEIGHT, MIN_HEIGHT)
     }
 
     fn backbone_at(&self, pos: DVec3) -> f64 {
-        let pos = pos * 10e-3 + self.backbone_offset;
-        self.backbone_noise.get(pos.to_array()) / 2.
+        let pos = pos * 0.015 + self.backbone_offset;
+        self.backbone_noise.get(pos.to_array()) / 4.
     }
 
     fn generate_block(&self, pos: ISizeVec3) -> bool {
