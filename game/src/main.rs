@@ -18,7 +18,7 @@ use engine::{wgpu, world::MaterialHandle};
 use enum_map::EnumMap;
 use glam::{ISizeVec3, Vec4};
 
-use crate::{chunk::Chunk, chunk_mesher::mesh_chunk, utils::{CardinalDirection, ISizeVec3Range, Vec3Range}};
+use crate::{chunk::Chunk, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, utils::{CardinalDirection, ISizeVec3Range, Vec3Range}};
 
 mod chunk;
 mod chunk_mesher;
@@ -31,10 +31,25 @@ mod data_extractor;
 struct App {
     vsync: bool,
     material: Option<MaterialHandle<engine::material::Rotating>>,
+
+    mc_data: MinecraftData,
+    chunks: HashMap<ISizeVec3, Chunk>,
+    generator: proc_gen::Generator,
 }
 
 impl engine::App for App {
     fn resume(&mut self, ctx: &mut engine::ResumeCtx<'_>) -> Result<()> {
+        tracing::info!("Meshing start chunks");
+        #[expect(clippy::iter_over_hash_type, reason = "order is not observable")]
+        for (&p, chunk) in &self.chunks {
+            let Some(neighbors) = CardinalDirection::VALUES.try_map(|direction| {
+                let new_pos = p + direction;
+                self.chunks.get(&new_pos)
+            }).map(EnumMap::from_array)
+            else { continue };
+            mesh_chunk(&self.mc_data, chunk, neighbors);
+        }
+
         ctx.world.clear_color = Vec4::new(0., 0., 0., 1.);
         let material = engine::material::Rotating::new(ctx, engine::material::RotatingConfig {
             color: Vec4::new(1., 1., 1., 1.),
@@ -80,7 +95,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     tracing::info!("Extracting minecraft data");
-    let mcdata = data_extractor::MinecraftData::read()?;
+    let mc_data = data_extractor::MinecraftData::read()?;
 
     let mut chunks = HashMap::<ISizeVec3, Chunk>::new();
     let generator = proc_gen::Generator::new(0);
@@ -90,25 +105,16 @@ async fn main() -> Result<()> {
         let chunk = generator.generate_chunk(glam::ISizeVec3::ZERO);
         chunks.insert(p, chunk);
     }
-    tracing::info!("Meshing start chunks");
-
-    #[expect(clippy::iter_over_hash_type, reason = "order is not observable")]
-    for (&p, chunk) in &chunks {
-        let Some(neighbors) = CardinalDirection::VALUES.try_map(|direction| {
-            let new_pos = p + direction;
-            chunks.get(&new_pos)
-        }).map(EnumMap::from_array)
-        else { continue };
-        mesh_chunk(&mcdata, chunk, neighbors);
-    }
     tracing::info!("Finished");
 
-    if false {
-        engine::start(App {
-            vsync: true,
-            material: None,
-        })?;
-    }
+    engine::start(App {
+        vsync: true,
+        material: None,
+
+        mc_data,
+        chunks,
+        generator,
+    })?;
 
     Ok(())
 }
