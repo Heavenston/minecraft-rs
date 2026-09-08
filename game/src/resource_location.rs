@@ -4,6 +4,13 @@ const fn is_valid_char(b: char) -> bool {
     matches!(b, '0'..='9' | 'a'..='z' | '_' | '-' | '.')
 }
 
+macro_rules! location {
+    ($e: expr) => {
+        const { crate::resource_location::ResourceLocation::new_const($e) }
+    };
+}
+pub(crate) use location;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ResourceLocation {
     string: Cow<'static, str>,

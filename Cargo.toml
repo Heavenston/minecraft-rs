@@ -1,3 +1,6 @@
+[profile.dev]
+opt-level = 2
+
 [workspace]
 resolver = "3"
 members = ["harness", "game", "render_graph", "typemap", "engine", "genmap", "render_graph_macros"]
@@ -35,7 +38,7 @@ allow_attributes_without_reason = "warn"
 clone_on_ref_ptr = "warn"
 dbg_macro = "warn"
 decimal_literal_representation = "warn"
-default_numeric_fallback = "forbid"
+default_numeric_fallback = "deny"
 doc_paragraphs_missing_punctuation = "warn"
 empty_enum_variants_with_brackets = "warn"
 empty_structs_with_brackets = "warn"

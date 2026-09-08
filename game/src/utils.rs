@@ -45,6 +45,50 @@ impl Iterator for Vec3RangeIter {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ISizeVec3Range(pub ISizeVec3, pub ISizeVec3);
+
+impl IntoIterator for ISizeVec3Range {
+    type Item = ISizeVec3;
+    type IntoIter = ISizeVec3RangeIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ISizeVec3RangeIter {
+            range: self,
+            current: self.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ISizeVec3RangeIter {
+    range: ISizeVec3Range,
+    current: ISizeVec3,
+}
+
+impl Iterator for ISizeVec3RangeIter {
+    type Item = ISizeVec3;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current.x < self.range.1.x {
+            let val = self.current;
+            self.current.x += 1;
+            return Some(val);
+        }
+        self.current.x = self.range.0.x;
+        self.current.y += 1;
+        if self.current.y < self.range.1.y {
+            return self.next();
+        }
+        self.current.y = self.range.0.y;
+        self.current.z += 1;
+        if self.current.z < self.range.1.z {
+            return self.next();
+        }
+        None
+    }
+}
+
 #[test]
 fn test_vec3_iter() {
     assert_eq!(
@@ -211,7 +255,24 @@ const impl std::str::FromStr for CardinalDirection {
 const impl std::ops::Add<CardinalDirection> for USizeVec3 {
     type Output = Self;
     fn add(self, rhs: CardinalDirection) -> Self::Output {
-        self.saturating_add_signed(rhs.as_isizevec3())
+        if cfg!(debug_assertions) {
+            self.checked_add_signed(rhs.as_isizevec3()).expect("arithetic overflow")
+        }
+        else {
+            self.wrapping_add_signed(rhs.as_isizevec3())
+        }
+    }
+}
+
+const impl std::ops::Add<CardinalDirection> for ISizeVec3 {
+    type Output = Self;
+    fn add(self, rhs: CardinalDirection) -> Self::Output {
+        if cfg!(debug_assertions) {
+            self.checked_add(rhs.as_isizevec3()).expect("arithetic overflow")
+        }
+        else {
+            self.wrapping_add(rhs.as_isizevec3())
+        }
     }
 }
 

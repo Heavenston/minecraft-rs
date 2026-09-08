@@ -5,19 +5,26 @@
 #![feature(const_cmp)]
 #![feature(const_index)]
 #![feature(integer_widen_truncate)]
+#![feature(array_try_map)]
 
 #![allow(dead_code, reason = "in development")]
 #![allow(unused_imports, reason = "in development")]
 #![allow(clippy::single_call_fn, reason = "in development")]
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use engine::{wgpu, world::MaterialHandle};
-use glam::Vec4;
+use enum_map::EnumMap;
+use glam::{ISizeVec3, Vec4};
+
+use crate::{chunk::Chunk, chunk_mesher::mesh_chunk, utils::{CardinalDirection, ISizeVec3Range, Vec3Range}};
 
 mod chunk;
 mod chunk_mesher;
 mod resource_location;
 mod utils;
+mod proc_gen;
 
 mod data_extractor;
 
@@ -71,7 +78,30 @@ impl engine::App for App {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    data_extractor::MinecraftData::read()?;
+
+    tracing::info!("Extracting minecraft data");
+    let mcdata = data_extractor::MinecraftData::read()?;
+
+    let mut chunks = HashMap::<ISizeVec3, Chunk>::new();
+    let generator = proc_gen::Generator::new(0);
+
+    tracing::info!("Generating start chunks");
+    for p in ISizeVec3Range(ISizeVec3::new(-2, -2, -8), ISizeVec3::new(2, 2, 8)) {
+        let chunk = generator.generate_chunk(glam::ISizeVec3::ZERO);
+        chunks.insert(p, chunk);
+    }
+    tracing::info!("Meshing start chunks");
+
+    #[expect(clippy::iter_over_hash_type, reason = "order is not observable")]
+    for (&p, chunk) in &chunks {
+        let Some(neighbors) = CardinalDirection::VALUES.try_map(|direction| {
+            let new_pos = p + direction;
+            chunks.get(&new_pos)
+        }).map(EnumMap::from_array)
+        else { continue };
+        mesh_chunk(&mcdata, chunk, neighbors);
+    }
+    tracing::info!("Finished");
 
     if false {
         engine::start(App {

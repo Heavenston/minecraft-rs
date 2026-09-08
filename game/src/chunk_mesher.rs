@@ -7,7 +7,7 @@ use itertools::Itertools as _;
 use ordermap::OrderSet;
 use static_assertions as ca;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftData, blockstate::{BlockState, ModelChoice}, model::Texture}, resource_location::ResourceLocation, utils::{CardinalDirection, Vec3Range}};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftData, blockstate::{BlockState, ModelChoice}, model::Texture}, resource_location::{ResourceLocation, location}, utils::{CardinalDirection, Vec3Range}};
 
 ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
@@ -109,7 +109,7 @@ impl<'mc> SubMeshBuilder<'mc> {
             .flat_map(|(face, meshes)| meshes.into_iter().map(move |submesh| (face, submesh)))
             .map(|(face, IncompleteSubMesh { mut textures, instances })| {
                 for _ in 0..textures.remaining_capacity() {
-                    static EMPTY: ResourceLocation = ResourceLocation::new_const("minecraft:empty");
+                    static EMPTY: ResourceLocation = location!("minecraft:empty");
                     textures.push(&EMPTY);
                 }
                 ChunkSubMesh {
@@ -144,13 +144,13 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
         };
         let blockstate_model = match model_choice {
             ModelChoice::Single(model) => model,
-            ModelChoice::Multiple(_) => panic!("Blocks with multiple models not supported"),
+            ModelChoice::Multiple(models) => models.first().expect("at leats one model"),
         };
         let model = self.mcdata.model(&blockstate_model.location);
         assert_eq!(blockstate_model.x, 0, "Model rotation not suported");
         assert_eq!(blockstate_model.y, 0, "Model rotation not suported");
         assert_eq!(blockstate_model.z, 0, "Model rotation not suported");
-        assert_eq!(model.parent.as_ref(), Some(&const { ResourceLocation::new_const("minecraft:block/cube_all") }), "Only the minecraft:block/cube_all model is suported");
+        assert_eq!(model.parent.as_ref(), Some(&location!("minecraft:block/cube_all")), "Only the minecraft:block/cube_all model is suported");
 
         let texture = model.textures.get("all").expect("minecraft:block/cube_all needs an 'all' texture");
         match texture {
@@ -161,11 +161,11 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
     }
 
     fn is_transparent(&self, pos: USizeVec3) -> bool {
-        self.chunk.get(pos).id == const { ResourceLocation::new_const("minecraft:air") }
+        self.chunk.get(pos).id == location!("minecraft:air")
     }
 
     fn is_transparent_neighbor(&self, neighbor: CardinalDirection, pos: USizeVec3) -> bool {
-        self.neighbors[neighbor].get(pos).id == const { ResourceLocation::new_const("minecraft:air") }
+        self.neighbors[neighbor].get(pos).id == location!("minecraft:air")
     }
 
     fn mesh_for_direction(&mut self, direction: CardinalDirection) {
@@ -183,7 +183,7 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
                     neighbor[direction.axis()] = 0;
                 }
                 else {
-                    neighbor[direction.axis()] = CHUNK_SIZE[direction.axis()];
+                    neighbor[direction.axis()] = CHUNK_SIZE[direction.axis()]-1;
                 }
                 neighbor
             };

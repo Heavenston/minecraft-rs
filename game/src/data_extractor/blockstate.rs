@@ -23,6 +23,7 @@ pub enum ModelChoice {
 
 #[derive(Debug, Deserialize)]
 pub struct Model {
+    #[serde(rename = "model")]
     pub location: ResourceLocation,
     #[serde(default)]
     pub x: u16,

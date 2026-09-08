@@ -4,7 +4,7 @@ use glam::USizeVec3;
 use itertools::Itertools as _;
 use ordermap::{OrderSet, orderset};
 
-use crate::resource_location::ResourceLocation;
+use crate::resource_location::{ResourceLocation, location};
 
 pub const CHUNK_SIZE: USizeVec3 = USizeVec3::new(16, 16, 16);
 pub const CHUNK_BLOCK_COUNT: usize = CHUNK_SIZE.x * CHUNK_SIZE.y * CHUNK_SIZE.z;
@@ -47,6 +47,13 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    pub fn new() -> Self {
+        Self::new_filled(BlockData {
+            id: location!("minecraft:air"),
+            state: String::new(),
+        })
+    }
+
     pub fn new_filled(data: BlockData) -> Self {
         Self {
             blocks: ChunkData::Filled,
@@ -126,5 +133,11 @@ impl Chunk {
                 }
             },
         }
+    }
+}
+
+impl Default for Chunk {
+    fn default() -> Self {
+        Self::new()
     }
 }
