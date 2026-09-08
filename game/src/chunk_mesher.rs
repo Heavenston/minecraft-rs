@@ -14,25 +14,14 @@ ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.z.is_power_of_two());
 
 /// First [`CHUNK_OFFSET_BITS`] bits are offset into the chunk.
-/// The remaining [`CHUNK_TEXTURE_BITS`] bits index into the chunks possible textures.
 type FaceInstanceData = u16;
 
 const CHUNK_OFFSET_BITS: u32 = CHUNK_SIZE.x.ilog2() + CHUNK_SIZE.y.ilog2() + CHUNK_SIZE.z.ilog2();
-const CHUNK_TEXTURE_BITS: u32 = FaceInstanceData::BITS - CHUNK_OFFSET_BITS;
-ca::const_assert!(CHUNK_TEXTURE_BITS > 0);
-#[cfg(feature = "chunk_texture_array")]
-const CHUNK_TEXTURE_COUNT: u32 = 2u32.pow(CHUNK_TEXTURE_BITS);
-#[cfg(not(feature = "chunk_texture_array"))]
-const CHUNK_TEXTURE_COUNT: u32 = 1;
 
-fn create_face_instance_data(offset: USizeVec3, texture_idx: usize) -> FaceInstanceData {
-    const CHUNK_TEXTURE_MASK: u16 = (1 << CHUNK_TEXTURE_BITS) - 1;
-    debug_assert_eq!((texture_idx.truncate::<u16>() & CHUNK_TEXTURE_MASK) as usize, texture_idx);
+fn create_face_instance_data(offset: USizeVec3) -> FaceInstanceData {
     debug_assert_eq!(offset.as_u16vec3().as_usizevec3(), offset);
-
     let offset = offset.as_u16vec3();
-    let a = ((offset.x << CHUNK_SIZE.y.ilog2()) | offset.y) << CHUNK_SIZE.z.ilog2() | offset.z;
-    (a << CHUNK_TEXTURE_BITS) | texture_idx.truncate::<u16>()
+    ((offset.x << CHUNK_SIZE.y.ilog2()) | offset.y) << CHUNK_SIZE.z.ilog2() | offset.z
 }
 
 const fn create_interior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
@@ -68,12 +57,12 @@ static EXTERIOR_RANGES: EnumMap<CardinalDirection, Vec3Range> = create_exterior_
 
 pub struct ChunkSubMesh<'mc> {
     pub face: CardinalDirection,
-    pub textures: [&'mc ResourceLocation; CHUNK_TEXTURE_COUNT as usize],
+    pub texture: &'mc ResourceLocation,
     pub instances: Box<[FaceInstanceData]>,
 }
 
 struct IncompleteSubMesh<'mc> {
-    textures: ArrayVec<&'mc ResourceLocation, { CHUNK_TEXTURE_COUNT as usize }>,
+    texture: &'mc ResourceLocation,
     instances: Vec<FaceInstanceData>,
 }
 
@@ -84,40 +73,21 @@ struct SubMeshBuilder<'mc> {
 
 impl<'mc> SubMeshBuilder<'mc> {
     fn push_face(&mut self, face: CardinalDirection, pos: USizeVec3, texture: &'mc ResourceLocation) {
-        let (submesh, tex_idx) = if let Some(submesh) = self.submeshes[face].iter_mut().find_map(|p| {
-            if p.textures.is_full() {
-                p.textures.iter().position(|&ot| ot == texture)
-                    .map(|idx| (p, Some(idx)))
-            } else {
-                Some((p, None))
-            }
-        }) {
+        let submesh = if let Some(submesh) = self.submeshes[face].iter_mut().find(|p| p.texture == texture) {
             submesh
         } else {
-            (self.submeshes[face].push_mut(IncompleteSubMesh { textures: ArrayVec::new(), instances: vec![] }), None)
+            self.submeshes[face].push_mut(IncompleteSubMesh { texture, instances: vec![] })
         };
-        let tex_idx = tex_idx.unwrap_or_else(|| {
-            submesh.textures.push(texture);
-            submesh.textures.len() - 1
-        });
-
-        submesh.instances.push(create_face_instance_data(
-            pos,
-            tex_idx,
-        ));
+        submesh.instances.push(create_face_instance_data(pos));
     }
 
     fn finish(self) -> Box<[ChunkSubMesh<'mc>]> {
         self.submeshes.into_iter()
             .flat_map(|(face, meshes)| meshes.into_iter().map(move |submesh| (face, submesh)))
-            .map(|(face, IncompleteSubMesh { mut textures, instances })| {
-                for _ in 0..textures.remaining_capacity() {
-                    static EMPTY: ResourceLocation = location!("minecraft:empty");
-                    textures.push(&EMPTY);
-                }
+            .map(|(face, IncompleteSubMesh { texture, instances })| {
                 ChunkSubMesh {
                     face,
-                    textures: textures.into_inner().expect("just filled to capacity a line before"),
+                    texture,
                     instances: instances.into_boxed_slice(),
                 }
             })

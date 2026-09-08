@@ -1,5 +1,5 @@
 use std::{collections::HashMap, io::BufReader, path::{Path, PathBuf}};
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use itertools::Itertools as _;
 
 use crate::resource_location::ResourceLocation;
@@ -53,5 +53,11 @@ impl MinecraftData {
 
     pub fn model(&self, location: &ResourceLocation) -> &model::Model {
         &self.models[location]
+    }
+
+    pub fn read_texture(&self, location: &ResourceLocation) -> Result<image::DynamicImage> {
+        let file_path = Path::new(ASSETS_BASE_PATH).join(location.namespace()).join("textures").join(location.path()).with_extension("png");
+        let file = BufReader::new(std::fs::File::open(&file_path).with_context(|| format!("reading file at {}", file_path.display()))?);
+        Ok(image::load(file, image::ImageFormat::Png)?)
     }
 }

@@ -1,20 +1,38 @@
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, rc::Rc};
 use crevice::std140::AsStd140;
 use engine::{ wgpu, material::Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
+use glam::Vec3;
+use render_graph::ResourceHandle;
+
+use crate::utils::CardinalDirection;
 
 static SHADER_CODE: &str = include_str!("chunk_material.wgsl");
 
 #[derive(AsStd140)]
-struct Uniform {
-    
+struct Immediates {
+    position: Vec3,
+    direction: u32,
 }
 
-fn register(render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
+#[derive(Debug, Clone)]
+pub struct ChunkRenderData {
+    pub direction: CardinalDirection,
+    pub position: Vec3,
+    pub vertex_buffer: wgpu::Buffer,
+}
+
+struct ChunkList {
+    chunks: Rc<[ChunkRenderData]>,
+}
+
+fn register(texture: wgpu::Texture, render_graph: &mut engine::material::RenderGraphWrapper<'_>) -> ResourceHandle<ChunkList> {
     use render_graph::ResourceConfig as Cfg;
     render_graph::node_helper!(into render_graph;
-        using @shader_module: wgpu::ShaderModule = render_graph.create_resource("chunk_material::shader_module", Cfg::permanent());
+        using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::permanent());
 
-        using @uniform_buffer: wgpu::Buffer = render_graph.create_resource("chunk_material::uniform_buffer", Cfg::permanent());
+        using @shader_module: wgpu::ShaderModule = render_graph.create_resource("chunk_material::shader_module", Cfg::permanent());
+        using @texture: wgpu::Texture = render_graph.create_resource("chunk_material::texture", Cfg::permanent());
+
         using @bind_group_layout: wgpu::BindGroupLayout = render_graph.create_resource("chunk_material::bind_group_layout", Cfg::permanent());
         using @bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_material::bind_group", Cfg::permanent());
 
@@ -29,16 +47,6 @@ fn register(render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
             }))
         };
 
-        CreateUniformBuffer
-        (device: ref render_res::Device) -> (@uniform_buffer) {
-            OutputValue(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Chunk material"),
-                size: Uniform::std140_size_static().try_into().unwrap(),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
-                mapped_at_creation: false,
-            }))
-        };
-
         CreateBindGroupLayout
         (device: ref render_res::Device) -> (@bind_group_layout) {
             OutputValue(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -46,21 +54,17 @@ fn register(render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: Some(NonZeroU64::new(Uniform::std140_size_static().try_into().unwrap()).unwrap()),
-                        },
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
                         },
                         count: None,
                     },
@@ -70,20 +74,24 @@ fn register(render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
 
         CreateBindGroup (
             device: ref render_res::Device,
-            uniform_buffer: ref @uniform_buffer,
             bind_group_layout: ref @bind_group_layout,
+            texture: ref @texture,
         ) -> (@bind_group) {
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: None,
+                ..Default::default()
+            });
             OutputValue(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Chunk material"),
                 layout: bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: uniform_buffer,
-                            offset: 0,
-                            size: None,
-                        })
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&texture.create_view(&wgpu::TextureViewDescriptor::default()))
                     },
                 ],
             }))
@@ -97,7 +105,7 @@ fn register(render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
             OutputValue(device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Chunk material"),
                 bind_group_layouts: &[Some(world_bind_group_layout), Some(bind_group_layout)],
-                immediate_size: 0,
+                immediate_size: Immediates::std140_size_static().try_into().unwrap(),
             }))
         };
 
@@ -110,9 +118,20 @@ fn register(render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
                     module: shader_module,
                     entry_point: None,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[],
+                    buffers: &[
+                        Some(wgpu::VertexBufferLayout {
+                            array_stride: 4,
+                            step_mode: wgpu::VertexStepMode::Instance,
+                            attributes: &[
+                                wgpu::VertexAttribute { format: wgpu::VertexFormat::Uint16, offset: 0, shader_location: 0 },
+                            ],
+                        })
+                    ],
                 },
-                primitive: wgpu::PrimitiveState::default(),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
@@ -132,42 +151,55 @@ fn register(render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
             }))
         };
 
-        // WriteUniformBuffer(
-        //     mut command_encoder: render_res::FrameCommandEncoder,
-        //     config: ref @config,
-        //     uniform_buffer: ref @uniform_buffer,
-        //     staging_belt: ref engine_graph::StagingBelt,
-        //     _: ref engine_graph::UsingStagingBelt,
-        // ) -> (render_res::FrameCommandEncoder) {
-        //     let data = Uniform {
-        //         color: config.color,
-        //         speed: config.speed,
-        //     }.as_std140();
-        //     let bytes = data.as_bytes();
-
-        //     staging_belt.write().write_buffer(&mut command_encoder, uniform_buffer, 0, NonZeroU64::new(bytes.len().try_into().unwrap()).unwrap())
-        //         .copy_from_slice(bytes);
-    
-        //     OutputValue(command_encoder)
-        // };
-
         Draw (
             mut render_pass: engine_graph::RenderPass,
             bind_group: ref @bind_group,
             render_pipeline: ref @render_pipeline,
+            chunk_list: ref @chunk_list,
         ) -> (engine_graph::RenderPass) {
             render_pass.set_pipeline(render_pipeline);
             render_pass.set_bind_group(1, bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
+            for chunk in &*chunk_list.chunks {
+                render_pass.set_immediates(0, Immediates {
+                    position: chunk.position,
+                    direction: chunk.direction as u32,
+                }.as_std140().as_bytes());
+                render_pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
+                render_pass.draw(0..4, 0..(chunk.vertex_buffer.size() / 4).try_into().unwrap());
+            }
 
             OutputValue(render_pass)
         };
     );
+
+    render_graph.set_resource_input(texture_resource, texture);
+    render_graph.set_resource_input(chunk_list_resource, ChunkList { chunks: Rc::default() });
+
+    chunk_list_resource
 }
 
-pub struct ChunkMaterial;
+pub struct ChunkMaterial {
+    pub texture: wgpu::Texture,
+    pub chunk_list: Rc<[ChunkRenderData]>,
+    chunk_list_resource: Option<ResourceHandle<ChunkList>>,
+}
+
+impl ChunkMaterial {
+    pub fn new(texture: wgpu::Texture) -> Self {
+        Self {
+            texture,
+            chunk_list: Rc::default(),
+            chunk_list_resource: None,
+        }
+    }
+}
+
 impl Material for ChunkMaterial {
     fn register(&mut self, render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
-        todo!()
+        self.chunk_list_resource = Some(register(self.texture.clone(), render_graph));
+    }
+
+    fn update(&mut self, render_graph: &mut render_graph::RenderGraph) {
+        render_graph.set_resource_input(self.chunk_list_resource.unwrap(), ChunkList { chunks: Rc::clone(&self.chunk_list) });
     }
 }

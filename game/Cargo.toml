@@ -4,9 +4,6 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 
-[features]
-chunk_texture_array = []
-
 [dependencies]
 engine = { workspace = true }
 anyhow = { workspace = true }
@@ -26,6 +23,7 @@ noise = { version = "0.9.0", features = ["images"] }
 rand = "0.10.2"
 render_graph.workspace = true
 crevice.workspace = true
+bytemuck = { version = "1.25.2", features = ["derive"] }
 
 [lints]
 workspace = true
