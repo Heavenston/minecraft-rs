@@ -47,11 +47,11 @@ impl MinecraftData {
         Ok(Self { blockstates, models })
     }
 
-    pub fn blockstate(&self, location: &ResourceLocation) -> Option<&blockstate::BlockState> {
-        self.blockstates.get(location)
+    pub fn blockstate(&self, location: &ResourceLocation) -> &blockstate::BlockState {
+        &self.blockstates[location]
     }
 
-    pub fn model(&self, location: &ResourceLocation) -> Option<&model::Model> {
-        self.models.get(location)
+    pub fn model(&self, location: &ResourceLocation) -> &model::Model {
+        &self.models[location]
     }
 }

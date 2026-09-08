@@ -1,3 +1,11 @@
+#![feature(const_trait_impl)]
+#![feature(const_array)]
+#![feature(const_ops)]
+#![feature(const_convert)]
+#![feature(const_cmp)]
+#![feature(const_index)]
+#![feature(integer_widen_truncate)]
+
 #![allow(dead_code, reason = "in development")]
 #![allow(unused_imports, reason = "in development")]
 #![allow(clippy::single_call_fn, reason = "in development")]

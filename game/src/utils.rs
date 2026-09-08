@@ -1,4 +1,58 @@
-use glam::I8Vec3;
+use glam::{I8Vec3, ISizeVec3, U8Vec3, USizeVec3};
+use itertools::Itertools as _;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Vec3Range(pub USizeVec3, pub USizeVec3);
+
+impl IntoIterator for Vec3Range {
+    type Item = USizeVec3;
+    type IntoIter = Vec3RangeIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Vec3RangeIter {
+            range: self,
+            current: self.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Vec3RangeIter {
+    range: Vec3Range,
+    current: USizeVec3,
+}
+
+impl Iterator for Vec3RangeIter {
+    type Item = USizeVec3;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current.x < self.range.1.x {
+            let val = self.current;
+            self.current.x += 1;
+            return Some(val);
+        }
+        self.current.x = self.range.0.x;
+        self.current.y += 1;
+        if self.current.y < self.range.1.y {
+            return self.next();
+        }
+        self.current.y = self.range.0.y;
+        self.current.z += 1;
+        if self.current.z < self.range.1.z {
+            return self.next();
+        }
+        None
+    }
+}
+
+#[test]
+fn test_vec3_iter() {
+    assert_eq!(
+        Vec3Range(USizeVec3::new(0, 4, 3), USizeVec3::new(5, 5, 5)).into_iter().map(|p| p.to_array()).collect_vec().as_slice(), &[
+        [0, 4, 3], [1, 4, 3], [2, 4, 3], [3, 4, 3], [4, 4, 3],
+        [0, 4, 4], [1, 4, 4], [2, 4, 4], [3, 4, 4], [4, 4, 4],
+    ][..]);
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
 pub enum Axis {
@@ -6,7 +60,7 @@ pub enum Axis {
 }
 
 impl Axis {
-    pub fn pos(self) -> CardinalDirection {
+    pub const fn pos(self) -> CardinalDirection {
         match self {
             Self::X => CardinalDirection::PosX,
             Self::Y => CardinalDirection::PosY,
@@ -14,19 +68,23 @@ impl Axis {
         }
     }
 
-    pub fn neg(self) -> CardinalDirection {
-        -self.pos()
+    pub const fn neg(self) -> CardinalDirection {
+        self.pos().opposit()
     }
 
-    pub fn as_vector(self) -> I8Vec3 {
-        self.pos().as_vector()
+    pub const fn as_usizevec3(self) -> USizeVec3 {
+        match self {
+            Self::X => USizeVec3::X,
+            Self::Y => USizeVec3::Y,
+            Self::Z => USizeVec3::Z,
+        }
     }
 }
 
 macro_rules! impl_index_axis {
     () => {};
     ($name:ty, $ty:ty$(;$($rest:tt)*)?) => {
-        impl std::ops::Index<Axis> for $name {
+        const impl std::ops::Index<Axis> for $name {
             type Output = $ty;
 
             fn index(&self, index: Axis) -> &Self::Output {
@@ -38,7 +96,7 @@ macro_rules! impl_index_axis {
             }
         }
 
-        impl std::ops::IndexMut<Axis> for $name {
+        const impl std::ops::IndexMut<Axis> for $name {
             fn index_mut(&mut self, index: Axis) -> &mut Self::Output {
                 match index {
                     Axis::X => &mut self.x,
@@ -54,9 +112,10 @@ impl_index_axis!(
     glam::I8Vec3, i8 ; glam::I16Vec3, i16; glam::IVec3, i32 ; glam::I64Vec3, i64;
     glam::U8Vec3, u8 ; glam::U16Vec3, u16; glam::UVec3, u32 ; glam::U64Vec3, u64;
     glam::Vec3  , f32; glam::DVec3  , f64; glam::BVec3, bool;
+    glam::USizeVec3, usize; glam::ISizeVec3, isize;
 );
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
+#[derive(Debug, Clone, Copy, enum_map::Enum)]
 pub enum CardinalDirection {
     PosX,
     NegX,
@@ -67,7 +126,16 @@ pub enum CardinalDirection {
 }
 
 impl CardinalDirection {
-    pub fn opposit(self) -> Self {
+    pub const VALUES: [Self; 6] = [
+        Self::PosX,
+        Self::NegX,
+        Self::PosY,
+        Self::NegY,
+        Self::PosZ,
+        Self::NegZ,
+    ];
+
+    pub const fn opposit(self) -> Self {
         match self {
             Self::PosX => Self::NegX,
             Self::NegX => Self::PosX,
@@ -78,18 +146,18 @@ impl CardinalDirection {
         }
     }
 
-    pub fn as_vector(self) -> I8Vec3 {
+    pub const fn as_isizevec3(self) -> ISizeVec3 {
         match self {
-            Self::PosX => I8Vec3::X,
-            Self::NegX => I8Vec3::NEG_X,
-            Self::PosY => I8Vec3::Y,
-            Self::NegY => I8Vec3::NEG_Y,
-            Self::PosZ => I8Vec3::Z,
-            Self::NegZ => I8Vec3::NEG_Z,
+            Self::PosX => ISizeVec3::X,
+            Self::NegX => ISizeVec3::NEG_X,
+            Self::PosY => ISizeVec3::Y,
+            Self::NegY => ISizeVec3::NEG_Y,
+            Self::PosZ => ISizeVec3::Z,
+            Self::NegZ => ISizeVec3::NEG_Z,
         }
     }
 
-    pub fn axis(self) -> Axis {
+    pub const fn axis(self) -> Axis {
         match self {
             Self::PosX | Self::NegX => Axis::X,
             Self::PosY | Self::NegY => Axis::Y,
@@ -97,15 +165,15 @@ impl CardinalDirection {
         }
     }
 
-    pub fn abs(self) -> Self {
-        Self::from(self.axis())
+    pub const fn abs(self) -> Self {
+        self.axis().pos()
     }
 
-    pub fn is_positive(self) -> bool { self.abs() == self }
-    pub fn is_negative(self) -> bool { !self.is_positive() }
+    pub const fn is_positive(self) -> bool { self.abs() == self }
+    pub const fn is_negative(self) -> bool { !self.is_positive() }
 }
 
-impl From<Axis> for CardinalDirection {
+const impl From<Axis> for CardinalDirection {
     fn from(val: Axis) -> Self {
         match val {
             Axis::X => Self::PosX,
@@ -115,7 +183,7 @@ impl From<Axis> for CardinalDirection {
     }
 }
 
-impl std::ops::Neg for CardinalDirection {
+const impl std::ops::Neg for CardinalDirection {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
@@ -123,7 +191,7 @@ impl std::ops::Neg for CardinalDirection {
     }
 }
 
-impl std::str::FromStr for CardinalDirection {
+const impl std::str::FromStr for CardinalDirection {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -137,5 +205,32 @@ impl std::str::FromStr for CardinalDirection {
 
             _ => return Err(()),
         })
+    }
+}
+
+const impl std::ops::Add<CardinalDirection> for USizeVec3 {
+    type Output = Self;
+    fn add(self, rhs: CardinalDirection) -> Self::Output {
+        self.saturating_add_signed(rhs.as_isizevec3())
+    }
+}
+
+const impl PartialEq for CardinalDirection {
+    fn eq(&self, other: &Self) -> bool {
+        match self {
+            Self::PosX => matches!(other, Self::PosX),
+            Self::NegX => matches!(other, Self::NegX),
+            Self::PosY => matches!(other, Self::PosY),
+            Self::NegY => matches!(other, Self::NegY),
+            Self::PosZ => matches!(other, Self::PosZ),
+            Self::NegZ => matches!(other, Self::NegZ),
+        }
+    }
+}
+const impl Eq for CardinalDirection {}
+
+impl std::hash::Hash for CardinalDirection {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
     }
 }

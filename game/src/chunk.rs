@@ -31,8 +31,8 @@ impl ChunkData {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct BlockData {
-    id: ResourceLocation,
-    state: String,
+    pub id: ResourceLocation,
+    pub state: String,
 }
 
 #[derive(Debug, Clone)]

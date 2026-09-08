@@ -53,7 +53,7 @@ pub enum Texture {
     /// A reference such as "#side".
     Reference(String),
     Detailed {
-        sprite: String,
+        sprite: ResourceLocation,
 
         #[serde(default)]
         force_translucent: bool,
