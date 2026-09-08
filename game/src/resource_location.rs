@@ -1,17 +1,7 @@
 use std::{ borrow::Cow };
 
-const fn is_valid_char_u8(b: u8) -> bool {
-    match b {
-        b'0'..=b'9' | b'a'..=b'z' | b'_' | b'-' | b'.' => true,
-        _ => false,
-    }
-}
-
 const fn is_valid_char(b: char) -> bool {
-    match b {
-        '0'..='9' | 'a'..='z' | '_' | '-' | '.' => true,
-        _ => false,
-    }
+    matches!(b, '0'..='9' | 'a'..='z' | '_' | '-' | '.')
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -21,14 +11,14 @@ pub struct ResourceLocation {
 }
 
 impl ResourceLocation {
-    fn check_inner(text: &str) -> Option<Option<usize>> {
+    fn check_inner(text: &str) -> Result<Option<usize>, ()> {
         let (path, colon) = if let Some((namespace, path)) = text.split_once(':') {
             if namespace.is_empty() || namespace == ".." {
-                return None;
+                return Err(());
             }
 
             if !namespace.chars().all(is_valid_char) {
-                return None;
+                return Err(());
             }
 
             (path, Some(namespace.len()))
@@ -38,23 +28,23 @@ impl ResourceLocation {
         };
 
         if path.is_empty() {
-            return None;
+            return Err(());
         }
 
         if !path.chars().all(|c| is_valid_char(c) || c == '/') {
-            return None;
+            return Err(());
         }
 
-        Some(colon)
+        Ok(colon)
     }
 
     pub fn check(text: &str) -> bool {
-        Self::check_inner(text).is_some()
+        Self::check_inner(text).is_ok()
     }
 
     pub fn new(string: impl Into<String>) -> Option<Self> {
         let mut string = string.into();
-        let colon = Self::check_inner(&string)?.unwrap_or_else(|| {
+        let colon = Self::check_inner(&string).ok()?.unwrap_or_else(|| {
             string.insert_str(0, "minecraft:");
             9
         });
@@ -65,13 +55,6 @@ impl ResourceLocation {
         assert!(str.is_ascii());
         let bytes = str.as_bytes();
 
-        const fn is_allowed(b: u8) -> bool {
-            match b {
-                b'0'..=b'9' | b'a'..=b'z' | b'_' | b'-' | b'.' => true,
-                _ => false,
-            }
-        }
-
         let mut colon_pos = None::<usize>;
         let mut i = 0usize;
         while i < bytes.len() {
@@ -81,7 +64,13 @@ impl ResourceLocation {
                 colon_pos = Some(i);
             }
             else {
-                assert!(is_allowed(c) || (colon_pos.is_some() && c == b'/'));
+                let is_valid_char = {
+                    match char::from_u32(c as u32) {
+                        None => false,
+                        Some(x) => is_valid_char(x),
+                    }
+                };
+                assert!(is_valid_char || (colon_pos.is_some() && c == b'/'));
             }
             i += 1;
         }
@@ -128,15 +117,15 @@ impl std::fmt::Display for ResourceLocation {
     }
 }
 
-impl Into<Cow<'static, str>> for ResourceLocation {
-    fn into(self) -> Cow<'static, str> {
-        self.string
+impl From<ResourceLocation> for Cow<'static, str> {
+    fn from(val: ResourceLocation) -> Self {
+        val.string
     }
 }
 
-impl Into<String> for ResourceLocation {
-    fn into(self) -> String {
-        self.string.into()
+impl From<ResourceLocation> for String {
+    fn from(val: ResourceLocation) -> Self {
+        val.string.into()
     }
 }
 
@@ -145,7 +134,7 @@ impl<'de> serde::Deserialize<'de> for ResourceLocation {
     where D: serde::Deserializer<'de> {
         struct ResourceLocationVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for ResourceLocationVisitor {
+        impl serde::de::Visitor<'_> for ResourceLocationVisitor {
             type Value = ResourceLocation;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

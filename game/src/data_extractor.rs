@@ -1,6 +1,6 @@
 use std::{collections::HashMap, io::BufReader, path::{Path, PathBuf}};
 use anyhow::{Context, Result};
-use itertools::Itertools;
+use itertools::Itertools as _;
 
 use crate::resource_location::ResourceLocation;
 
@@ -39,6 +39,7 @@ pub struct MinecraftData {
 }
 
 impl MinecraftData {
+    #[expect(clippy::single_call_fn, reason = "I sure hope this is created once")]
     pub fn read() -> Result<Self> {
         let blockstates = read_folder("minecraft/blockstates", "minecraft", "")?;
         let models = read_folder("minecraft/models/block", "minecraft", "block/")?;

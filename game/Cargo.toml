@@ -19,4 +19,4 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 static_assertions = "1.1.0"
 
 [lints]
-clippy.all = "allow"
+workspace = true

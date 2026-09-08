@@ -1,5 +1,6 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
+#![allow(dead_code, reason = "in development")]
+#![allow(unused_imports, reason = "in development")]
+#![allow(clippy::single_call_fn, reason = "in development")]
 
 use anyhow::Result;
 use engine::{wgpu, world::MaterialHandle};
@@ -8,6 +9,7 @@ use glam::Vec4;
 mod chunk;
 mod chunk_mesher;
 mod resource_location;
+mod utils;
 
 mod data_extractor;
 
