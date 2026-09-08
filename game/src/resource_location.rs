@@ -21,14 +21,23 @@ pub struct ResourceLocation {
 }
 
 impl ResourceLocation {
-    fn check_inner(text: &str) -> Option<usize> {
-        let (namespace, path) = text.split_once(':')?;
+    fn check_inner(text: &str) -> Option<Option<usize>> {
+        let (path, colon) = if let Some((namespace, path)) = text.split_once(':') {
+            if namespace.is_empty() || namespace == ".." {
+                return None;
+            }
 
-        if namespace.is_empty() || namespace == ".." || path.is_empty() {
-            return None;
+            if !namespace.chars().all(is_valid_char) {
+                return None;
+            }
+
+            (path, Some(namespace.len()))
         }
+        else {
+            (text, None)
+        };
 
-        if !namespace.chars().all(is_valid_char) {
+        if path.is_empty() {
             return None;
         }
 
@@ -36,7 +45,7 @@ impl ResourceLocation {
             return None;
         }
 
-        Some(namespace.len())
+        Some(colon)
     }
 
     pub fn check(text: &str) -> bool {
@@ -44,8 +53,11 @@ impl ResourceLocation {
     }
 
     pub fn new(string: impl Into<String>) -> Option<Self> {
-        let string = string.into();
-        let colon = Self::check_inner(&string)?;
+        let mut string = string.into();
+        let colon = Self::check_inner(&string)?.unwrap_or_else(|| {
+            string.insert_str(0, "minecraft:");
+            9
+        });
         Some(Self { string: Cow::Owned(string), colon })
     }
 
@@ -110,6 +122,12 @@ impl std::fmt::Debug for ResourceLocation {
     }
 }
 
+impl std::fmt::Display for ResourceLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_str().fmt(f)
+    }
+}
+
 impl Into<Cow<'static, str>> for ResourceLocation {
     fn into(self) -> Cow<'static, str> {
         self.string
@@ -119,5 +137,34 @@ impl Into<Cow<'static, str>> for ResourceLocation {
 impl Into<String> for ResourceLocation {
     fn into(self) -> String {
         self.string.into()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ResourceLocation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        struct ResourceLocationVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ResourceLocationVisitor {
+            type Value = ResourceLocation;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(formatter, "a valid minecraft resource location")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where E: serde::de::Error,
+            {
+                ResourceLocation::new(v).ok_or_else(|| E::custom("invalid minecraft resource location"))
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where E: serde::de::Error,
+            {
+                ResourceLocation::new(v).ok_or_else(|| E::custom("invalid minecraft resource location"))
+            }
+        }
+
+        deserializer.deserialize_string(ResourceLocationVisitor)
     }
 }

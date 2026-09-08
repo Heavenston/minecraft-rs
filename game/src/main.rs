@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#![feature(try_blocks)]
+#![allow(unused_imports)]
 
 use anyhow::Result;
 use engine::{wgpu, world::MaterialHandle};
@@ -60,7 +60,7 @@ impl engine::App for App {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    data_extractor::run();
+    data_extractor::run()?;
 
     if false {
         engine::start(App {

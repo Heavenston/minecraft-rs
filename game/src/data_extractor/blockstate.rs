@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use serde::Deserialize;
 
+use crate::resource_location::ResourceLocation;
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum BlockState {
@@ -21,7 +23,7 @@ pub enum ModelChoice {
 
 #[derive(Debug, Deserialize)]
 pub struct Model {
-    pub model: String,
+    pub model: ResourceLocation,
     #[serde(default)]
     pub x: u16,
     #[serde(default)]
