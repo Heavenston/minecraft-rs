@@ -98,6 +98,8 @@ impl Renderer {
         render_graph.set_input::<res::Device>(device.clone());
         render_graph.set_input::<res::Queue>(queue.clone());
 
+        let size = window.outer_size();
+        render_graph.set_input::<res::WindowSize>((size.width, size.height));
         render_graph.set_input::<res::PresentMode>(wgpu::PresentMode::AutoVsync);
 
         Ok(Self {
