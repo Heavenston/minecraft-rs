@@ -49,8 +49,9 @@ pub struct DisplayTransform {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Texture {
-    /// Resource location or a reference such as "#side".
-    Reference(ResourceLocation),
+    Location(ResourceLocation),
+    /// A reference such as "#side".
+    Reference(String),
     Detailed {
         sprite: String,
 

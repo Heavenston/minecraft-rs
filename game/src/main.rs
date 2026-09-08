@@ -6,6 +6,7 @@ use engine::{wgpu, world::MaterialHandle};
 use glam::Vec4;
 
 mod chunk;
+mod chunk_mesher;
 mod resource_location;
 
 mod data_extractor;
@@ -60,7 +61,7 @@ impl engine::App for App {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    data_extractor::run()?;
+    data_extractor::MinecraftData::read()?;
 
     if false {
         engine::start(App {

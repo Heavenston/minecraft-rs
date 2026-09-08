@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use glam::USizeVec3;
 use itertools::Itertools;
 use ordermap::{OrderSet, orderset};
@@ -28,6 +30,7 @@ impl ChunkData {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct BlockData {
     id: ResourceLocation,
+    state: String,
 }
 
 #[derive(Debug, Clone)]
