@@ -17,7 +17,7 @@ use glam::{ISizeVec3, Vec3, Vec4};
 use image::EncodableLayout as _;
 use itertools::Itertools as _;
 
-use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
+use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap, location}, utils::{CardinalDirection, ISizeVec3Range}};
 
 mod chunk;
 mod chunk_mesher;
@@ -46,7 +46,9 @@ impl App {
             return Ok(material);
         }
 
-        let image = MinecraftData::read_texture(location).with_context(|| format!("reading mc texture {location}"))?.to_rgba8();
+        let mut image = MinecraftData::read_texture(location).with_context(|| format!("reading mc texture {location}"))?;
+        image.apply_color_space(image::metadata::Cicp::SRGB, image::ConvertColorOptions::default())?;
+        let image = image.to_rgba8();
         let texture = ctx.renderer.device().create_texture_with_data(ctx.renderer.queue(), &wgpu::wgt::TextureDescriptor {
             label: Some(location.as_str()),
             size: wgpu::Extent3d { width: image.width(), height: image.height(), depth_or_array_layers: 1 },
