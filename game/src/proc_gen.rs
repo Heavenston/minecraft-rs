@@ -55,7 +55,7 @@ impl Generator {
     pub fn generate_chunk(&self, chunk_pos: ISizeVec3) -> Chunk {
         let mut chunk = Chunk::new();
         let filled_block = BlockData {
-            id: location!("minecraft:stone"),
+            id: location!("minecraft:dirt"),
             state: String::new(),
         };
 

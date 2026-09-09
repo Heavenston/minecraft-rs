@@ -160,13 +160,19 @@ impl_index_axis!(
     glam::USizeVec3, usize; glam::ISizeVec3, isize;
 );
 
-#[derive(Debug, Clone, Copy, enum_map::Enum)]
+#[derive(serde::Deserialize, Debug, Clone, Copy, enum_map::Enum)]
 pub enum CardinalDirection {
+    #[serde(rename = "east")]
     PosX,
+    #[serde(rename = "west")]
     NegX,
+    #[serde(rename = "up")]
     PosY,
+    #[serde(rename = "down")]
     NegY,
+    #[serde(rename = "south")]
     PosZ,
+    #[serde(rename = "north")]
     NegZ,
 }
 

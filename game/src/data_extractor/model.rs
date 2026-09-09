@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::resource_location::ResourceLocation;
+use crate::{resource_location::ResourceLocation, utils::CardinalDirection};
 
 #[derive(Debug, Deserialize)]
 pub struct Model {
@@ -71,13 +71,13 @@ pub struct Element {
     #[serde(default = "default_true")]
     pub shade: bool,
 
-    pub shade_direction_override: Option<Direction>,
+    pub shade_direction_override: Option<CardinalDirection>,
 
     #[serde(default)]
     pub light_emission: u8,
 
     #[serde(default)]
-    pub faces: HashMap<Direction, Face>,
+    pub faces: HashMap<CardinalDirection, Face>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,24 +108,13 @@ pub enum Axis {
     Z,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Direction {
-    Down,
-    Up,
-    North,
-    South,
-    West,
-    East,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct Face {
     /// None means UVs must be generated from the element's position.
     pub uv: Option<[f32; 4]>,
 
     pub texture: String,
-    pub cullface: Option<Direction>,
+    pub cullface: Option<CardinalDirection>,
 
     #[serde(default)]
     pub rotation: u16,
