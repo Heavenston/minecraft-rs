@@ -50,24 +50,24 @@ const fn create_exterior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
 }
 static EXTERIOR_RANGES: EnumMap<CardinalDirection, Vec3Range> = create_exterior_ranges();
 
-pub struct ChunkSubMesh<'mc> {
+pub struct ChunkSubMesh {
     pub face: CardinalDirection,
-    pub texture: &'mc ResourceLocation,
+    pub texture: ResourceLocation,
     pub instances: Box<[FaceInstanceData]>,
 }
 
-struct IncompleteSubMesh<'mc> {
-    texture: &'mc ResourceLocation,
+struct IncompleteSubMesh {
+    texture: ResourceLocation,
     instances: Vec<FaceInstanceData>,
 }
 
 #[derive(Default)]
-struct SubMeshBuilder<'mc> {
-    submeshes: EnumMap<CardinalDirection, Vec<IncompleteSubMesh<'mc>>>,
+struct SubMeshBuilder {
+    submeshes: EnumMap<CardinalDirection, Vec<IncompleteSubMesh>>,
 }
 
-impl<'mc> SubMeshBuilder<'mc> {
-    fn push_face(&mut self, face: CardinalDirection, pos: USizeVec3, texture: &'mc ResourceLocation) {
+impl SubMeshBuilder {
+    fn push_face(&mut self, face: CardinalDirection, pos: USizeVec3, texture: ResourceLocation) {
         let submesh = if let Some(submesh) = self.submeshes[face].iter_mut().find(|p| p.texture == texture) {
             submesh
         } else {
@@ -76,7 +76,7 @@ impl<'mc> SubMeshBuilder<'mc> {
         submesh.instances.push(create_face_instance_data(pos));
     }
 
-    fn finish(self) -> Box<[ChunkSubMesh<'mc>]> {
+    fn finish(self) -> Box<[ChunkSubMesh]> {
         self.submeshes.into_iter()
             .flat_map(|(face, meshes)| meshes.into_iter().map(move |submesh| (face, submesh)))
             .map(|(face, IncompleteSubMesh { texture, instances })| {
@@ -90,8 +90,8 @@ impl<'mc> SubMeshBuilder<'mc> {
     }
 }
 
-pub struct ChunkMesh<'mc> {
-    pub sub_meshes: Box<[ChunkSubMesh<'mc>]>,
+pub struct ChunkMesh {
+    pub sub_meshes: Box<[ChunkSubMesh]>,
 }
 
 struct ChunkMesher<'mc, 'chunk, 'neighbor> {
@@ -99,12 +99,12 @@ struct ChunkMesher<'mc, 'chunk, 'neighbor> {
     chunk: &'chunk Chunk,
     neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
 
-    builder: SubMeshBuilder<'mc>,
+    builder: SubMeshBuilder,
 }
 
-impl<'mc> ChunkMesher<'mc, '_, '_> {
-    fn get_block_texture(&self, block_data: &BlockData) -> Option<&'mc ResourceLocation> {
-        let blockstate = self.mcdata.blockstate(&block_data.id);
+impl ChunkMesher<'_, '_, '_> {
+    fn get_block_texture(&self, block_data: &BlockData) -> Option<ResourceLocation> {
+        let blockstate = self.mcdata.blockstate(block_data.id);
 
         let model_choice = match blockstate {
             BlockState::Variants { variants } => variants.get(&block_data.state).expect("valid block states"),
@@ -117,7 +117,7 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
         if blockstate_model.location == location!("minecraft:block/air") {
             return None;
         }
-        let model = self.mcdata.model(&blockstate_model.location);
+        let model = self.mcdata.model(blockstate_model.location);
         assert_eq!(blockstate_model.x, 0, "Model rotation not suported");
         assert_eq!(blockstate_model.y, 0, "Model rotation not suported");
         assert_eq!(blockstate_model.z, 0, "Model rotation not suported");
@@ -127,7 +127,7 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
         match texture {
             Texture::Reference(reference) => panic!("Unknown texture reference {reference}"),
             Texture::Detailed { sprite: _, force_translucent: true } => panic!("Unsuported transslucent textures"),
-            Texture::Detailed { sprite: resource_location, force_translucent: false } | Texture::Location(resource_location) => Some(resource_location),
+            &Texture::Detailed { sprite: resource_location, force_translucent: false } | &Texture::Location(resource_location) => Some(resource_location),
         }
     }
 
@@ -168,7 +168,7 @@ impl<'mc> ChunkMesher<'mc, '_, '_> {
     }
 }
 
-pub fn mesh_chunk<'mc>(mcdata: &'mc MinecraftData, chunk: &Chunk, neighbors: EnumMap<CardinalDirection, &Chunk>) -> ChunkMesh<'mc> {
+pub fn mesh_chunk(mcdata: &MinecraftData, chunk: &Chunk, neighbors: EnumMap<CardinalDirection, &Chunk>) -> ChunkMesh {
     let mut mesher = ChunkMesher {
         mcdata,
         chunk,

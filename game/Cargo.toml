@@ -24,6 +24,7 @@ rand = "0.10.2"
 render_graph.workspace = true
 crevice.workspace = true
 bytemuck = { version = "1.25.2", features = ["derive"] }
+ustr = "1.1.0"
 
 [lints]
 workspace = true

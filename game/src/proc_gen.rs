@@ -2,7 +2,7 @@
 
 use glam::{DVec2, DVec3, ISizeVec3, Vec3Swizzles as _};
 
-use noise::{HybridMulti, NoiseFn as _, Perlin, Simplex};
+use noise::{HybridMulti, NoiseFn as _, Simplex};
 use rand::{Rng as _, RngExt as _, SeedableRng as _, rngs::SmallRng};
 use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, resource_location::location, utils::Vec3Range};
 

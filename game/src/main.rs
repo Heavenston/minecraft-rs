@@ -17,7 +17,7 @@ use glam::{ISizeVec3, Vec3, Vec4};
 use image::EncodableLayout as _;
 use itertools::Itertools as _;
 
-use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::ResourceLocation, utils::{CardinalDirection, ISizeVec3Range}};
+use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
 
 mod chunk;
 mod chunk_mesher;
@@ -37,12 +37,12 @@ struct App {
     generator: proc_gen::Generator,
 
     start: Instant,
-    chunk_materials: RefCell<HashMap<ResourceLocation, MaterialHandle<ChunkMaterial>>>,
+    chunk_materials: RefCell<ResourceLocationMap<MaterialHandle<ChunkMaterial>>>,
 }
 
 impl App {
-    fn get_chunk_material(&self, ctx: &mut engine::ResumeCtx<'_>, location: &ResourceLocation) -> Result<MaterialHandle<ChunkMaterial>> {
-        if let Some(&material) = self.chunk_materials.borrow().get(location) {
+    fn get_chunk_material(&self, ctx: &mut engine::ResumeCtx<'_>, location: ResourceLocation) -> Result<MaterialHandle<ChunkMaterial>> {
+        if let Some(&material) = self.chunk_materials.borrow().get(&location) {
             return Ok(material);
         }
 
@@ -59,7 +59,7 @@ impl App {
         }, wgpu::wgt::TextureDataOrder::LayerMajor, image.as_bytes());
 
         let material = ctx.world.add_material(ChunkMaterial::new(texture));
-        self.chunk_materials.borrow_mut().insert(location.clone(), material);
+        self.chunk_materials.borrow_mut().insert(location, material);
 
         Ok(material)
     }
@@ -156,7 +156,7 @@ async fn main() -> Result<()> {
         generator,
 
         start: Instant::now(),
-        chunk_materials: RefCell::new(HashMap::new()),
+        chunk_materials: RefCell::new(HashMap::default()),
     })?;
 
     Ok(())

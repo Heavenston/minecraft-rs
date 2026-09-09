@@ -1,17 +1,17 @@
-use std::{collections::HashMap, io::BufReader, path::Path};
+use std::{io::BufReader, path::Path};
 use anyhow::{Context as _, Result};
 
-use crate::resource_location::ResourceLocation;
+use crate::resource_location::{ResourceLocation, ResourceLocationMap};
 
 pub mod blockstate;
 pub mod model;
 
 const ASSETS_BASE_PATH: &str = "./minecraft_resources/assets";
 
-fn read_folder<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>, namespace: &str, path_prefix: &str) -> Result<HashMap<ResourceLocation, T>> {
+fn read_folder<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>, namespace: &str, path_prefix: &str) -> Result<ResourceLocationMap<T>> {
     let dir = std::fs::read_dir(Path::new(ASSETS_BASE_PATH).join(path))?;
 
-    let mut result = HashMap::new();
+    let mut result = ResourceLocationMap::default();
     for entry in dir {
         let entry = entry?;
         let file = BufReader::new(std::fs::File::open(entry.path())?);
@@ -19,7 +19,7 @@ fn read_folder<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>, namespace
             Ok(value) => {
                 let filename = entry.file_name().to_string_lossy().to_string();
                 let filename = filename.split('.').next().unwrap_or_default();
-                let Some(resource_location) = ResourceLocation::from_parts(namespace, format!("{path_prefix}{filename}"))
+                let Some(resource_location) = ResourceLocation::new(&format!("{namespace}:{path_prefix}{filename}"))
                 else {
                     tracing::warn!(file_path = ?entry.path(), filename, "Invalid resource location name");
                     continue;
@@ -33,8 +33,8 @@ fn read_folder<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>, namespace
 }
 
 pub struct MinecraftData {
-    blockstates: HashMap<ResourceLocation, blockstate::BlockState>,
-    models: HashMap<ResourceLocation, model::Model>,
+    blockstates: ResourceLocationMap<blockstate::BlockState>,
+    models: ResourceLocationMap<model::Model>,
 }
 
 impl MinecraftData {
@@ -46,15 +46,15 @@ impl MinecraftData {
         Ok(Self { blockstates, models })
     }
 
-    pub fn blockstate(&self, location: &ResourceLocation) -> &blockstate::BlockState {
-        &self.blockstates[location]
+    pub fn blockstate(&self, location: ResourceLocation) -> &blockstate::BlockState {
+        &self.blockstates[&location]
     }
 
-    pub fn model(&self, location: &ResourceLocation) -> &model::Model {
-        &self.models[location]
+    pub fn model(&self, location: ResourceLocation) -> &model::Model {
+        &self.models[&location]
     }
 
-    pub fn read_texture(location: &ResourceLocation) -> Result<image::DynamicImage> {
+    pub fn read_texture(location: ResourceLocation) -> Result<image::DynamicImage> {
         let file_path = Path::new(ASSETS_BASE_PATH).join(location.namespace()).join("textures").join(location.path()).with_extension("png");
         let file = BufReader::new(std::fs::File::open(&file_path).with_context(|| format!("reading file at {}", file_path.display()))?);
         Ok(image::load(file, image::ImageFormat::Png)?)
