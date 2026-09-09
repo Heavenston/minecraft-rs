@@ -8,6 +8,8 @@ use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftDat
 ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.z.is_power_of_two());
+const CHUNK_OFFSET_BITS: u32 = CHUNK_SIZE.x.ilog2() + CHUNK_SIZE.y.ilog2() + CHUNK_SIZE.z.ilog2();
+ca::const_assert!(CHUNK_OFFSET_BITS == 12);
 
 type FaceInstanceData = u16;
 
