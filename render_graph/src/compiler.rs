@@ -383,7 +383,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
     }
     macro_rules! nn {
         ($n:expr) => {
-            node_labels[&graph.node_handle($n)].clone()
+            node_labels.get(&graph.node_handle($n)).cloned().unwrap_or_default()
         };
     }
     macro_rules! ton {

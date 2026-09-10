@@ -13,6 +13,7 @@ tracing = { workspace = true }
 genmap = { workspace = true }
 static_assertions = "1.1.0"
 parking_lot = "0.12.5"
+ordermap = "1.2.2"
 
 [lints]
 workspace = true

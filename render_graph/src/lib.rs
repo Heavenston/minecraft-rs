@@ -24,7 +24,8 @@ fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: &HashMap<K, La
     let mut node_labels = HashMap::<K, String>::new();
     let mut todo_stack: Vec<K> = values.keys().cloned().collect();
     let mut taken_node_labels = HashMap::<String, Vec<K>>::new();
-    while let Some(handle) = todo_stack.pop() {
+    let mut unique_idxs = HashMap::<String, ordermap::OrderSet<K>>::new();
+    'outer_loop: while let Some(handle) = todo_stack.pop() {
         let full_name = match &values[&handle] {
             &Label::TypeName(tn) => tn,
             Label::Other(cow) => {
@@ -32,9 +33,15 @@ fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: &HashMap<K, La
                 continue;
             },
         };
+        let (dedup_idx, _) = unique_idxs.entry(full_name.to_string())
+            .or_default()
+            .insert_full(handle.clone());
+        let short_name = full_name.split("::").last().unwrap();
         let possible_names = [
-            full_name.split("::").last().unwrap(),
-            full_name,
+            short_name.to_string(),
+            full_name.to_string(),
+            format!("{short_name}{dedup_idx}"),
+            format!("{full_name}{dedup_idx}"),
         ];
         let possible_names = if full_name.contains(['<', '>']) {
             &possible_names[1..]
@@ -42,7 +49,7 @@ fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: &HashMap<K, La
             &possible_names[..]
         };
         for name in possible_names {
-            let takeners = taken_node_labels.entry(name.to_string());
+            let takeners = taken_node_labels.entry(name.clone());
             match takeners {
                 hash_map::Entry::Occupied(mut entry) => {
                     for t in entry.get_mut().drain(..) {
@@ -52,12 +59,14 @@ fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: &HashMap<K, La
                 },
                 hash_map::Entry::Vacant(entry) => {
                     entry.insert(vec![handle.clone()]);
-                    node_labels.insert(handle, name.to_string());
-                    break;
+                    node_labels.insert(handle, name.clone());
+                    continue 'outer_loop;
                 },
             }
         }
+        tracing::warn!(full_name, "Could not find deduped label for node");
     }
+    debug_assert!(values.keys().all(|k| node_labels.contains_key(k)));
     node_labels
 }
 
