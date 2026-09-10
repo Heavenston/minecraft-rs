@@ -19,7 +19,7 @@ graph_resource!(pub struct RenderPassConfigResource(pub RenderPassConfig));
 graph_resource!(pub struct WorldResource(ArcRwLockReadGuard<RawRwLock, World>));
 
 graph_resource!(pub struct BeforeRenderPass(pub ()));
-graph_resource!(pub struct RenderPass(pub wgpu::RenderPass<'static>));
+graph_resource!(pub struct RenderPass(pub wgpu::RenderPass<'static>); unordered);
 graph_resource!(pub struct RenderPassCommandEncoder(pub wgpu::CommandEncoder));
 
 graph_resource!(pub struct DepthBuffer(pub wgpu::Texture); permanent);

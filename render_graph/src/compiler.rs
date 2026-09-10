@@ -447,13 +447,8 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
 
                 let is_mutator = node_data.outputs().contains(&resource);
                 let is_unordered = graph.resource_cfg(resource).unordered;
-                let producer = if is_mutator && is_unordered && let Err(options) = producer {
-                    options.filter(|&&other| match other {
-                        InputOrNode::Input => true,
-                        InputOrNode::Node(other) => {
-                            !graph.node(other).is_mutator(resource)
-                        }
-                    }).exactly_one().map(|p| (p, true)).map_err(Either::Right)
+                let producer = if is_mutator && is_unordered && let Err(mut options) = producer {
+                    options.next().ok_or(Either::Right(())).map(|p| (p, true))
                 } else {
                     producer.map(|p| (p, false)).map_err(Either::Left)
                 };
@@ -463,8 +458,11 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                         rr_println!("\t\t{}{}", ton!(p), if is_unordered { " (using unordered)" } else { "" });
                         claims.entry((resource, p)).or_default().consumes.push(ConsumeClaim { node, input_idx, is_from_unordered });
                     },
-                    Err(options) => {
+                    Err(Either::Left(options)) => {
                         rr_println!("\t\t{}", options.map(|&n| ton!(n)).join(", "));
+                    },
+                    Err(Either::Right(())) => {
+                        rr_println!("\t\tNo producers for unordered");
                     },
                 }
             }
