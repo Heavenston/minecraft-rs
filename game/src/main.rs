@@ -71,6 +71,8 @@ impl engine::App for App {
     fn resume(&mut self, ctx: &mut engine::ResumeCtx<'_>) -> Result<()> {
         tracing::info!("Meshing start chunks");
 
+        let mut face_count: usize = 0;
+
         #[expect(clippy::iter_over_hash_type, reason = "order is not observable")]
         for (&chunk_position, chunk) in &self.chunks {
             let Some(neighbors) = CardinalDirection::VALUES.try_map(|direction| {
@@ -86,6 +88,7 @@ impl engine::App for App {
                     usage: wgpu::BufferUsages::VERTEX,
                     mapped_at_creation: true,
                 });
+                face_count += submesh.instances.len();
                 buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(bytemuck::cast_slice::<_, u8>(&submesh.instances));
                 buffer.unmap();
                 let material = self.get_chunk_material(ctx, submesh.texture)?;
@@ -97,6 +100,8 @@ impl engine::App for App {
                 }]).collect();
             }
         }
+
+        tracing::info!(face_count, material_count = self.chunk_materials.borrow().len(), "Ready");
 
         ctx.world.clear_color = Vec4::new(0., 0., 0., 1.);
         ctx.renderer.render_graph().set_input::<engine::renderer::resources::PresentMode>(wgpu::PresentMode::AutoVsync);

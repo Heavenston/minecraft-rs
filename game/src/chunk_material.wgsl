@@ -69,10 +69,12 @@ struct VertexOutput {
     return output;
 }
 
-const lights: array<f32, 6> = array(0.77694196, 0.9730581, 0.8504855, 0.8995145, 0.94854355, 0.875);
+// Directional fake shading on blocks for each direction, same as minecraft
+const lights: array<f32, 6> = array(0.6, 0.6, 1.0, 0.5, 0.8, 0.8);
 
 @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
     var tex = textureSample(texture, texture_sampler, input.texcoord);
-    tex = vec4f(tex.rgb * lights[imm.direction], tex.a);
+    let light = lights[imm.direction];
+    tex = vec4f(tex.rgb * light, tex.a);
     return tex;
 }

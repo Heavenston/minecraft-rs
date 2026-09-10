@@ -212,7 +212,7 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
     }
 
     fn is_face_opaque(&self, dir: CardinalDirection, pos: USizeVec3) -> bool {
-        self.block_models[self.chunk.get(pos)].culling_directions.contains(dir)
+        !self.block_models[self.chunk.get(pos)].culling_directions.contains(dir)
     }
 
     fn is_neighbor_chunk_face_opaque(&self, neighbor_chunk: CardinalDirection, face: CardinalDirection, pos: USizeVec3) -> bool {
@@ -266,7 +266,7 @@ fn mesh_for_direction(ctx: &ChunkMesherCtx<'_,'_,'_>, builder: &mut ChunkMeshBui
         let palette_idx = ctx.chunk.get(pos);
         let faces = &ctx.block_models[palette_idx].full_block_faces[direction];
         if faces.is_empty() { continue; }
-        if ctx.is_face_opaque(direction.opposit(), pos + direction) { continue }
+        // if ctx.is_face_opaque(direction.opposit(), pos + direction) { continue }
         for face in faces {
             builder.push_face(direction, pos, face.texture);
         }
@@ -288,7 +288,7 @@ fn mesh_for_direction(ctx: &ChunkMesherCtx<'_,'_,'_>, builder: &mut ChunkMeshBui
             neighbor
         };
 
-        if ctx.is_neighbor_chunk_face_opaque(direction, direction.opposit(), neighbor_block_idx) { continue }
+        // if ctx.is_neighbor_chunk_face_opaque(direction, direction.opposit(), neighbor_block_idx) { continue }
         for face in faces {
             builder.push_face(direction, pos, face.texture);
         }

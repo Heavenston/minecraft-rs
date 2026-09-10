@@ -1,6 +1,7 @@
 #![allow(clippy::default_numeric_fallback, reason = "math")]
+#![allow(clippy::cast_precision_loss, reason = "math")]
 
-use glam::{DVec2, DVec3, ISizeVec3, Vec3Swizzles as _};
+use glam::{DVec2, DVec3, ISizeVec3, USizeVec2, USizeVec3, Vec3Swizzles as _};
 
 use noise::{HybridMulti, NoiseFn as _, Simplex};
 use rand::{Rng as _, RngExt as _, SeedableRng as _, rngs::SmallRng};
@@ -43,9 +44,7 @@ impl Generator {
         self.backbone_noise.get(pos.to_array()) / 4.
     }
 
-    fn generate_block(&self, pos: ISizeVec3) -> bool {
-        let pos = pos.as_dvec3();
-        let height = self.height_at(pos.xz());
+    fn generate_block(&self, pos: DVec3, height: f64) -> bool {
         let diff = pos.y - height;
         let final_value = (diff / 16.) + self.backbone_at(pos);
 
@@ -59,10 +58,21 @@ impl Generator {
             state: String::new(),
         };
 
-        for delta_pos in Vec3Range(glam::USizeVec3::ZERO, CHUNK_SIZE) {
-            let global_pos = chunk_pos * CHUNK_SIZE.as_isizevec3() + delta_pos.as_isizevec3();
-            if self.generate_block(global_pos) {
-                chunk.set(delta_pos, &filled_block);
+        let chunk_offset = chunk_pos * CHUNK_SIZE.as_isizevec3();
+        for dx in 0..CHUNK_SIZE.x {
+            for dz in 0..CHUNK_SIZE.z {
+                let delta_pos2d = USizeVec2::new(dx, dz);
+                let global_pos2d = chunk_offset.xz() + delta_pos2d.as_isizevec2();
+                let global_pos2d = global_pos2d.as_dvec2();
+                let height = self.height_at(global_pos2d);
+                for dy in 0..CHUNK_SIZE.y {
+                    let delta_pos = USizeVec3::new(dx, dy, dz);
+                    let global_y = chunk_offset.y.wrapping_add_unsigned(dy);
+                    let global_pos = DVec3::new(global_pos2d.x, global_y as f64, global_pos2d.y);
+                    if self.generate_block(global_pos, height) {
+                        chunk.set(delta_pos, &filled_block);
+                    }
+                }
             }
         }
 
