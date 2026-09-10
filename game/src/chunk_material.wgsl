@@ -88,5 +88,8 @@ const plains_grass_tint: vec4f = vec4f(0.5686274509803921, 0.7411764705882353, 0
     if input.tint_index != 0 {
         tex *= plains_grass_tint;
     }
+    if tex.a < 10e-5 {
+        discard;
+    }
     return tex;
 }
