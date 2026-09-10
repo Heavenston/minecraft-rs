@@ -101,6 +101,8 @@ fn test_vec3_iter() {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[enumflags2::bitflags]
+#[repr(u8)]
 pub enum Axis {
     X, Y, Z,
 }
@@ -183,6 +185,8 @@ impl_index_axis!(
 );
 
 #[derive(serde::Deserialize, Debug, Clone, Copy, enum_map::Enum)]
+#[enumflags2::bitflags]
+#[repr(u8)]
 pub enum CardinalDirection {
     #[serde(rename = "east")]
     PosX,

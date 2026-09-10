@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 
 use enum_map::{EnumMap, enum_map};
+use enumflags2::BitFlags;
 use glam::{Quat, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
 use static_assertions as ca;
@@ -76,7 +77,8 @@ struct IncompleteQuadSubMesh {
 }
 
 struct IncompleteSubMeshInstance {
-    
+    model: usize,
+    culled: BitFlags<CardinalDirection>,
 }
 
 struct IncompleteSubMesh {
@@ -85,7 +87,8 @@ struct IncompleteSubMesh {
 }
 
 pub struct ChunkMesh {
-    pub sub_meshes: Box<[QuadSubMesh]>,
+    pub quad_sub_meshes: Box<[QuadSubMesh]>,
+    pub sub_meshes: Box<[SubMesh]>,
 }
 
 struct ResolvedElements<'a> {
@@ -94,20 +97,14 @@ struct ResolvedElements<'a> {
     textures: HashMap<String, ResourceLocation>,
 }
 
-#[derive(Debug, Clone, Copy, bytemuck::NoUninit, bytemuck::ByteEq, bytemuck::ByteHash)]
-#[repr(C)]
-enum ResolvedFace {
-    A {
-        b: u32,
-    },
-    B {
-        a: u32,
-    },
+struct FullBlockFace {
+    direction: CardinalDirection,
+    texture: ResourceLocation,
 }
 
-struct FaceRef {
-    idx: usize,
-    cullface: CardinalDirection,
+struct BlockModel {
+    culling_directions: BitFlags<CardinalDirection>,
+    full_block_faces: Box<[FullBlockFace]>,
 }
 
 struct ChunkMesher<'mc, 'chunk, 'neighbor> {
@@ -115,9 +112,8 @@ struct ChunkMesher<'mc, 'chunk, 'neighbor> {
     chunk: &'chunk Chunk,
     neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
 
-    block_faces: Vec<Vec<FaceRef>>,
+    block_models: Vec<BlockModel>,
     textures: ResourceLocationOrderSet<ResourceLocation>,
-    faces: OrderSet<ResolvedFace>,
     quad_submeshes: EnumMap<CardinalDirection, Vec<IncompleteQuadSubMesh>>,
 }
 
@@ -186,50 +182,18 @@ impl<'mc, 'chunk, 'neighbor> ChunkMesher<'mc, 'chunk, 'neighbor> {
         chunk: &'chunk Chunk,
         neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
     ) -> Self {
-        use glam::{Affine3, Quat, Vec3};
-
-        const HALF_PI: f32 = std::f32::consts::FRAC_PI_2;
-        const PI: f32 = std::f32::consts::PI;
-
-        let face_transforms = enum_map!{
-            CardinalDirection::PosX => Affine3::IDENTITY,
-            CardinalDirection::NegX => Affine3::from_rotation_translation(
-                Quat::from_rotation_y(PI),
-                Vec3::new(1.0, 0.0, 1.0),
-            ),
-
-            CardinalDirection::PosY => Affine3::from_rotation_translation(
-                Quat::from_rotation_z(HALF_PI),
-                Vec3::new(1.0, 0.0, 0.0),
-            ),
-            CardinalDirection::NegY => Affine3::from_rotation_translation(
-                Quat::from_rotation_z(-HALF_PI),
-                Vec3::new(0.0, 1.0, 0.0),
-            ),
-
-            CardinalDirection::PosZ => Affine3::from_rotation_translation(
-                Quat::from_rotation_y(-HALF_PI),
-                Vec3::new(1.0, 0.0, 0.0),
-            ),
-            CardinalDirection::NegZ => Affine3::from_rotation_translation(
-                Quat::from_rotation_y(HALF_PI),
-                Vec3::new(0.0, 0.0, 1.0),
-            ),
-        };
-
         let mut this = Self {
             mcdata,
             chunk,
             neighbors,
 
-            // block_faces: vec![],
-            block_faces: Vec::default(),
+            block_models: Vec::default(),
             textures: OrderSet::default(),
-            faces: OrderSet::default(),
-            submeshes: EnumMap::default(),
+            quad_submeshes: EnumMap::default(),
         };
         for block_data in chunk.palette() {
             let ResolvedElements { model, elements, textures } = this.resolve_block_elements(block_data);
+            let mut full_block_faces = Vec::<FullBlockFace>::new();
             for element in elements {
                 if element.rotation.is_some() {
                     tracing::warn!(?model, "Unsuported block model element rotation");
@@ -238,61 +202,31 @@ impl<'mc, 'chunk, 'neighbor> ChunkMesher<'mc, 'chunk, 'neighbor> {
                 let to = Vec3::from_array(element.to);
 
                 #[expect(clippy::iter_over_hash_type, reason = "iteration order does not matter")]
-                for (dir, face) in &element.faces {
+                for (&direction, face) in &element.faces {
                     if face.tintindex != -1_i32 {
                         tracing::warn!(?model, "Unsuported tintindex");
                     }
-                    let Some(texture) = textures.get(&face.texture)
+                    let Some(&texture) = textures.get(&face.texture)
                     else { tracing::warn!(?model, texture = face.texture, "Could not get face texture ref"); continue };
-                    let (texture_idx, _) = this.textures.insert_full(*texture);
-                    let mut face_start = from;
-                    let mut face_end = to;
-                    if dir.is_positive() {
-                        face_start[dir.axis()] = to[dir.axis()];
+                    let axis = direction.axis();
+                    if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
+                        full_block_faces.push(FullBlockFace {
+                            direction,
+                            texture,
+                        });
                     }
-                    else {
-                        face_end[dir.axis()] = from[dir.axis()];
-                    }
-                    let face = ResolvedFace {
-                        offset: todo!(),
-                        size: (face_end - face_start) - dir.axis(),
-                        uv: todo!(),
-                        rotation: todo!(),
-                        texture: todo!(),
-                    };
                 }
             }
+            let culling_directions = full_block_faces.iter()
+                .map(|face| face.direction)
+                .fold(BitFlags::empty(), std::ops::BitOr::bitor);
+            this.block_models.push(BlockModel {
+                culling_directions,
+                full_block_faces: full_block_faces.into_boxed_slice(),
+            });
         }
         this
     }
-
-    // fn get_block_texture(&self, block_data: &BlockData) -> Option<ResourceLocation> {
-    //     let blockstate = self.mcdata.blockstate(block_data.id);
-
-    //     let model_choice = match blockstate {
-    //         BlockState::Variants { variants } => variants.get(&block_data.state).expect("valid block states"),
-    //         BlockState::Multipart { .. } => panic!("Unsuported multipart blocks"),
-    //     };
-    //     let blockstate_model = match model_choice {
-    //         ModelChoice::Single(model) => model,
-    //         ModelChoice::Multiple(models) => models.first().expect("at leats one model"),
-    //     };
-    //     if blockstate_model.location == location!("minecraft:block/air") {
-    //         return None;
-    //     }
-    //     let model = self.mcdata.model(blockstate_model.location);
-    //     assert_eq!(blockstate_model.x, 0, "Model rotation not suported");
-    //     assert_eq!(blockstate_model.y, 0, "Model rotation not suported");
-    //     assert_eq!(blockstate_model.z, 0, "Model rotation not suported");
-    //     assert_eq!(model.parent.as_ref(), Some(&location!("minecraft:block/cube_all")), "Only the minecraft:block/cube_all model is suported");
-
-    //     let texture = model.textures.get("all").expect("minecraft:block/cube_all needs an 'all' texture");
-    //     match texture {
-    //         Texture::Reference(reference) => panic!("Unknown texture reference {reference}"),
-    //         Texture::Detailed { sprite: _, force_translucent: true } => panic!("Unsuported transslucent textures"),
-    //         &Texture::Detailed { sprite: resource_location, force_translucent: false } | &Texture::Location(resource_location) => Some(resource_location),
-    //     }
-    // }
 
     fn push_face(&mut self, face: CardinalDirection, pos: USizeVec3, texture: ResourceLocation) {
         let submesh = if let Some(submesh) = self.submeshes[face].iter_mut().find(|p| p.texture == texture) {
