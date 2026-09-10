@@ -130,6 +130,7 @@ fn register(texture: wgpu::Texture, render_graph: &mut engine::material::RenderG
                 },
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    front_face: wgpu::FrontFace::Ccw,
                     cull_mode: Some(wgpu::Face::Back),
                     ..Default::default()
                 },
@@ -169,7 +170,7 @@ fn register(texture: wgpu::Texture, render_graph: &mut engine::material::RenderG
             for chunk in &*chunk_list.chunks {
                 render_pass.set_immediates(0, Immediates {
                     position: chunk.position,
-                    direction: chunk.direction as u32,
+                    direction: enum_map::Enum::into_usize(chunk.direction).try_into().unwrap(),
                 }.as_std140().as_bytes());
                 render_pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
                 render_pass.draw(0..4, 0..(chunk.vertex_buffer.size() / 4).try_into().unwrap());

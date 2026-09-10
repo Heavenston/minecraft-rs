@@ -2,18 +2,22 @@ const pi = radians(180.0);
 const tau = radians(360.0);
 
 fn get_cube_uv(vertex_index: u32) -> vec2f {
-    return vec2f(f32(vertex_index & 1u), f32((vertex_index >> 1u) & 1u));
+    return vec2f(
+        f32(vertex_index & 1u),
+        f32(1u - (vertex_index >> 1u)),
+    );
 }
+
 fn get_cube_vertex(uv: vec2f, dir: u32) -> vec3f {
     let u = uv.x;
-    let v = uv.y;
+    let v = 1.0 - uv.y;
     switch (dir) {
-        case 0u: { return vec3f(1.0, v, 1.0 - u); } // +X
-        case 1u: { return vec3f(0.0, v, u); }       // -X
-        case 2u: { return vec3f(u, 1.0, 1.0 - v); } // +Y
-        case 3u: { return vec3f(u, 0.0, v); }       // -Y
-        case 4u: { return vec3f(u, v, 1.0); }       // +Z
-        default: { return vec3f(1.0 - u, v, 0.0); } // -Z
+        case 0u: { return vec3f(1.0    , v  , 1.0 - u); } // +X
+        case 1u: { return vec3f(0.0    , v  ,       u); } // -X
+        case 2u: { return vec3f(u      , 1.0, 1.0 - v); } // +Y
+        case 3u: { return vec3f(u      , 0.0,       v); } // -Y
+        case 4u: { return vec3f(u      , v  , 1.0    ); } // +Z
+        default: { return vec3f(1.0 - u, v  , 0.0    ); } // -Z
     }
 }
 fn get_cube_normal(dir: u32) -> vec3f {
