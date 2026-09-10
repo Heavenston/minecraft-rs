@@ -87,8 +87,8 @@ struct IncompleteSubMesh {
 }
 
 pub struct ChunkMesh {
-    pub quad_sub_meshes: Box<[QuadSubMesh]>,
-    pub sub_meshes: Box<[SubMesh]>,
+    pub quad_submeshes: Box<[QuadSubMesh]>,
+    pub submeshes: Box<[SubMesh]>,
 }
 
 struct ResolvedElements<'a> {
@@ -98,13 +98,12 @@ struct ResolvedElements<'a> {
 }
 
 struct FullBlockFace {
-    direction: CardinalDirection,
     texture: ResourceLocation,
 }
 
 struct BlockModel {
     culling_directions: BitFlags<CardinalDirection>,
-    full_block_faces: Box<[FullBlockFace]>,
+    full_block_faces: EnumMap<CardinalDirection, Box<[FullBlockFace]>>,
 }
 
 struct ChunkMesher<'mc, 'chunk, 'neighbor> {
@@ -193,7 +192,7 @@ impl<'mc, 'chunk, 'neighbor> ChunkMesher<'mc, 'chunk, 'neighbor> {
         };
         for block_data in chunk.palette() {
             let ResolvedElements { model, elements, textures } = this.resolve_block_elements(block_data);
-            let mut full_block_faces = Vec::<FullBlockFace>::new();
+            let mut full_block_faces = EnumMap::<CardinalDirection, Vec<FullBlockFace>>::default();
             for element in elements {
                 if element.rotation.is_some() {
                     tracing::warn!(?model, "Unsuported block model element rotation");
@@ -210,49 +209,54 @@ impl<'mc, 'chunk, 'neighbor> ChunkMesher<'mc, 'chunk, 'neighbor> {
                     else { tracing::warn!(?model, texture = face.texture, "Could not get face texture ref"); continue };
                     let axis = direction.axis();
                     if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
-                        full_block_faces.push(FullBlockFace {
-                            direction,
-                            texture,
-                        });
+                        full_block_faces[direction].push(FullBlockFace { texture });
                     }
                 }
             }
             let culling_directions = full_block_faces.iter()
-                .map(|face| face.direction)
+                .filter_map(|(dir, faces)| (!faces.is_empty()).then_some(dir))
                 .fold(BitFlags::empty(), std::ops::BitOr::bitor);
             this.block_models.push(BlockModel {
                 culling_directions,
-                full_block_faces: full_block_faces.into_boxed_slice(),
+                full_block_faces: full_block_faces.map(|_, vec| vec.into_boxed_slice()),
             });
         }
         this
     }
 
     fn push_face(&mut self, face: CardinalDirection, pos: USizeVec3, texture: ResourceLocation) {
-        let submesh = if let Some(submesh) = self.submeshes[face].iter_mut().find(|p| p.texture == texture) {
-            submesh
+        if let Some(submesh) = self.quad_submeshes[face].iter_mut().find(|p| p.texture == texture) {
+            submesh.instances.push(create_face_instance_data(pos));
         } else {
-            self.submeshes[face].push_mut(IncompleteQuadSubMesh { texture, instances: vec![] })
-        };
-        submesh.instances.push(create_face_instance_data(pos));
+            self.quad_submeshes[face].push_mut(IncompleteQuadSubMesh {
+                texture,
+                instances: vec![
+                    create_face_instance_data(pos),
+                ],
+            });
+        }
     }
 
-    fn finish(self) -> Box<[QuadSubMesh]> {
-        self.submeshes.into_iter()
+    fn finish(self) -> ChunkMesh {
+        let quad_submeshes = self.quad_submeshes.into_iter()
             .flat_map(|(face, meshes)| meshes.into_iter().map(move |submesh| (face, submesh)))
-            .map(|(face, IncompleteQuadSubMesh { texture, instances })| {
+            .map(|(direction, IncompleteQuadSubMesh { texture, instances })| {
                 QuadSubMesh {
-                    direction: face,
+                    direction,
                     texture,
                     instances: instances.into_boxed_slice(),
                 }
             })
-            .collect()
+            .collect();
+
+        ChunkMesh {
+            quad_submeshes,
+            submeshes: Box::default(),
+        }
     }
 
-    fn is_transparent(&self, pos: USizeVec3) -> bool {
-        // self.chunk.get(pos).id == location!("minecraft:air")
-        todo!()
+    fn is_face_opaque(&self, dir: CardinalDirection, pos: USizeVec3) -> bool {
+        self.block_models[self.chunk.get(pos)].culling_directions.contains(dir)
     }
 
     fn is_transparent_neighbor(&self, neighbor: CardinalDirection, pos: USizeVec3) -> bool {
@@ -262,8 +266,11 @@ impl<'mc, 'chunk, 'neighbor> ChunkMesher<'mc, 'chunk, 'neighbor> {
 
     fn mesh_for_direction(&mut self, direction: CardinalDirection) {
         for pos in INTERIOR_RANGES[direction] {
-            let neighbor = pos + direction;
-            if !self.is_transparent(neighbor) { continue }
+            if self.is_face_opaque(direction.opposit(), pos + direction) { continue }
+            let palette_idx = self.chunk.get(pos);
+            for face in &self.block_models[palette_idx].full_block_faces[direction] {
+                self.push_face(direction, pos, face.texture);
+            }
             // let Some(texture) = self.get_block_texture(self.chunk.get(pos))
             // else { continue };
             // self.push_face(direction, pos, texture);
@@ -296,5 +303,5 @@ pub fn mesh_chunk(mcdata: &MinecraftData, chunk: &Chunk, neighbors: EnumMap<Card
     for dir in CardinalDirection::VALUES {
         mesher.mesh_for_direction(dir);
     }
-    ChunkMesh { sub_meshes: mesher.finish() }
+    mesher.finish()
 }
