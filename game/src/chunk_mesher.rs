@@ -1,10 +1,9 @@
 
 use std::collections::HashMap;
 
-use enum_map::{EnumMap, enum_map};
+use enum_map::EnumMap;
 use enumflags2::BitFlags;
-use glam::{Quat, USizeVec3, Vec2, Vec3};
-use ordermap::OrderSet;
+use glam::{USizeVec3, Vec2, Vec3};
 use static_assertions as ca;
 
 use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftData, blockstate::{BlockState, ModelChoice}, model::{self, Texture}}, resource_location::{ResourceLocation, ResourceLocationOrderSet, location}, utils::{CardinalDirection, Vec3Range}};
@@ -106,17 +105,14 @@ struct BlockModel {
     full_block_faces: EnumMap<CardinalDirection, Box<[FullBlockFace]>>,
 }
 
-struct ChunkMesher<'mc, 'chunk, 'neighbor> {
+struct ChunkMesherCtx<'mc, 'chunk, 'neighbor> {
     mcdata: &'mc MinecraftData,
     chunk: &'chunk Chunk,
     neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
-
     block_models: Vec<BlockModel>,
-    textures: ResourceLocationOrderSet<ResourceLocation>,
-    quad_submeshes: EnumMap<CardinalDirection, Vec<IncompleteQuadSubMesh>>,
 }
 
-impl<'mc, 'chunk, 'neighbor> ChunkMesher<'mc, 'chunk, 'neighbor> {
+impl<'mc, 'chunk, 'neighbor> ChunkMesherCtx<'mc, 'chunk, 'neighbor> {
     fn resolve_model_elements(&mut self, mut textures: HashMap<String, ResourceLocation>, model_location: ResourceLocation) -> ResolvedElements<'mc> {
         let model = self.mcdata.model(model_location);
 
@@ -176,22 +172,9 @@ impl<'mc, 'chunk, 'neighbor> ChunkMesher<'mc, 'chunk, 'neighbor> {
         self.resolve_model_elements(HashMap::new(), blockstate_model.location)
     }
 
-    fn new(
-        mcdata: &'mc MinecraftData,
-        chunk: &'chunk Chunk,
-        neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
-    ) -> Self {
-        let mut this = Self {
-            mcdata,
-            chunk,
-            neighbors,
-
-            block_models: Vec::default(),
-            textures: OrderSet::default(),
-            quad_submeshes: EnumMap::default(),
-        };
-        for block_data in chunk.palette() {
-            let ResolvedElements { model, elements, textures } = this.resolve_block_elements(block_data);
+    fn resolve_blocks_models(&mut self) {
+        for block_data in self.chunk.palette() {
+            let ResolvedElements { model, elements, textures } = self.resolve_block_elements(block_data);
             let mut full_block_faces = EnumMap::<CardinalDirection, Vec<FullBlockFace>>::default();
             for element in elements {
                 if element.rotation.is_some() {
@@ -216,14 +199,31 @@ impl<'mc, 'chunk, 'neighbor> ChunkMesher<'mc, 'chunk, 'neighbor> {
             let culling_directions = full_block_faces.iter()
                 .filter_map(|(dir, faces)| (!faces.is_empty()).then_some(dir))
                 .fold(BitFlags::empty(), std::ops::BitOr::bitor);
-            this.block_models.push(BlockModel {
+            self.block_models.push(BlockModel {
                 culling_directions,
                 full_block_faces: full_block_faces.map(|_, vec| vec.into_boxed_slice()),
             });
         }
-        this
     }
 
+    fn is_face_opaque(&self, dir: CardinalDirection, pos: USizeVec3) -> bool {
+        self.block_models[self.chunk.get(pos)].culling_directions.contains(dir)
+    }
+
+    fn is_neighbor_chunk_face_opaque(&self, neighbor_chunk: CardinalDirection, face: CardinalDirection, pos: USizeVec3) -> bool {
+        // TODO
+        let _ = face;
+        self.neighbors[neighbor_chunk].get_data(pos).id == location!("minecraft:air")
+    }
+}
+
+#[derive(Default)]
+struct ChunkMeshBuilder {
+    textures: ResourceLocationOrderSet<ResourceLocation>,
+    quad_submeshes: EnumMap<CardinalDirection, Vec<IncompleteQuadSubMesh>>,
+}
+
+impl ChunkMeshBuilder {
     fn push_face(&mut self, face: CardinalDirection, pos: USizeVec3, texture: ResourceLocation) {
         if let Some(submesh) = self.quad_submeshes[face].iter_mut().find(|p| p.texture == texture) {
             submesh.instances.push(create_face_instance_data(pos));
@@ -254,54 +254,53 @@ impl<'mc, 'chunk, 'neighbor> ChunkMesher<'mc, 'chunk, 'neighbor> {
             submeshes: Box::default(),
         }
     }
+}
 
-    fn is_face_opaque(&self, dir: CardinalDirection, pos: USizeVec3) -> bool {
-        self.block_models[self.chunk.get(pos)].culling_directions.contains(dir)
-    }
-
-    fn is_transparent_neighbor(&self, neighbor: CardinalDirection, pos: USizeVec3) -> bool {
-        // self.neighbors[neighbor].get(pos).id == location!("minecraft:air")
-        todo!()
-    }
-
-    fn mesh_for_direction(&mut self, direction: CardinalDirection) {
-        for pos in INTERIOR_RANGES[direction] {
-            if self.is_face_opaque(direction.opposit(), pos + direction) { continue }
-            let palette_idx = self.chunk.get(pos);
-            for face in &self.block_models[palette_idx].full_block_faces[direction] {
-                self.push_face(direction, pos, face.texture);
-            }
-            // let Some(texture) = self.get_block_texture(self.chunk.get(pos))
-            // else { continue };
-            // self.push_face(direction, pos, texture);
-            todo!()
+fn mesh_for_direction(ctx: &ChunkMesherCtx<'_,'_,'_>, builder: &mut ChunkMeshBuilder, direction: CardinalDirection) {
+    for pos in INTERIOR_RANGES[direction] {
+        let palette_idx = ctx.chunk.get(pos);
+        let faces = &ctx.block_models[palette_idx].full_block_faces[direction];
+        if faces.is_empty() { continue; }
+        if ctx.is_face_opaque(direction.opposit(), pos + direction) { continue }
+        for face in faces {
+            builder.push_face(direction, pos, face.texture);
         }
+    }
 
-        for pos in EXTERIOR_RANGES[direction] {
-            let neighbor = {
-                let mut neighbor = pos;
-                if direction.is_positive() {
-                    neighbor[direction.axis()] = 0;
-                }
-                else {
-                    neighbor[direction.axis()] = CHUNK_SIZE[direction.axis()]-1;
-                }
-                neighbor
-            };
+    for pos in EXTERIOR_RANGES[direction] {
+        let palette_idx = ctx.chunk.get(pos);
+        let faces = &ctx.block_models[palette_idx].full_block_faces[direction];
+        if faces.is_empty() { continue; }
 
-            if !self.is_transparent_neighbor(direction, neighbor) { continue }
-            // let Some(texture) = self.get_block_texture(self.chunk.get(pos))
-            // else { continue };
-            // self.push_face(direction, pos, texture);
-            todo!()
+        let neighbor_block_idx = {
+            let mut neighbor = pos;
+            if direction.is_positive() {
+                neighbor[direction.axis()] = 0;
+            }
+            else {
+                neighbor[direction.axis()] = CHUNK_SIZE[direction.axis()]-1;
+            }
+            neighbor
+        };
+
+        if !ctx.is_neighbor_chunk_face_opaque(direction, direction.opposit(), neighbor_block_idx) { continue }
+        for face in faces {
+            builder.push_face(direction, pos, face.texture);
         }
     }
 }
 
 pub fn mesh_chunk(mcdata: &MinecraftData, chunk: &Chunk, neighbors: EnumMap<CardinalDirection, &Chunk>) -> ChunkMesh {
-    let mut mesher = ChunkMesher::new(mcdata, chunk, neighbors);
+    let mut ctx = ChunkMesherCtx {
+        mcdata,
+        chunk,
+        neighbors,
+        block_models: vec![],
+    };
+    ctx.resolve_blocks_models();
+    let mut builder = ChunkMeshBuilder::default();
     for dir in CardinalDirection::VALUES {
-        mesher.mesh_for_direction(dir);
+        mesh_for_direction(&ctx, &mut builder, dir);
     }
-    mesher.finish()
+    builder.finish()
 }
