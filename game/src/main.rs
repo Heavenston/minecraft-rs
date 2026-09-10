@@ -147,6 +147,10 @@ impl engine::App for App {
             self.set_enable_wireframe(ctx.renderer.render_graph(), !self.enable_wireframe);
             tracing::info!(enabled = self.enable_wireframe, "Changed enable wireframe state");
         }
+        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyG) {
+            ctx.renderer.render_graph().clear_cache();
+            tracing::info!("Cleared render graph cache");
+        }
 
         Ok(())
     }

@@ -606,6 +606,10 @@ impl RenderGraph {
         self.compiled = Some(compiled);
     }
 
+    pub fn clear_cache(&mut self) {
+        self.compiled = None;
+    }
+
     fn execute(&mut self, steps: &[UncheckedNodeHandle]) {
         for node in steps {
             self.nodes.get_mut(AssumeAlive(node.0)).node.run(&mut ResourceManager {
