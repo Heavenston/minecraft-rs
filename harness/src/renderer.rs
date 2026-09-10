@@ -75,10 +75,12 @@ impl Renderer {
             })
             .await?;
 
+        let optional_features = wgpu::Features::POLYGON_MODE_LINE;
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::IMMEDIATES,
+                required_features: wgpu::Features::IMMEDIATES | adapter.features().intersection(optional_features),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 required_limits: wgpu::Limits {
                     max_immediate_size: 128,

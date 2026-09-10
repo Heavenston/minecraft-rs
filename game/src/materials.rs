@@ -8,6 +8,8 @@ use crate::utils::CardinalDirection;
 
 static SHADER_CODE: &str = include_str!("chunk_material.wgsl");
 
+render_graph::graph_resource!(pub struct EnableWireframes(pub bool); permanent);
+
 #[derive(AsStd140)]
 struct Immediates {
     position: Vec3,
@@ -109,8 +111,11 @@ fn register(texture: wgpu::Texture, render_graph: &mut engine::material::RenderG
             }))
         };
 
-        CreateRenderPipeline
-        (device: ref render_res::Device, shader_module: ref @shader_module, render_pipeline_layout: ref @render_pipeline_layout) -> (@render_pipeline) {
+        CreateRenderPipeline(
+            device: ref render_res::Device,
+            shader_module: ref @shader_module, render_pipeline_layout: ref @render_pipeline_layout,
+            &enable_wireframes: ref EnableWireframes,
+        ) -> (@render_pipeline) {
             OutputValue(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Chunk material"),
                 layout: Some(render_pipeline_layout),
@@ -132,6 +137,17 @@ fn register(texture: wgpu::Texture, render_graph: &mut engine::material::RenderG
                     topology: wgpu::PrimitiveTopology::TriangleStrip,
                     front_face: wgpu::FrontFace::Ccw,
                     cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: if enable_wireframes {
+                        if device.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
+                            wgpu::PolygonMode::Line
+                        }
+                        else {
+                            tracing::warn!("Device does not support POLYGON_MODE_LINE");
+                            wgpu::PolygonMode::Fill
+                        }
+                    } else {
+                        wgpu::PolygonMode::Fill
+                    },
                     ..Default::default()
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {

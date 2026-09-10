@@ -15,7 +15,7 @@ use engine::{wgpu::{self, util::DeviceExt as _}, world::MaterialHandle};
 use enum_map::EnumMap;
 use glam::{ISizeVec3, Vec3, Vec4};
 use image::EncodableLayout as _;
-use itertools::Itertools as _;
+use render_graph::RenderGraph;
 
 use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
 
@@ -30,6 +30,7 @@ mod data_extractor;
 
 struct App {
     vsync: bool,
+    enable_wireframe: bool,
 
     mc_data: MinecraftData,
     chunks: HashMap<ISizeVec3, Chunk>,
@@ -64,6 +65,22 @@ impl App {
         self.chunk_materials.borrow_mut().insert(location, material);
 
         Ok(material)
+    }
+
+    fn set_enable_wireframe(&mut self, render_graph: &mut RenderGraph, val: bool) {
+        render_graph.set_input::<materials::EnableWireframes>(val);
+        self.enable_wireframe = val;
+    }
+
+    fn set_enable_vsync(&mut self, render_graph: &mut RenderGraph, enable: bool) {
+        self.vsync = enable;
+        let present_mode = if enable {
+            wgpu::PresentMode::AutoVsync
+        }
+        else {
+            wgpu::PresentMode::AutoNoVsync
+        };
+        render_graph.set_input::<engine::renderer::resources::PresentMode>(present_mode);
     }
 }
 
@@ -104,7 +121,8 @@ impl engine::App for App {
         tracing::info!(face_count, material_count = self.chunk_materials.borrow().len(), "Ready");
 
         ctx.world.clear_color = Vec4::new(0., 0., 0., 1.);
-        ctx.renderer.render_graph().set_input::<engine::renderer::resources::PresentMode>(wgpu::PresentMode::AutoVsync);
+        self.set_enable_wireframe(ctx.renderer.render_graph(), self.enable_wireframe);
+        self.set_enable_vsync(ctx.renderer.render_graph(), self.vsync);
         
         Ok(())
     }
@@ -122,16 +140,12 @@ impl engine::App for App {
         ctx.world.camera_projection = glam::camera::rh::proj::directx::perspective(50f32.to_radians(), aspect_ratio, 0.01, 1_000.);
 
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyV) {
-            if self.vsync {
-                self.vsync = false;
-                println!("DISABLE");
-                ctx.renderer.render_graph().set_input::<engine::renderer::resources::PresentMode>(wgpu::PresentMode::AutoNoVsync);
-            }
-            else {
-                self.vsync = true;
-                println!("ENABLE");
-                ctx.renderer.render_graph().set_input::<engine::renderer::resources::PresentMode>(wgpu::PresentMode::AutoVsync);
-            }
+            self.set_enable_vsync(ctx.renderer.render_graph(), !self.vsync);
+            tracing::info!(enabled = self.vsync, "Changed vsync state");
+        }
+        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyW) {
+            self.set_enable_wireframe(ctx.renderer.render_graph(), !self.enable_wireframe);
+            tracing::info!(enabled = self.enable_wireframe, "Changed enable wireframe state");
         }
 
         Ok(())
@@ -156,6 +170,7 @@ async fn main() -> Result<()> {
 
     engine::start(App {
         vsync: true,
+        enable_wireframe: false,
 
         mc_data,
         chunks,
