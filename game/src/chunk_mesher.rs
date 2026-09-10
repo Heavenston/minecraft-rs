@@ -6,7 +6,7 @@ use enumflags2::BitFlags;
 use glam::{USizeVec3, Vec2, Vec3};
 use static_assertions as ca;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftData, blockstate::{BlockState, ModelChoice}, model::{self, Texture}}, resource_location::{ResourceLocation, ResourceLocationOrderSet, location}, utils::{CardinalDirection, Vec3Range}};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftData, blockstate::{BlockState, ModelChoice}, model::{self, Texture}}, resource_location::{ResourceLocation, location}, utils::{CardinalDirection, Vec3Range}};
 
 ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
@@ -53,19 +53,21 @@ const fn create_exterior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
 }
 static EXTERIOR_RANGES: EnumMap<CardinalDirection, Vec3Range> = create_exterior_ranges();
 
-/// Sub mesh for a chunk that only contains full block faces
+/// Sub mesh for a chunk that only contains full block faces.
 pub struct QuadSubMesh {
     pub direction: CardinalDirection,
     pub texture: ResourceLocation,
     pub instances: Box<[FaceInstanceData]>,
 }
 
+#[expect(dead_code, reason = "todo")]
 pub struct FullVertex {
     pub pos: Vec3,
     pub uv: Vec2,
     pub texture: u32,
 }
 
+#[expect(dead_code, reason = "todo")]
 pub struct SubMesh {
     pub vertices: Vec<FullVertex>,
 }
@@ -75,11 +77,13 @@ struct IncompleteQuadSubMesh {
     instances: Vec<FaceInstanceData>,
 }
 
+#[expect(dead_code, reason = "todo")]
 struct IncompleteSubMeshInstance {
     model: usize,
     culled: BitFlags<CardinalDirection>,
 }
 
+#[expect(dead_code, reason = "todo")]
 struct IncompleteSubMesh {
     models: Vec<usize>,
     instances: Vec<IncompleteSubMeshInstance>,
@@ -87,6 +91,7 @@ struct IncompleteSubMesh {
 
 pub struct ChunkMesh {
     pub quad_submeshes: Box<[QuadSubMesh]>,
+    #[expect(dead_code, reason = "todo")]
     pub submeshes: Box<[SubMesh]>,
 }
 
@@ -112,7 +117,7 @@ struct ChunkMesherCtx<'mc, 'chunk, 'neighbor> {
     block_models: Vec<BlockModel>,
 }
 
-impl<'mc, 'chunk, 'neighbor> ChunkMesherCtx<'mc, 'chunk, 'neighbor> {
+impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
     fn resolve_model_elements(&mut self, mut textures: HashMap<String, ResourceLocation>, model_location: ResourceLocation) -> ResolvedElements<'mc> {
         let model = self.mcdata.model(model_location);
 
@@ -219,7 +224,6 @@ impl<'mc, 'chunk, 'neighbor> ChunkMesherCtx<'mc, 'chunk, 'neighbor> {
 
 #[derive(Default)]
 struct ChunkMeshBuilder {
-    textures: ResourceLocationOrderSet<ResourceLocation>,
     quad_submeshes: EnumMap<CardinalDirection, Vec<IncompleteQuadSubMesh>>,
 }
 
@@ -228,7 +232,7 @@ impl ChunkMeshBuilder {
         if let Some(submesh) = self.quad_submeshes[face].iter_mut().find(|p| p.texture == texture) {
             submesh.instances.push(create_face_instance_data(pos));
         } else {
-            self.quad_submeshes[face].push_mut(IncompleteQuadSubMesh {
+            self.quad_submeshes[face].push(IncompleteQuadSubMesh {
                 texture,
                 instances: vec![
                     create_face_instance_data(pos),

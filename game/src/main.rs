@@ -79,7 +79,7 @@ impl engine::App for App {
             }).map(EnumMap::from_array)
             else { continue };
             let mesh = mesh_chunk(&self.mc_data, chunk, neighbors);
-            for submesh in mesh.submeshes {
+            for submesh in mesh.quad_submeshes {
                 let buffer = ctx.renderer.device().create_buffer(&wgpu::wgt::BufferDescriptor {
                     label: Some(&format!("chunk,{chunk_position},{:?},{}", submesh.direction, submesh.texture)),
                     size: (submesh.instances.len() * 4).try_into().unwrap(),
