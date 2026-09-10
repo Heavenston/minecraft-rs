@@ -123,7 +123,7 @@ fn register(texture: wgpu::Texture, render_graph: &mut engine::material::RenderG
                             array_stride: 4,
                             step_mode: wgpu::VertexStepMode::Instance,
                             attributes: &[
-                                wgpu::VertexAttribute { format: wgpu::VertexFormat::Uint16, offset: 0, shader_location: 0 },
+                                wgpu::VertexAttribute { format: wgpu::VertexFormat::Uint32, offset: 0, shader_location: 0 },
                             ],
                         })
                     ],

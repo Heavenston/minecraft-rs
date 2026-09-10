@@ -51,7 +51,7 @@ impl MinecraftData {
     }
 
     pub fn model(&self, location: ResourceLocation) -> &model::Model {
-        &self.models[&location]
+        self.models.get(&location).unwrap_or_else(|| panic!("Could not find block model {location}"))
     }
 
     pub fn read_texture(location: ResourceLocation) -> Result<image::DynamicImage> {

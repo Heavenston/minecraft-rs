@@ -86,8 +86,7 @@ impl engine::App for App {
                     usage: wgpu::BufferUsages::VERTEX,
                     mapped_at_creation: true,
                 });
-                let padded_data = submesh.instances.iter().flat_map(|&a| [a, 0]).collect_vec();
-                buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(bytemuck::cast_slice::<_, u8>(&padded_data));
+                buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(bytemuck::cast_slice::<_, u8>(&submesh.instances));
                 buffer.unmap();
                 let material = self.get_chunk_material(ctx, submesh.texture)?;
                 let material = ctx.world.get_material_mut(material).unwrap();

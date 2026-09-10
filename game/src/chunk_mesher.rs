@@ -128,8 +128,8 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
                     textures.insert(name.clone(), resource_location);
                 },
                 Texture::Reference(reference) => {
-                    if let Some(&val) = textures.get(&reference[1..]) {
-                        textures.insert(reference.clone(), val);
+                    if let Some(&val) = textures.get(reference.trim_start_matches('#')) {
+                        textures.insert(name.clone(), val);
                     }
                     else {
                         tracing::warn!(%reference, %model_location, "Could not find a texture reference");
@@ -193,8 +193,8 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
                     if face.tintindex != -1_i32 {
                         tracing::warn!(?model, "Unsuported tintindex");
                     }
-                    let Some(&texture) = textures.get(&face.texture)
-                    else { tracing::warn!(?model, texture = face.texture, "Could not get face texture ref"); continue };
+                    let Some(&texture) = textures.get(face.texture.trim_start_matches('#'))
+                    else { tracing::warn!(?model, texture = face.texture, ?textures, "Could not get face texture ref"); continue };
                     let axis = direction.axis();
                     if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
                         full_block_faces[direction].push(FullBlockFace { texture });
@@ -216,6 +216,7 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
     }
 
     fn is_neighbor_chunk_face_opaque(&self, neighbor_chunk: CardinalDirection, face: CardinalDirection, pos: USizeVec3) -> bool {
+        return false;
         // TODO
         let _ = face;
         self.neighbors[neighbor_chunk].get_data(pos).id == location!("minecraft:air")
@@ -287,7 +288,7 @@ fn mesh_for_direction(ctx: &ChunkMesherCtx<'_,'_,'_>, builder: &mut ChunkMeshBui
             neighbor
         };
 
-        if !ctx.is_neighbor_chunk_face_opaque(direction, direction.opposit(), neighbor_block_idx) { continue }
+        if ctx.is_neighbor_chunk_face_opaque(direction, direction.opposit(), neighbor_block_idx) { continue }
         for face in faces {
             builder.push_face(direction, pos, face.texture);
         }

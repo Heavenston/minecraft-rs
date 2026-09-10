@@ -63,7 +63,7 @@ impl ResourceLocation {
     }
     
     pub fn new(str: &str) -> Option<Self> {
-        Self::check(str).then(|| Self { inner: Ustr::from(str) })
+        Self::check(str).then(|| Self { inner: Ustr::from(str.trim_start_matches("minecraft:")) })
     }
 
     pub fn namespace(&self) -> &str {
