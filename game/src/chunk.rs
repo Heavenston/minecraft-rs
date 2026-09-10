@@ -64,19 +64,30 @@ impl Chunk {
         pos.cmplt(CHUNK_SIZE).all().then_some(pos.x + (pos.y + pos.z * CHUNK_SIZE.y) * CHUNK_SIZE.x)
     }
 
-    pub fn try_get(&self, pos: USizeVec3) -> Option<&BlockData> {
+    pub fn palette(&self) -> &ordermap::set::Slice<BlockData> {
+        self.pallette.blocks.as_slice()
+    }
+
+    pub fn try_get(&self, pos: USizeVec3) -> Option<usize> {
         let idx = Self::pos_to_idx(pos)?;
-        let palette_idx = match &self.blocks {
+        Some(match &self.blocks {
             ChunkData::Filled => 0,
             ChunkData::U8(d) => d[idx] as usize,
             ChunkData::U16(d) => d[idx] as usize,
             ChunkData::U32(d) => d[idx] as usize,
-        };
-        Some(self.pallette.blocks.get_index(palette_idx).expect("Stored pallette index is valid"))
+        })
     }
 
-    pub fn get(&self, pos: USizeVec3) -> &BlockData {
+    pub fn get(&self, pos: USizeVec3) -> usize {
         self.try_get(pos).expect("Out of bound chunk position")
+    }
+
+    pub fn try_get_data(&self, pos: USizeVec3) -> Option<&BlockData> {
+        Some(&self.pallette.blocks[self.try_get(pos)?])
+    }
+
+    pub fn get_data(&self, pos: USizeVec3) -> &BlockData {
+        self.try_get_data(pos).expect("Out of bound chunk position")
     }
 
     pub fn set(&mut self, pos: USizeVec3, val: &BlockData) {

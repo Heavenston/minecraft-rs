@@ -81,7 +81,7 @@ impl engine::App for App {
             let mesh = mesh_chunk(&self.mc_data, chunk, neighbors);
             for submesh in mesh.sub_meshes {
                 let buffer = ctx.renderer.device().create_buffer(&wgpu::wgt::BufferDescriptor {
-                    label: Some(&format!("chunk,{chunk_position},{:?},{}", submesh.face, submesh.texture)),
+                    label: Some(&format!("chunk,{chunk_position},{:?},{}", submesh.direction, submesh.texture)),
                     size: (submesh.instances.len() * 4).try_into().unwrap(),
                     usage: wgpu::BufferUsages::VERTEX,
                     mapped_at_creation: true,
@@ -92,7 +92,7 @@ impl engine::App for App {
                 let material = self.get_chunk_material(ctx, submesh.texture)?;
                 let material = ctx.world.get_material_mut(material).unwrap();
                 material.chunk_list = material.chunk_list.iter().cloned().chain([ChunkRenderData {
-                    direction: submesh.face,
+                    direction: submesh.direction,
                     position: (chunk_position * CHUNK_SIZE.as_isizevec3()).as_vec3(),
                     vertex_buffer: buffer,
                 }]).collect();

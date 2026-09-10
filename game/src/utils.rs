@@ -1,4 +1,4 @@
-use glam::{ISizeVec3, USizeVec3};
+use glam::{ISizeVec3, USizeVec3, Vec2, Vec3, Vec3Swizzles};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vec3Range(pub USizeVec3, pub USizeVec3);
@@ -99,7 +99,8 @@ fn test_vec3_iter() {
     ][..]);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Axis {
     X, Y, Z,
 }
@@ -122,6 +123,14 @@ impl Axis {
             Self::X => USizeVec3::X,
             Self::Y => USizeVec3::Y,
             Self::Z => USizeVec3::Z,
+        }
+    }
+
+    pub const fn as_vec3(self) -> Vec3 {
+        match self {
+            Self::X => Vec3::X,
+            Self::Y => Vec3::Y,
+            Self::Z => Vec3::Z,
         }
     }
 }
@@ -150,13 +159,26 @@ macro_rules! impl_index_axis {
                 }
             }
         }
+
+        const impl std::ops::Sub<Axis> for $name {
+            type Output = <Self as Vec3Swizzles>::Vec2;
+
+            fn sub(self, rhs: Axis) -> Self::Output {
+                match rhs {
+                    Axis::X => <Self as Vec3Swizzles>::Vec2::new(self.y, self.z),
+                    Axis::Y => <Self as Vec3Swizzles>::Vec2::new(self.x, self.z),
+                    Axis::Z => <Self as Vec3Swizzles>::Vec2::new(self.x, self.y),
+                }
+            }
+        }
+
         impl_index_axis!($($($rest)*)?);
     };
 }
 impl_index_axis!(
     glam::I8Vec3, i8 ; glam::I16Vec3, i16; glam::IVec3, i32 ; glam::I64Vec3, i64;
     glam::U8Vec3, u8 ; glam::U16Vec3, u16; glam::UVec3, u32 ; glam::U64Vec3, u64;
-    glam::Vec3  , f32; glam::DVec3  , f64; glam::BVec3, bool;
+    glam::Vec3  , f32; glam::DVec3  , f64;
     glam::USizeVec3, usize; glam::ISizeVec3, isize;
 );
 

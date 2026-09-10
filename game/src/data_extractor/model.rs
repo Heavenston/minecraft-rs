@@ -1,9 +1,10 @@
 #![allow(dead_code, reason = "follows schema, even if not everything is used")]
 
+use glam::{Affine3, Mat4, Quat, Vec3};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::{resource_location::ResourceLocation, utils::CardinalDirection};
+use crate::{resource_location::ResourceLocation, utils::{Axis, CardinalDirection}};
 
 #[derive(Debug, Deserialize)]
 pub struct Model {
@@ -100,12 +101,25 @@ pub struct ElementRotation {
     pub rescale: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Axis {
-    X,
-    Y,
-    Z,
+impl ElementRotation {
+    pub fn to_affine(&self) -> Affine3 {
+        let translated = Affine3::from_translation(Vec3::from_array(self.origin));
+        let anti_translated = Affine3::from_translation(-Vec3::from_array(self.origin));
+
+        let rotation = if let Some((axis, angle)) = self.axis.zip(self.angle) {
+            let rotation = Affine3::from_axis_angle(axis.as_vec3(), angle);
+            if self.rescale {
+                rotation * Affine3::from_scale(Vec3::splat(1f32 / angle.cos()))
+            }
+            else {
+                rotation
+            }
+        }
+        else {
+            Affine3::from_quat(Quat::from_euler(glam::EulerRot::XYZ, self.x, self.y, self.z))
+        };
+        translated * rotation * anti_translated
+    }
 }
 
 #[derive(Debug, Deserialize)]
