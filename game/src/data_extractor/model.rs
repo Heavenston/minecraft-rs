@@ -1,6 +1,6 @@
 #![allow(dead_code, reason = "follows schema, even if not everything is used")]
 
-use glam::{Affine3, Mat4, Quat, Vec3};
+use glam::{Affine3, Quat, Vec3};
 use serde::Deserialize;
 use std::collections::HashMap;
 

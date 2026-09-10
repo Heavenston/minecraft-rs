@@ -165,4 +165,3 @@ impl Hasher for PassThroughHasher {
 
 /// [`std::collections::HashMap`] with custom hasher for [`ResourceLocation`] that does like [`ustr::UstrMap`].
 pub type ResourceLocationMap<V> = HashMap<ResourceLocation, V, BuildHasherDefault<PassThroughHasher>>;
-pub type ResourceLocationOrderSet<V> = ordermap::set::OrderSet<V, BuildHasherDefault<PassThroughHasher>>;

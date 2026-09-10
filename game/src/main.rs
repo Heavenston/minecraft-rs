@@ -17,7 +17,7 @@ use glam::{ISizeVec3, Vec3, Vec4};
 use image::EncodableLayout as _;
 use itertools::Itertools as _;
 
-use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap, location}, utils::{CardinalDirection, ISizeVec3Range}};
+use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
 
 mod chunk;
 mod chunk_mesher;

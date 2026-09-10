@@ -1,4 +1,4 @@
-use glam::{ISizeVec3, USizeVec3, Vec2, Vec3, Vec3Swizzles};
+use glam::{ISizeVec3, USizeVec3, Vec3, Vec3Swizzles};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vec3Range(pub USizeVec3, pub USizeVec3);
@@ -103,6 +103,7 @@ fn test_vec3_iter() {
 #[serde(rename_all = "lowercase")]
 #[enumflags2::bitflags]
 #[repr(u8)]
+#[expect(clippy::use_self, reason = "bitflags macro generated")]
 pub enum Axis {
     X, Y, Z,
 }
@@ -187,6 +188,7 @@ impl_index_axis!(
 #[derive(serde::Deserialize, Debug, Clone, Copy, enum_map::Enum)]
 #[enumflags2::bitflags]
 #[repr(u8)]
+#[expect(clippy::use_self, reason = "bitflags macro generated")]
 pub enum CardinalDirection {
     #[serde(rename = "east")]
     PosX,
