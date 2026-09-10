@@ -198,7 +198,7 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
                     if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
                         full_block_faces[direction].push(FullBlockFace {
                             texture,
-                            tint_index: (face.tintindex + 1).try_into().unwrap(),
+                            tint_index: (face.tintindex + 1i32).try_into().unwrap(),
                         });
                     }
                 }

@@ -285,3 +285,16 @@ impl<'a, T, I> IntoIterator for &'a mut IndexMap<T, I> {
         self.iter_mut()
     }
 }
+
+impl<T, I> std::fmt::Debug for IndexMap<T, I>
+    where T: std::fmt::Debug,
+          I: MapIndex + std::fmt::Debug
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_map();
+        for (k, v) in self.enumerated() {
+            debug.entry(&k, v);
+        }
+        debug.finish()
+    }
+}

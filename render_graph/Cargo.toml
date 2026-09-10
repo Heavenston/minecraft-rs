@@ -7,13 +7,13 @@ edition.workspace = true
 [dependencies]
 render_graph_macros = { path = "../render_graph_macros" }
 indexmap = { workspace = true }
-typemap = { workspace = true }
 itertools = { workspace = true }
 tracing = { workspace = true }
 genmap = { workspace = true }
 static_assertions = "1.1.0"
 parking_lot = "0.12.5"
 ordermap = "1.2.2"
+rand = "0.10.2"
 
 [lints]
 workspace = true

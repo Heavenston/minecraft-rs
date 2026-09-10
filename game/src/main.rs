@@ -90,7 +90,7 @@ impl engine::App for App {
 
         let mut face_count: usize = 0;
 
-        #[expect(clippy::iter_over_hash_type, reason = "order is not observable")]
+        #[expect(clippy::iter_over_hash_type, reason = "order does not matter")]
         for (&chunk_position, chunk) in &self.chunks {
             let Some(neighbors) = CardinalDirection::VALUES.try_map(|direction| {
                 let new_pos = chunk_position + direction;
@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
     let generator = proc_gen::Generator::new(0);
 
     tracing::info!("Generating start chunks");
-    for p in ISizeVec3Range(ISizeVec3::new(-6, -4, -6), ISizeVec3::new(6, 4, 6)) {
+    for p in ISizeVec3Range(ISizeVec3::new(-2, -4, -2), ISizeVec3::new(2, 4, 2)) {
         chunks.insert(p, generator.generate_chunk(p));
     }
     tracing::info!("Finished");

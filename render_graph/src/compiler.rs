@@ -1,9 +1,12 @@
-use std::{collections::{HashMap, HashSet}, convert::identity, rc::Rc, sync::{Arc}};
+use std::{collections::{HashMap, HashSet}, convert::identity, hash::Hash, rc::Rc, sync::Arc};
 
 use genmap::{AssumeAlive, DenseIdx};
 use indexmap::{IndexMap, IndexSlice, MapIndex as _};
 use itertools::{Either, Itertools as _, chain};
+use ordermap::OrderMap;
 use parking_lot::RwLock;
+#[cfg(debug_assertions)]
+use rand::{SeedableRng as _, seq::{IndexedRandom as _, IteratorRandom as _}};
 
 use crate::{Label, NodeData, RenderGraph, ResourceConfig, ResourceData, UncheckedNodeHandle, UncheckedResourceHandle};
 
@@ -228,13 +231,14 @@ trait ResolvedResourcesContainer {
     }
 }
 
+#[derive(Debug)]
 struct ResolvedResources {
     node_count: usize,
     explicit_orderings: Box<[(NodeRef, NodeRef)]>,
     inputs: IndexMap<Box<[ResolvedInput]>, NodeRef>,
     borrows: IndexMap<Box<[ResolvedInput]>, NodeRef>,
     consumers: HashMap<ResolvedInput, NodeRef>,
-    borrowers: HashMap<ResolvedInput, Vec<NodeRef>>
+    borrowers: HashMap<ResolvedInput, Vec<NodeRef>>,
 }
 
 impl ResolvedResources {
@@ -246,11 +250,15 @@ impl ResolvedResources {
     }
 
     fn write_to_dot(&self, graph: &RenderGraph, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        let node_labels = graph.get_simplified_node_labels();
+        let resource_labels = graph.get_simplified_resource_labels();
+
         const INDENT: &str = "  ";
 
         macro_rules! rn {
             ($t:expr) => {{
-                &graph.resources.with($t.0).unwrap().get().label
+                // &graph.resources.with($t.0).unwrap().get().label
+                resource_labels[&graph.resource_handle($t)].clone()
             }};
         }
 
@@ -291,9 +299,9 @@ impl ResolvedResources {
             }};
         }
 
-        for (i,n) in graph.nodes().sorted_by_key(|(_,n)| n.label()) {
+        for (i,_) in graph.nodes().sorted_by_key(|(_,n)| n.label()) {
             let name = format!("N{}", i.as_usize());
-            write_node!(name, shape=>"cylinder", label=>format!("{} {}", i.as_usize(), n.label()));
+            write_node!(name, shape=>"cylinder", label=>node_labels[&graph.node_handle(i)]);
             for input in self.resolved_inputs(i) {
                 write_edge!(input -> name);
             }
@@ -323,6 +331,7 @@ impl ResolvedResourcesContainer for ResolvedResources {
     }
 }
 
+#[derive(Debug)]
 struct GraphResourceResolver {
     node_refs: Box<[NodeRef]>,
     explicit_orderings: Box<[(NodeRef, NodeRef)]>,
@@ -415,6 +424,15 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
         resolved_borrows: graph.nodes.iter().map(|node| vec![None; node.borrows.len()]).map_into().collect(),
     };
 
+    #[cfg(debug_assertions)]
+    let mut rng = {
+        let seed = rand::random();
+        // Without unordered priorization, and this seed, it doesn't work
+        // let seed = 8720349752554370550u64;
+        tracing::trace!(seed);
+        rand::rngs::Xoshiro256PlusPlus::seed_from_u64(seed)
+    };
+
     while !this.is_complete() {
         rr_println!("\n\n##############################");
         #[derive(Debug, Clone, Copy)]
@@ -423,12 +441,13 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
             input_idx: usize,
             is_from_unordered: bool,
         }
-        #[derive(Default, Clone)]
+        #[derive(Debug, Default, Clone)]
         struct ClaimList {
             borrows: Vec<(NodeRef, usize)>,
             consumes: Vec<ConsumeClaim>,
         }
-        let mut claims = HashMap::<(ResourceRef, InputOrNode), ClaimList>::new();
+        // We use OrderMap for deterministic iteration
+        let mut claims = OrderMap::<(ResourceRef, InputOrNode), ClaimList>::new();
         for (node, node_data) in graph.nodes() {
             rr_println!("{}{}", if chain!(&this.resolved_inputs[&node], &this.resolved_borrows[&node]).any(Option::is_none) { " " } else { "*" }, nn!(node));
             for (input_idx, resource) in node_data.consumes().enumerate() {
@@ -447,8 +466,32 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
 
                 let is_mutator = node_data.outputs().contains(&resource);
                 let is_unordered = graph.resource_cfg(resource).unordered;
-                let producer = if is_mutator && is_unordered && let Err(mut options) = producer {
-                    options.next().ok_or(Either::Right(())).map(|p| (p, true))
+
+                let ion_is_mutator = |o: InputOrNode| match o {
+                    InputOrNode::Input => false,
+                    InputOrNode::Node(other) => graph.node(other).is_mutator(resource),
+                };
+                
+                let producer = if is_mutator && is_unordered && let Err(options) = producer {
+                    // We need to prioritize using non mutators first,
+                    // so that ordering with all other nodes for this resource
+                    // is resolved before begining to link unordered nodes
+                    // this can lead to loops in the graph otherwise
+                    // (not 100% sure to understand this one)
+                    let found_one_non_mutator = options.clone().filter(|&&p| !ion_is_mutator(p)).exactly_one();
+                    found_one_non_mutator.map_or_else(|mut non_mutators| {
+                        let empty = non_mutators.next().is_none();
+                        if empty {
+                            let o2 = options.clone().filter(|&&p| ion_is_mutator(p));
+                            #[cfg(debug_assertions)]
+                            { o2.choose(&mut rng) }
+                            #[cfg(not(debug_assertions))]
+                            { let mut o2 = o2; o2.next() }
+                        }
+                        else {
+                            None
+                        }
+                    }, Some).ok_or(Either::Right(())).map(|p| (p, true))
                 } else {
                     producer.map(|p| (p, false)).map_err(Either::Left)
                 };
@@ -495,16 +538,43 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
             }
         }
 
+        // This stores nodes that won claims along the way.
+        // Because it probably changed its ordering compared to other nodes.
+        // So no node should claim any of its output without checking again
+        // its ordering.
+        //
+        // Note that it doesn't help against any incompatible claims
+        // but it does for the one generated with the current claim code.
+        let mut claimed = HashSet::<NodeRef>::new();
+
+        #[cfg(debug_assertions)]
+        let claims = {
+            use rand::seq::SliceRandom as _;
+
+            let mut claims = claims.into_iter().collect_vec();
+            claims.shuffle(&mut rng);
+            claims
+        };
+
         let mut found_valid = false;
-        #[expect(clippy::iter_over_hash_type, reason = "Iteration order here has no impact")]
         for ((claim_resource, claim_producer), claimers) in claims {
+            if let InputOrNode::Node(producer) = claim_producer && claimed.contains(&producer) {
+                continue;
+            }
+
             if claimers.borrows.is_empty() {
                 let wining_claim = claimers.consumes.iter().exactly_one()
-                    .map_or_else(|mut options| {
-                        options.all(|o| o.is_from_unordered)
-                            .then_some(&claimers.consumes[0])
+                    .map_or_else(|_| {
+                        claimers.consumes.iter().all(|o| o.is_from_unordered)
+                            .then(|| {
+                                #[cfg(debug_assertions)]
+                                { claimers.consumes.choose(&mut rng).unwrap() }
+                                #[cfg(not(debug_assertions))]
+                                { &claimers.consumes[0] }
+                            })
                     }, Some);
                 if let Some(&ConsumeClaim { node, input_idx, .. }) = wining_claim {
+                    claimed.insert(node);
                     rr_println!("REVOLED {} consumes {} from {}", nn!(node), rn!(claim_resource), ton!(claim_producer));
                     found_valid = true;
                     debug_assert!(this.resolved_inputs[node][input_idx].is_none());

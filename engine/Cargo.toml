@@ -6,7 +6,6 @@ edition.workspace = true
 
 [dependencies]
 render_graph = { workspace = true }
-typemap = { workspace = true }
 harness = { workspace = true }
 genmap = { workspace = true }
 

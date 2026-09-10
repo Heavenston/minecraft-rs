@@ -10,8 +10,9 @@ mod compiler;
 mod tests;
 mod label;
 pub use label::Label;
+use ordermap::OrderMap;
 
-use std::{ any::{ Any, TypeId }, borrow::Cow, collections::{HashMap, HashSet, hash_map}, marker::PhantomData, ops::BitOr, sync::atomic::AtomicPtr };
+use std::{ any::{ Any, TypeId }, borrow::Cow, collections::{HashMap, HashSet}, marker::PhantomData, ops::BitOr, sync::atomic::AtomicPtr };
 use static_assertions as sa;
 use genmap::{AssumeAlive, GenMap, Handle};
 use itertools::Itertools as _;
@@ -20,11 +21,16 @@ pub use render_graph_macros::{ input_bundle, output_bundle, node_helper };
 
 use crate::compiler::CompiledGraph;
 
-fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: &HashMap<K, Label>) -> HashMap<K, String> {
-    let mut node_labels = HashMap::<K, String>::new();
+fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: impl Iterator<Item = (K, Label<'static>)>) -> HashMap<K, String> {
+    // This function uses OrderMap to have deterministic names for each call to
+    // this function
+
+    let values: OrderMap<K, Label<'static>> = values.collect();
+
+    let mut node_labels = OrderMap::<K, String>::new();
     let mut todo_stack: Vec<K> = values.keys().cloned().collect();
-    let mut taken_node_labels = HashMap::<String, Vec<K>>::new();
-    let mut unique_idxs = HashMap::<String, ordermap::OrderSet<K>>::new();
+    let mut taken_node_labels = OrderMap::<String, Vec<K>>::new();
+    let mut unique_idxs = OrderMap::<String, ordermap::OrderSet<K>>::new();
     'outer_loop: while let Some(handle) = todo_stack.pop() {
         let full_name = match &values[&handle] {
             &Label::TypeName(tn) => tn,
@@ -51,13 +57,13 @@ fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: &HashMap<K, La
         for name in possible_names {
             let takeners = taken_node_labels.entry(name.clone());
             match takeners {
-                hash_map::Entry::Occupied(mut entry) => {
+                ordermap::map::Entry::Occupied(mut entry) => {
                     for t in entry.get_mut().drain(..) {
                         node_labels.remove(&t);
                         todo_stack.push(t);
                     }
                 },
-                hash_map::Entry::Vacant(entry) => {
+                ordermap::map::Entry::Vacant(entry) => {
                     entry.insert(vec![handle.clone()]);
                     node_labels.insert(handle, name.clone());
                     continue 'outer_loop;
@@ -67,7 +73,7 @@ fn get_simplified_labels<K: std::hash::Hash + Eq + Clone>(values: &HashMap<K, La
         tracing::warn!(full_name, "Could not find deduped label for node");
     }
     debug_assert!(values.keys().all(|k| node_labels.contains_key(k)));
-    node_labels
+    node_labels.into_iter().collect()
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
@@ -119,7 +125,6 @@ pub trait GraphResourceId: Any {
     fn get_resource_ref(&self) -> &Self::Resource
         where Self: Sized;
 }
-typemap::impl_dyn_trait!(GraphResourceId);
 
 #[macro_export]
 macro_rules! graph_resource {
@@ -660,11 +665,11 @@ impl RenderGraph {
     }
 
     fn get_simplified_node_labels(&self) -> HashMap<UncheckedNodeHandle, String> {
-        get_simplified_labels(&self.nodes.enumerated().map(|(sparse_idx,_,n)| (UncheckedNodeHandle(sparse_idx), n.label().to_static())).collect())
+        get_simplified_labels(self.nodes.enumerated().map(|(sparse_idx,_,n)| (UncheckedNodeHandle(sparse_idx), n.label().to_static())))
     }
 
     fn get_simplified_resource_labels(&self) -> HashMap<UncheckedResourceHandle, String> {
-        let mut simplified = get_simplified_labels(&self.resources.enumerated().map(|(sparse_idx,_,n)| (UncheckedResourceHandle(sparse_idx), n.label.to_static())).collect());
+        let mut simplified = get_simplified_labels(self.resources.enumerated().map(|(sparse_idx,_,n)| (UncheckedResourceHandle(sparse_idx), n.label.to_static())));
         #[expect(clippy::iter_over_hash_type, reason = "Iteration order is not observable")]
         for (k, v) in &mut simplified {
             let cfg = &self.resources.with(AssumeAlive(k.0)).get().config;
