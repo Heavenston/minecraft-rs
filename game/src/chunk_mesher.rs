@@ -212,15 +212,13 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
     }
 
     fn is_face_opaque(&self, dir: CardinalDirection, pos: USizeVec3) -> bool {
-        false
-        // self.block_models[self.chunk.get(pos)].culling_directions.contains(dir)
+        self.block_models[self.chunk.get(pos)].culling_directions.contains(dir)
     }
 
     fn is_neighbor_chunk_face_opaque(&self, neighbor_chunk: CardinalDirection, face: CardinalDirection, pos: USizeVec3) -> bool {
-        return false;
         // TODO
         let _ = face;
-        self.neighbors[neighbor_chunk].get_data(pos).id == location!("minecraft:air")
+        self.neighbors[neighbor_chunk].get_data(pos).id != location!("minecraft:air")
     }
 }
 
@@ -289,7 +287,7 @@ fn mesh_for_direction(ctx: &ChunkMesherCtx<'_,'_,'_>, builder: &mut ChunkMeshBui
             neighbor
         };
 
-        // if ctx.is_neighbor_chunk_face_opaque(direction, direction.opposit(), neighbor_block_idx) { continue }
+        if ctx.is_neighbor_chunk_face_opaque(direction, direction.opposit(), neighbor_block_idx) { continue }
         for face in faces {
             builder.push_face(direction, pos, face.texture);
         }
