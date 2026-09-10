@@ -58,6 +58,8 @@ fn extract_offset(data: u32) -> vec3f {
 struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) texcoord: vec2f,
+    @interpolate(flat)
+    @location(1) tint_index: u32,
 };
 
 @vertex fn vs(
@@ -70,15 +72,21 @@ struct VertexOutput {
     var output: VertexOutput;
     output.position = world.view_projection_matrix * vec4f(pos, 1.0);
     output.texcoord = uv;
+    output.tint_index = (face_data >> 12) & 0x0f;
     return output;
 }
 
 // Directional fake shading on blocks for each direction, same as minecraft
 const lights: array<f32, 6> = array(0.6, 0.6, 1.0, 0.5, 0.8, 0.8);
 
+const plains_grass_tint: vec4f = vec4f(0.5686274509803921, 0.7411764705882353, 0.34901960784313724, 1.);
+
 @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
     var tex = textureSample(texture, texture_sampler, input.texcoord);
     let light = lights[imm.direction];
     tex = vec4f(tex.rgb * light, tex.a);
+    if input.tint_index != 0 {
+        tex *= plains_grass_tint;
+    }
     return tex;
 }

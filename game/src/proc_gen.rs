@@ -5,7 +5,7 @@ use glam::{DVec2, DVec3, ISizeVec3, USizeVec2, USizeVec3, Vec3Swizzles as _};
 
 use noise::{HybridMulti, NoiseFn as _, Simplex};
 use rand::{Rng as _, RngExt as _, SeedableRng as _, rngs::SmallRng};
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, resource_location::location, utils::Vec3Range};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, resource_location::location};
 
 const MAX_HEIGHT: f64 = 16.;
 const MIN_HEIGHT: f64 = -16.;
@@ -54,8 +54,8 @@ impl Generator {
     pub fn generate_chunk(&self, chunk_pos: ISizeVec3) -> Chunk {
         let mut chunk = Chunk::new();
         let filled_block = BlockData {
-            id: location!("kgs-debug-blocks:debug2"),
-            state: String::new(),
+            id: location!("minecraft:grass_block"),
+            state: "snowy=false".to_string(),
         };
 
         let chunk_offset = chunk_pos * CHUNK_SIZE.as_isizevec3();

@@ -16,10 +16,11 @@ ca::const_assert!(CHUNK_OFFSET_BITS == 12);
 
 type FaceInstanceData = u32;
 
-fn create_face_instance_data(offset: USizeVec3) -> FaceInstanceData {
+fn create_face_instance_data(offset: USizeVec3, tint_index: u8) -> FaceInstanceData {
     debug_assert_eq!(offset.as_uvec3().as_usizevec3(), offset);
+    debug_assert_eq!(tint_index & 0xF, tint_index);
     let offset = offset.as_uvec3();
-    ((offset.x << CHUNK_SIZE.y.ilog2()) | offset.y) << CHUNK_SIZE.z.ilog2() | offset.z
+    ((((u32::from(tint_index) << CHUNK_SIZE.x.ilog2()) | offset.x) << CHUNK_SIZE.y.ilog2()) | offset.y) << CHUNK_SIZE.z.ilog2() | offset.z
 }
 
 const fn create_interior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
@@ -103,6 +104,7 @@ struct ResolvedElements<'a> {
 
 struct FullBlockFace {
     texture: ResourceLocation,
+    tint_index: u8,
 }
 
 struct BlockModel {
@@ -190,14 +192,14 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
 
                 #[expect(clippy::iter_over_hash_type, reason = "iteration order does not matter")]
                 for (&direction, face) in &element.faces {
-                    if face.tintindex != -1_i32 {
-                        tracing::warn!(?model, "Unsuported tintindex");
-                    }
                     let Some(&texture) = textures.get(face.texture.trim_start_matches('#'))
                     else { tracing::warn!(?model, texture = face.texture, ?textures, "Could not get face texture ref"); continue };
                     let axis = direction.axis();
                     if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
-                        full_block_faces[direction].push(FullBlockFace { texture });
+                        full_block_faces[direction].push(FullBlockFace {
+                            texture,
+                            tint_index: (face.tintindex + 1).try_into().unwrap(),
+                        });
                     }
                 }
             }
@@ -228,14 +230,14 @@ struct ChunkMeshBuilder {
 }
 
 impl ChunkMeshBuilder {
-    fn push_face(&mut self, face: CardinalDirection, pos: USizeVec3, texture: ResourceLocation) {
-        if let Some(submesh) = self.quad_submeshes[face].iter_mut().find(|p| p.texture == texture) {
-            submesh.instances.push(create_face_instance_data(pos));
+    fn push_face(&mut self, dir: CardinalDirection, pos: USizeVec3, face: &FullBlockFace) {
+        if let Some(submesh) = self.quad_submeshes[dir].iter_mut().find(|p| p.texture == face.texture) {
+            submesh.instances.push(create_face_instance_data(pos, face.tint_index));
         } else {
-            self.quad_submeshes[face].push(IncompleteQuadSubMesh {
-                texture,
+            self.quad_submeshes[dir].push(IncompleteQuadSubMesh {
+                texture: face.texture,
                 instances: vec![
-                    create_face_instance_data(pos),
+                    create_face_instance_data(pos, face.tint_index),
                 ],
             });
         }
@@ -267,7 +269,7 @@ fn mesh_for_direction(ctx: &ChunkMesherCtx<'_,'_,'_>, builder: &mut ChunkMeshBui
         if faces.is_empty() { continue; }
         if ctx.is_face_opaque(direction.opposit(), pos + direction) { continue }
         for face in faces {
-            builder.push_face(direction, pos, face.texture);
+            builder.push_face(direction, pos, face);
         }
     }
 
@@ -289,7 +291,7 @@ fn mesh_for_direction(ctx: &ChunkMesherCtx<'_,'_,'_>, builder: &mut ChunkMeshBui
 
         if ctx.is_neighbor_chunk_face_opaque(direction, direction.opposit(), neighbor_block_idx) { continue }
         for face in faces {
-            builder.push_face(direction, pos, face.texture);
+            builder.push_face(direction, pos, face);
         }
     }
 }
