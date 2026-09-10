@@ -1,5 +1,6 @@
 use std::{io::BufReader, path::Path};
 use anyhow::{Context as _, Result};
+use itertools::Itertools as _;
 
 use crate::resource_location::{ResourceLocation, ResourceLocationMap};
 
@@ -8,25 +9,30 @@ pub mod model;
 
 const ASSETS_BASE_PATH: &str = "./minecraft_resources/assets";
 
-fn read_folder<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>, namespace: &str, path_prefix: &str) -> Result<ResourceLocationMap<T>> {
-    let dir = std::fs::read_dir(Path::new(ASSETS_BASE_PATH).join(path))?;
+fn read_folder<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>, namespace: &str) -> Result<ResourceLocationMap<T>> {
+    let path = path.as_ref();
+    let entries = dirwalk::WalkBuilder::new(path)
+        .extensions(["json"])
+        .iter()?;
 
     let mut result = ResourceLocationMap::default();
-    for entry in dir {
+    for entry in entries {
         let entry = entry?;
-        let file = BufReader::new(std::fs::File::open(entry.path())?);
+        if entry.is_dir || entry.is_hidden { continue }
+        let file_path = path.join(&entry.relative_path);
+
+        let file = BufReader::new(std::fs::File::open(&file_path)?);
         match serde_json::from_reader::<_, T>(file) {
             Ok(value) => {
-                let filename = entry.file_name().to_string_lossy().to_string();
-                let filename = filename.split('.').next().unwrap_or_default();
-                let Some(resource_location) = ResourceLocation::new(&format!("{namespace}:{path_prefix}{filename}"))
+                let filename = entry.relative_path.trim_end_matches(".json").to_string();
+                let Some(resource_location) = ResourceLocation::new(&format!("{namespace}:{filename}"))
                 else {
-                    tracing::warn!(file_path = ?entry.path(), filename, "Invalid resource location name");
+                    tracing::warn!(?file_path, filename, "Invalid resource location name");
                     continue;
                 };
                 result.insert(resource_location, value);
             },
-            Err(error) => tracing::warn!(path = ?entry.path(), %error, "Could not read file"),
+            Err(error) => tracing::warn!(?file_path, %error, "Could not read file"),
         }
     }
     Ok(result)
@@ -40,9 +46,25 @@ pub struct MinecraftData {
 impl MinecraftData {
     #[expect(clippy::single_call_fn, reason = "I sure hope this is created once")]
     pub fn read() -> Result<Self> {
-        let blockstates = read_folder("minecraft/blockstates", "minecraft", "")?;
-        let models = read_folder("minecraft/models/block", "minecraft", "block/")?;
-        tracing::info!(blockstate_count = blockstates.len(), model_count = models.len(), "Exaction finished");
+        let mut blockstates = ResourceLocationMap::<blockstate::BlockState>::default();
+        let mut models = ResourceLocationMap::<model::Model>::default();
+        for subfolder in std::fs::read_dir(ASSETS_BASE_PATH)? {
+            let subfolder = subfolder?;
+            if !subfolder.file_type()?.is_dir() { continue }
+            match subfolder.file_name().into_string() {
+                Err(str) => {
+                    tracing::warn!(?str, "Folder in assets has invalid characters");
+                },
+                Ok(s) if !ResourceLocation::check_namespace(&s) => {
+                    tracing::warn!(namespace = s, "Folder in assets is not a valid namespace");
+                },
+                Ok(namespace) => {
+                    blockstates.extend(read_folder(subfolder.path().join("blockstates"), &namespace)?);
+                    models.extend(read_folder(subfolder.path().join("models"), &namespace)?);
+                },
+            }
+        }
+        tracing::info!(blockstate_count = blockstates.len(), model_count = models.len(), namespaces = ?blockstates.keys().chain(models.keys()).copied().map(ResourceLocation::namespace).unique().collect_vec(), "Exaction finished");
         Ok(Self { blockstates, models })
     }
 

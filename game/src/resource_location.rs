@@ -20,6 +20,48 @@ pub struct ResourceLocation {
 }
 
 impl ResourceLocation {
+    pub const fn check_namespace(str: &str) -> bool {
+        if str == ".." { return false }
+        if str.is_empty() { return false }
+        if !str.is_ascii() { return false }
+        let bytes = str.as_bytes();
+
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let is_valid_char = match char::from_u32(bytes[i] as u32) {
+                None => false,
+                Some(x) => is_valid_char(x),
+            };
+            if !is_valid_char {
+                return false;
+            }
+            i += 1;
+        }
+
+        true
+    }
+
+    pub const fn check_path(str: &str) -> bool {
+        if str.is_empty() { return false }
+        if !str.is_ascii() { return false }
+        let bytes = str.as_bytes();
+
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let is_valid_char = match char::from_u32(bytes[i] as u32) {
+                None => false,
+                Some('/') => true,
+                Some(x) => is_valid_char(x),
+            };
+            if !is_valid_char {
+                return false;
+            }
+            i += 1;
+        }
+
+        true
+    }
+
     pub const fn check(str: &str) -> bool {
         if !str.is_ascii() { return false }
         let bytes = str.as_bytes();
@@ -66,19 +108,19 @@ impl ResourceLocation {
         Self::check(str).then(|| Self { inner: Ustr::from(str.trim_start_matches("minecraft:")) })
     }
 
-    pub fn namespace(&self) -> &str {
+    pub fn namespace(self) -> &'static str {
         const DEFAULT_NAMESPACE: &str = "minecraft";
-        self.inner.split_once(':')
+        self.inner.as_str().split_once(':')
             .map_or(DEFAULT_NAMESPACE, |(namespace,_)| namespace)
     }
 
-    pub fn path(&self) -> &str {
-        self.inner.split_once(':')
-            .map_or(&self.inner, |(_,path)| path)
+    pub fn path(self) -> &'static str {
+        self.inner.as_str().split_once(':')
+            .map_or(self.inner.as_str(), |(_,path)| path)
     }
 
-    pub fn as_str(&self) -> &str {
-        &self.inner
+    pub fn as_str(self) -> &'static str {
+        self.inner.as_str()
     }
 }
 

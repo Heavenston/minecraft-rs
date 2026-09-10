@@ -26,6 +26,7 @@ crevice.workspace = true
 bytemuck = { version = "1.25.2", features = ["derive"] }
 ustr = "1.1.0"
 enumflags2 = "0.7.12"
+dirwalk = "1.1.1"
 
 [lints]
 workspace = true
