@@ -56,7 +56,8 @@ pub enum Texture {
     /// A reference such as "#side".
     Reference(String),
     Detailed {
-        sprite: ResourceLocation,
+        #[serde(rename = "sprite")]
+        location: ResourceLocation,
 
         #[serde(default)]
         force_translucent: bool,

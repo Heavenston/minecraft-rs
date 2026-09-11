@@ -53,10 +53,8 @@ impl Generator {
 
     pub fn generate_chunk(&self, chunk_pos: ISizeVec3) -> Chunk {
         let mut chunk = Chunk::new();
-        let filled_block = BlockData {
-            id: location!("minecraft:grass_block"),
-            state: "snowy=false".to_string(),
-        };
+        let top_block = BlockData { id: location!("minecraft:grass_block"), state: "snowy=false".to_string(), };
+        let bottom_block = BlockData { id: location!("minecraft:dirt"), state: String::new(), };
 
         let chunk_offset = chunk_pos * CHUNK_SIZE.as_isizevec3();
         for dx in 0..CHUNK_SIZE.x {
@@ -65,12 +63,23 @@ impl Generator {
                 let global_pos2d = chunk_offset.xz() + delta_pos2d.as_isizevec2();
                 let global_pos2d = global_pos2d.as_dvec2();
                 let height = self.height_at(global_pos2d);
-                for dy in 0..CHUNK_SIZE.y {
+
+                let mut prev = self.generate_block(DVec3::new(global_pos2d.x, chunk_offset.y as f64 + CHUNK_SIZE.y as f64, global_pos2d.y), height);
+                for dy in (0..CHUNK_SIZE.y).rev() {
                     let delta_pos = USizeVec3::new(dx, dy, dz);
                     let global_y = chunk_offset.y.wrapping_add_unsigned(dy);
                     let global_pos = DVec3::new(global_pos2d.x, global_y as f64, global_pos2d.y);
                     if self.generate_block(global_pos, height) {
-                        chunk.set(delta_pos, &filled_block);
+                        if prev {
+                            chunk.set(delta_pos, &bottom_block);
+                        }
+                        else {
+                            chunk.set(delta_pos, &top_block);
+                        }
+                        prev = true;
+                    }
+                    else {
+                        prev = false;
                     }
                 }
             }

@@ -58,6 +58,7 @@ static EXTERIOR_RANGES: EnumMap<CardinalDirection, Vec3Range> = create_exterior_
 pub struct QuadSubMesh {
     pub direction: CardinalDirection,
     pub texture: ResourceLocation,
+    pub force_transparency: bool,
     pub instances: Box<[FaceInstanceData]>,
 }
 
@@ -75,6 +76,7 @@ pub struct SubMesh {
 
 struct IncompleteQuadSubMesh {
     texture: ResourceLocation,
+    force_transparency: bool,
     instances: Vec<FaceInstanceData>,
 }
 
@@ -96,14 +98,21 @@ pub struct ChunkMesh {
     pub submeshes: Box<[SubMesh]>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ResolvedTexture {
+    force_translucent: bool,
+    location: ResourceLocation,
+}
+
 struct ResolvedElements<'a> {
     model: ResourceLocation,
     elements: &'a [model::Element],
-    textures: HashMap<String, ResourceLocation>,
+    textures: HashMap<String, ResolvedTexture>,
 }
 
 struct FullBlockFace {
     texture: ResourceLocation,
+    force_transparency: bool,
     tint_index: u8,
 }
 
@@ -120,14 +129,23 @@ struct ChunkMesherCtx<'mc, 'chunk, 'neighbor> {
 }
 
 impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
-    fn resolve_model_elements(&mut self, mut textures: HashMap<String, ResourceLocation>, model_location: ResourceLocation) -> ResolvedElements<'mc> {
+    fn resolve_model_elements(&mut self, mut textures: HashMap<String, ResolvedTexture>, model_location: ResourceLocation) -> ResolvedElements<'mc> {
         let model = self.mcdata.model(model_location);
 
         #[expect(clippy::iter_over_hash_type, reason = "ordering should not matter -> not 'self' references")]
         for (name, location) in &model.textures {
             match location {
-                &Texture::Location(resource_location) | &Texture::Detailed { sprite: resource_location, force_translucent: _ } => {
-                    textures.insert(name.clone(), resource_location);
+                &Texture::Location(location) => {
+                    textures.insert(name.clone(), ResolvedTexture {
+                        force_translucent: false,
+                        location,
+                    });
+                },
+                &Texture::Detailed { location, force_translucent } => {
+                    textures.insert(name.clone(), ResolvedTexture {
+                        force_translucent,
+                        location,
+                    });
                 },
                 Texture::Reference(reference) => {
                     if let Some(&val) = textures.get(reference.trim_start_matches('#')) {
@@ -197,7 +215,8 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
                     let axis = direction.axis();
                     if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
                         full_block_faces[direction].push(FullBlockFace {
-                            texture,
+                            texture: texture.location,
+                            force_transparency: texture.force_translucent,
                             tint_index: (face.tintindex + 1i32).try_into().unwrap(),
                         });
                     }
@@ -231,11 +250,12 @@ struct ChunkMeshBuilder {
 
 impl ChunkMeshBuilder {
     fn push_face(&mut self, dir: CardinalDirection, pos: USizeVec3, face: &FullBlockFace) {
-        if let Some(submesh) = self.quad_submeshes[dir].iter_mut().find(|p| p.texture == face.texture) {
+        if let Some(submesh) = self.quad_submeshes[dir].iter_mut().find(|p| p.texture == face.texture && p.force_transparency == face.force_transparency) {
             submesh.instances.push(create_face_instance_data(pos, face.tint_index));
         } else {
             self.quad_submeshes[dir].push(IncompleteQuadSubMesh {
                 texture: face.texture,
+                force_transparency: face.force_transparency,
                 instances: vec![
                     create_face_instance_data(pos, face.tint_index),
                 ],
@@ -246,10 +266,11 @@ impl ChunkMeshBuilder {
     fn finish(self) -> ChunkMesh {
         let quad_submeshes = self.quad_submeshes.into_iter()
             .flat_map(|(face, meshes)| meshes.into_iter().map(move |submesh| (face, submesh)))
-            .map(|(direction, IncompleteQuadSubMesh { texture, instances })| {
+            .map(|(direction, IncompleteQuadSubMesh { texture, force_transparency, instances })| {
                 QuadSubMesh {
                     direction,
                     texture,
+                    force_transparency,
                     instances: instances.into_boxed_slice(),
                 }
             })

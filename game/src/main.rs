@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result};
 use engine::{wgpu::{self, util::DeviceExt as _}, world::MaterialHandle};
 use enum_map::EnumMap;
 use glam::{ISizeVec3, Vec3, Vec4};
-use image::EncodableLayout as _;
+use image::{EncodableLayout as _, Pixel as _};
 use render_graph::RenderGraph;
 
 use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
@@ -28,6 +28,18 @@ mod materials;
 
 mod data_extractor;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ChunkMaterialKey {
+    texture_location: ResourceLocation,
+    transparency: bool,
+}
+
+#[derive(Debug, Clone)]
+struct TextureData {
+    texture: wgpu::Texture,
+    has_transparency: bool,
+}
+
 struct App {
     vsync: bool,
     enable_wireframe: bool,
@@ -38,18 +50,20 @@ struct App {
     generator: proc_gen::Generator,
 
     start: Instant,
-    chunk_materials: RefCell<ResourceLocationMap<MaterialHandle<ChunkMaterial>>>,
+    textures: RefCell<ResourceLocationMap<TextureData>>,
+    chunk_materials: RefCell<HashMap<ChunkMaterialKey, MaterialHandle<ChunkMaterial>>>,
 }
 
 impl App {
-    fn get_chunk_material(&self, ctx: &mut engine::ResumeCtx<'_>, location: ResourceLocation) -> Result<MaterialHandle<ChunkMaterial>> {
-        if let Some(&material) = self.chunk_materials.borrow().get(&location) {
-            return Ok(material);
+    fn get_texture(&self, ctx: &engine::ResumeCtx<'_>, location: ResourceLocation) -> Result<TextureData> {
+        if let Some(texture) = self.textures.borrow().get(&location).cloned() {
+            return Ok(texture);
         }
 
         let mut image = MinecraftData::read_texture(location).with_context(|| format!("reading mc texture {location}"))?;
         image.apply_color_space(image::metadata::Cicp::SRGB, image::ConvertColorOptions::default())?;
         let image = image.to_rgba8();
+        let has_transparency = image.pixels().any(|p| p.alpha() < 255);
         let texture = ctx.renderer.device().create_texture_with_data(ctx.renderer.queue(), &wgpu::wgt::TextureDescriptor {
             label: Some(location.as_str()),
             size: wgpu::Extent3d { width: image.width(), height: image.height(), depth_or_array_layers: 1 },
@@ -61,8 +75,28 @@ impl App {
             view_formats: &[],
         }, wgpu::wgt::TextureDataOrder::LayerMajor, image.as_bytes());
 
-        let material = ctx.world.add_material(ChunkMaterial::new(texture));
-        self.chunk_materials.borrow_mut().insert(location, material);
+        let data = TextureData {
+            texture,
+            has_transparency,
+        };
+        self.textures.borrow_mut().insert(location, data.clone());
+
+        Ok(data)
+    }
+
+    fn get_chunk_material(&self, ctx: &mut engine::ResumeCtx<'_>, texture_location: ResourceLocation, force_transparency: bool) -> Result<MaterialHandle<ChunkMaterial>> {
+        let TextureData { texture, has_transparency } = self.get_texture(ctx, texture_location)?;
+        let transparency = force_transparency || has_transparency;
+        let key = ChunkMaterialKey { texture_location, transparency };
+        if let Some(&material) = self.chunk_materials.borrow().get(&key) {
+            return Ok(material);
+        }
+
+        let material = ctx.world.add_material(ChunkMaterial::new(materials::ChunkRenderConfig {
+            texture,
+            transparency,
+        }));
+        self.chunk_materials.borrow_mut().insert(key, material);
 
         Ok(material)
     }
@@ -108,7 +142,7 @@ impl engine::App for App {
                 face_count += submesh.instances.len();
                 buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(bytemuck::cast_slice::<_, u8>(&submesh.instances));
                 buffer.unmap();
-                let material = self.get_chunk_material(ctx, submesh.texture)?;
+                let material = self.get_chunk_material(ctx, submesh.texture, submesh.force_transparency)?;
                 let material = ctx.world.get_material_mut(material).unwrap();
                 material.chunk_list = material.chunk_list.iter().cloned().chain([ChunkRenderData {
                     direction: submesh.direction,
@@ -167,7 +201,7 @@ async fn main() -> Result<()> {
     let generator = proc_gen::Generator::new(0);
 
     tracing::info!("Generating start chunks");
-    for p in ISizeVec3Range(ISizeVec3::new(-2, -4, -2), ISizeVec3::new(2, 4, 2)) {
+    for p in ISizeVec3Range(ISizeVec3::new(-6, -4, -6), ISizeVec3::new(6, 4, 6)) {
         chunks.insert(p, generator.generate_chunk(p));
     }
     tracing::info!("Finished");
@@ -181,6 +215,7 @@ async fn main() -> Result<()> {
         generator,
 
         start: Instant::now(),
+        textures: RefCell::new(HashMap::default()),
         chunk_materials: RefCell::new(HashMap::default()),
     })?;
 
