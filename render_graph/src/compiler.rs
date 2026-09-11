@@ -278,7 +278,7 @@ struct GraphResourceResolver {
     resolved_inputs: IndexMap<Box<[Option<ResolvedInput>]>, NodeRef>,
     resolved_borrows: IndexMap<Box<[Option<ResolvedInput>]>, NodeRef>,
 
-    after_or_equal_cache: HashSet<(NodeRef, NodeRef)>,
+    after_or_equal_cache: Box<[bool]>,
 }
 
 impl GraphResourceResolver {
@@ -305,23 +305,33 @@ impl GraphResourceResolver {
             .into_group_map()
     }
 
+    fn after_or_equal_cached_idx(&self, after: NodeRef, before: NodeRef) -> usize {
+        after.as_usize() * self.node_refs.len() + before.as_usize()
+    }
+
+    fn after_or_equal_cached(&self, after: NodeRef, before: NodeRef) -> bool {
+        self.after_or_equal_cache[self.after_or_equal_cached_idx(after, before)]
+    }
+
     fn is_after_or_equal_partial(&self, after: NodeRef, before: NodeRef) -> bool {
         after == before ||
         self.explicit_orderings().contains(&(before, after)) ||
         self.combined_inputs(after).any(|input| input.producer == before) ||
         self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2)) ||
-        self.node_refs().any(|third| self.after_or_equal_cache.contains(&(after, third)) && self.after_or_equal_cache.contains(&(third, before)))
+        self.node_refs().any(|third| self.after_or_equal_cached(after, third) && self.after_or_equal_cached(third, before))
     }
 
     fn resolve_is_after_or_equal(&mut self) {
+        // FIXME: This is a O(n^2), naive algorithm
+        // this replaces a non-naive version that ended up not being correct.
         let mut finished = false;
         while !finished {
             finished = true;
             for after in self.node_refs() {
                 for before in self.node_refs() {
-                    if self.after_or_equal_cache.contains(&(after, before)) { continue }
+                    if self.after_or_equal_cached(after, before) || self.after_or_equal_cached(before, after) { continue }
                     if self.is_after_or_equal_partial(after, before) {
-                        self.after_or_equal_cache.insert((after, before));
+                        self.after_or_equal_cache[self.after_or_equal_cached_idx(after, before)] = true;
                         finished = false;
                     }
                 }
@@ -332,7 +342,7 @@ impl GraphResourceResolver {
     fn is_after_or_equal(&self, after: InputOrNode, before: NodeRef) -> bool {
         match after {
             InputOrNode::Input => false,
-            InputOrNode::Node(after) => self.after_or_equal_cache.contains(&(after, before)),
+            InputOrNode::Node(after) => self.after_or_equal_cached(after, before),
         }
     }
 }
@@ -412,7 +422,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
         resolved_inputs: graph.nodes.iter().map(|node| vec![None; node.consumes.len()]).map_into().collect(),
         resolved_borrows: graph.nodes.iter().map(|node| vec![None; node.borrows.len()]).map_into().collect(),
 
-        after_or_equal_cache: Default::default(),
+        after_or_equal_cache: vec![false; graph.nodes.len().pow(2)].into_boxed_slice(),
     };
 
     #[cfg(debug_assertions)]
@@ -644,6 +654,7 @@ pub struct CompiledGraph {
 
 impl CompiledGraph {
     pub fn new(graph: &RenderGraph) -> Self {
+        let start = Instant::now();
         let producers = compute_producers(graph);
         assert!(
             producers.iter()
@@ -658,8 +669,8 @@ impl CompiledGraph {
             std::fs::write(path, str).unwrap();
             tracing::debug!(output = path, "RUN graph, written dot version in given path");
         }
-
         let total_order = compute_total_order(graph, &resolved);
+        tracing::trace!(took = ?start.elapsed(), "Finished compiling graph");
         Self {
             producers,
             resolved,

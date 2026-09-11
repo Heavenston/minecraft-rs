@@ -25,6 +25,16 @@ impl<I> IndexesIterator<I> {
             len: self.len,
         }
     }
+
+    #[inline]
+    pub fn len(self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
 }
 
 impl<I> Copy for IndexesIterator<I> { }
@@ -381,5 +391,13 @@ impl<T, I> std::fmt::Debug for IndexMap<T, I>
             debug.entry(&k, v);
         }
         debug.finish()
+    }
+}
+
+impl<T, I> Clone for IndexMap<T, I>
+    where T: Clone,
+{
+    fn clone(&self) -> Self {
+        Self { index: PhantomData, values: self.values.clone() }
     }
 }
