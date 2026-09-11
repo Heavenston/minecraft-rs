@@ -58,7 +58,7 @@ static EXTERIOR_RANGES: EnumMap<CardinalDirection, Vec3Range> = create_exterior_
 pub struct QuadSubMesh {
     pub direction: CardinalDirection,
     pub texture: ResourceLocation,
-    pub force_transparency: bool,
+    pub force_translucent: bool,
     pub instances: Box<[FaceInstanceData]>,
 }
 
@@ -76,7 +76,7 @@ pub struct SubMesh {
 
 struct IncompleteQuadSubMesh {
     texture: ResourceLocation,
-    force_transparency: bool,
+    force_translucent: bool,
     instances: Vec<FaceInstanceData>,
 }
 
@@ -112,7 +112,7 @@ struct ResolvedElements<'a> {
 
 struct FullBlockFace {
     texture: ResourceLocation,
-    force_transparency: bool,
+    force_translucent: bool,
     tint_index: u8,
 }
 
@@ -216,7 +216,7 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
                     if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
                         full_block_faces[direction].push(FullBlockFace {
                             texture: texture.location,
-                            force_transparency: texture.force_translucent,
+                            force_translucent: texture.force_translucent,
                             tint_index: (face.tintindex + 1i32).try_into().unwrap(),
                         });
                     }
@@ -250,12 +250,12 @@ struct ChunkMeshBuilder {
 
 impl ChunkMeshBuilder {
     fn push_face(&mut self, dir: CardinalDirection, pos: USizeVec3, face: &FullBlockFace) {
-        if let Some(submesh) = self.quad_submeshes[dir].iter_mut().find(|p| p.texture == face.texture && p.force_transparency == face.force_transparency) {
+        if let Some(submesh) = self.quad_submeshes[dir].iter_mut().find(|p| p.texture == face.texture && p.force_translucent == face.force_translucent) {
             submesh.instances.push(create_face_instance_data(pos, face.tint_index));
         } else {
             self.quad_submeshes[dir].push(IncompleteQuadSubMesh {
                 texture: face.texture,
-                force_transparency: face.force_transparency,
+                force_translucent: face.force_translucent,
                 instances: vec![
                     create_face_instance_data(pos, face.tint_index),
                 ],
@@ -266,11 +266,11 @@ impl ChunkMeshBuilder {
     fn finish(self) -> ChunkMesh {
         let quad_submeshes = self.quad_submeshes.into_iter()
             .flat_map(|(face, meshes)| meshes.into_iter().map(move |submesh| (face, submesh)))
-            .map(|(direction, IncompleteQuadSubMesh { texture, force_transparency, instances })| {
+            .map(|(direction, IncompleteQuadSubMesh { texture, force_translucent, instances })| {
                 QuadSubMesh {
                     direction,
                     texture,
-                    force_transparency,
+                    force_translucent,
                     instances: instances.into_boxed_slice(),
                 }
             })

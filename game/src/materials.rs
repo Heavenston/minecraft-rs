@@ -10,9 +10,16 @@ static SHADER_CODE: &str = include_str!("chunk_material.wgsl");
 
 render_graph::graph_resource!(pub struct EnableWireframes(pub bool); permanent);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChunkTransparencyMode {
+    Opaque,
+    Cutout,
+    Translucent,
+}
+
 pub struct ChunkRenderConfig {
     pub texture: wgpu::Texture,
-    pub transparency: bool,
+    pub transparency: ChunkTransparencyMode,
 }
 
 #[derive(AsStd140)]
@@ -38,7 +45,7 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
         using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::new());
 
         using @shader_module: wgpu::ShaderModule = render_graph.create_resource("chunk_material::shader_module", Cfg::permanent());
-        using @enable_transparency: bool = render_graph.create_resource("chunk_material::enable_transparency", Cfg::permanent());
+        using @transparency: ChunkTransparencyMode = render_graph.create_resource("chunk_material::transparency", Cfg::permanent());
         using @texture: wgpu::Texture = render_graph.create_resource("chunk_material::texture", Cfg::permanent());
 
         using @bind_group_layout: wgpu::BindGroupLayout = render_graph.create_resource("chunk_material::bind_group_layout", Cfg::permanent());
@@ -121,7 +128,7 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
             device: ref render_res::Device,
             shader_module: ref @shader_module, render_pipeline_layout: ref @render_pipeline_layout,
             &enable_wireframes: ref EnableWireframes,
-            &enable_transparency: ref @enable_transparency,
+            &transparency: ref @transparency,
         ) -> (@render_pipeline) {
             OutputValue(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Chunk material"),
@@ -168,11 +175,22 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
                 fragment: Some(wgpu::FragmentState {
                     module: shader_module,
                     entry_point: None,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[
+                            ("ENABLE_CUTOUT", match transparency {
+                                ChunkTransparencyMode::Cutout => 1.,
+                                ChunkTransparencyMode::Opaque | ChunkTransparencyMode::Translucent => 0.,
+                            }),
+                        ],
+                        ..wgpu::PipelineCompilationOptions::default()
+                    },
                     targets: &[
                         Some(wgpu::ColorTargetState {
                             format: wgpu::TextureFormat::Bgra8UnormSrgb,
-                            blend: enable_transparency.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                            blend: match transparency {
+                                ChunkTransparencyMode::Opaque | ChunkTransparencyMode::Cutout => None,
+                                ChunkTransparencyMode::Translucent => Some(wgpu::BlendState::ALPHA_BLENDING),
+                            },
                             write_mask: wgpu::ColorWrites::all(),
                         })
                     ],
@@ -187,7 +205,10 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
             bind_group: ref @bind_group,
             render_pipeline: ref @render_pipeline,
             chunk_list: @chunk_list,
+
+            &transparency: ref @transparency,
         ) -> (engine_graph::RenderPass) {
+            render_pass.push_debug_group(&format!("{transparency:?} Chunk renderer"));
             render_pass.set_pipeline(render_pipeline);
             render_pass.set_bind_group(1, bind_group, &[]);
             for chunk in &*chunk_list.chunks {
@@ -198,13 +219,14 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
                 render_pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
                 render_pass.draw(0..4, 0..(chunk.vertex_buffer.size() / 4).try_into().unwrap());
             }
+            render_pass.pop_debug_group();
 
             OutputValue(render_pass)
         };
     );
 
     render_graph.set_resource_input(texture_resource, cfg.texture.clone());
-    render_graph.set_resource_input(enable_transparency_resource, cfg.transparency);
+    render_graph.set_resource_input(transparency_resource, cfg.transparency);
     render_graph.set_resource_input(chunk_list_resource, ChunkList { chunks: Rc::default() });
 
     chunk_list_resource

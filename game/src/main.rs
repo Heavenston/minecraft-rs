@@ -17,7 +17,7 @@ use glam::{ISizeVec3, Vec3, Vec4};
 use image::{EncodableLayout as _, Pixel as _};
 use render_graph::RenderGraph;
 
-use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
+use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData, ChunkTransparencyMode}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
 
 mod chunk;
 mod chunk_mesher;
@@ -31,13 +31,13 @@ mod data_extractor;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ChunkMaterialKey {
     texture_location: ResourceLocation,
-    transparency: bool,
+    transparency: ChunkTransparencyMode,
 }
 
 #[derive(Debug, Clone)]
 struct TextureData {
     texture: wgpu::Texture,
-    has_transparency: bool,
+    present_transparency: ChunkTransparencyMode,
 }
 
 struct App {
@@ -63,7 +63,10 @@ impl App {
         let mut image = MinecraftData::read_texture(location).with_context(|| format!("reading mc texture {location}"))?;
         image.apply_color_space(image::metadata::Cicp::SRGB, image::ConvertColorOptions::default())?;
         let image = image.to_rgba8();
-        let has_transparency = image.pixels().any(|p| p.alpha() < 255);
+
+        let has_transparent = image.pixels().any(|p| p.alpha() == 0);
+        let has_translucent = image.pixels().any(|p| (1..u8::MAX).contains(&p.alpha()));
+
         let texture = ctx.renderer.device().create_texture_with_data(ctx.renderer.queue(), &wgpu::wgt::TextureDescriptor {
             label: Some(location.as_str()),
             size: wgpu::Extent3d { width: image.width(), height: image.height(), depth_or_array_layers: 1 },
@@ -77,16 +80,26 @@ impl App {
 
         let data = TextureData {
             texture,
-            has_transparency,
+            present_transparency: if has_translucent {
+                ChunkTransparencyMode::Translucent
+            } else if has_transparent {
+                ChunkTransparencyMode::Cutout
+            } else {
+                ChunkTransparencyMode::Opaque
+            },
         };
         self.textures.borrow_mut().insert(location, data.clone());
 
         Ok(data)
     }
 
-    fn get_chunk_material(&self, ctx: &mut engine::ResumeCtx<'_>, texture_location: ResourceLocation, force_transparency: bool) -> Result<MaterialHandle<ChunkMaterial>> {
-        let TextureData { texture, has_transparency } = self.get_texture(ctx, texture_location)?;
-        let transparency = force_transparency || has_transparency;
+    fn get_chunk_material(&self, ctx: &mut engine::ResumeCtx<'_>, texture_location: ResourceLocation, force_translucent: bool) -> Result<MaterialHandle<ChunkMaterial>> {
+        let TextureData { texture, present_transparency } = self.get_texture(ctx, texture_location)?;
+        let transparency = if force_translucent {
+            ChunkTransparencyMode::Translucent
+        } else {
+            present_transparency
+        };
         let key = ChunkMaterialKey { texture_location, transparency };
         if let Some(&material) = self.chunk_materials.borrow().get(&key) {
             return Ok(material);
@@ -142,7 +155,7 @@ impl engine::App for App {
                 face_count += submesh.instances.len();
                 buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(bytemuck::cast_slice::<_, u8>(&submesh.instances));
                 buffer.unmap();
-                let material = self.get_chunk_material(ctx, submesh.texture, submesh.force_transparency)?;
+                let material = self.get_chunk_material(ctx, submesh.texture, submesh.force_translucent)?;
                 let material = ctx.world.get_material_mut(material).unwrap();
                 material.chunk_list = material.chunk_list.iter().cloned().chain([ChunkRenderData {
                     direction: submesh.direction,

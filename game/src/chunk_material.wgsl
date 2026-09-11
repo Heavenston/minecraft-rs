@@ -1,6 +1,8 @@
 const pi = radians(180.0);
 const tau = radians(360.0);
 
+override ENABLE_CUTOUT: bool;
+
 fn get_cube_uv(vertex_index: u32) -> vec2f {
     return vec2f(
         f32(vertex_index & 1u),
@@ -88,7 +90,7 @@ const plains_grass_tint: vec4f = vec4f(0.5686274509803921, 0.7411764705882353, 0
     if input.tint_index != 0 {
         tex *= plains_grass_tint;
     }
-    if tex.a < 10e-5 {
+    if ENABLE_CUTOUT && tex.a < 10e-5 {
         discard;
     }
     return tex;
