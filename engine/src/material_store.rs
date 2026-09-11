@@ -5,6 +5,7 @@ use itertools::chain;
 use render_graph::RenderGraph;
 
 use crate::material::{Material, RenderGraphWrapper};
+use static_assertions as sa;
 
 struct StoredMaterial {
     material: Box<dyn Material>,
@@ -49,7 +50,7 @@ impl<M: Material> Clone for MaterialHandle<M> {
 
 struct MaterialTypeData {
     refcount: usize,
-    register: Box<dyn Fn(&mut RenderGraphWrapper<'_>)>,
+    register: Box<dyn Send + Sync + Fn(&mut RenderGraphWrapper<'_>)>,
     registered_nodes: Option<Vec<render_graph::UntypedNodeHandle>>,
 }
 
@@ -62,6 +63,7 @@ pub struct MaterialStore {
     node_unregister_queue: Vec<render_graph::UntypedNodeHandle>,
     materials: GenMap<StoredMaterial>,
 }
+sa::assert_impl_all!(MaterialStore: Send, Sync);
 
 impl MaterialStore {
     fn increment_material_type<M: Material>(&mut self) {

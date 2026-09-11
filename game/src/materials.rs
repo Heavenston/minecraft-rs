@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 use crevice::std140::AsStd140;
 use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
 use glam::Vec3;
@@ -44,7 +44,7 @@ pub struct ChunkRenderData {
 }
 
 struct ChunkList {
-    chunks: Rc<[ChunkRenderData]>,
+    chunks: Arc<[ChunkRenderData]>,
 }
 
 fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
@@ -249,14 +249,14 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::RenderGraphWrapp
 
     render_graph.set_resource_input(texture_resource, cfg.texture.clone());
     render_graph.set_resource_input(transparency_resource, cfg.transparency);
-    render_graph.set_resource_input(chunk_list_resource, ChunkList { chunks: Rc::default() });
+    render_graph.set_resource_input(chunk_list_resource, ChunkList { chunks: Default::default() });
 
     chunk_list_resource
 }
 
 pub struct ChunkMaterial {
     pub cfg: ChunkRenderConfig,
-    pub chunk_list: Rc<[ChunkRenderData]>,
+    pub chunk_list: Arc<[ChunkRenderData]>,
     chunk_list_resource: Option<ResourceHandle<ChunkList>>,
 }
 
@@ -264,7 +264,7 @@ impl ChunkMaterial {
     pub fn new(cfg: ChunkRenderConfig) -> Self {
         Self {
             cfg,
-            chunk_list: Rc::default(),
+            chunk_list: Default::default(),
             chunk_list_resource: None,
         }
     }
@@ -282,6 +282,6 @@ impl Material for ChunkMaterial {
     }
 
     fn update(&mut self, render_graph: &mut render_graph::RenderGraph) {
-        render_graph.set_resource_input(self.chunk_list_resource.unwrap(), ChunkList { chunks: Rc::clone(&self.chunk_list) });
+        render_graph.set_resource_input(self.chunk_list_resource.unwrap(), ChunkList { chunks: Arc::clone(&self.chunk_list) });
     }
 }

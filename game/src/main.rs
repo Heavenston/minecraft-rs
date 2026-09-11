@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 #![feature(const_trait_impl)]
 #![feature(const_array)]
 #![feature(const_ops)]

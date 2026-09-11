@@ -3,6 +3,7 @@ use std::time::Instant;
 use crevice::std140::AsStd140;
 use glam::{ Mat4, Vec4 };
 use render_graph::RenderGraph;
+use static_assertions as sa;
 
 pub struct World {
     pub(crate) created_at: Instant,
@@ -11,6 +12,7 @@ pub struct World {
     pub camera_transform: Mat4,
     pub camera_projection: Mat4,
 }
+sa::assert_impl_all!(World: Send, Sync);
 
 impl World {
     pub(crate) fn update_render_graph(&self, render_graph: &mut RenderGraph) {

@@ -54,7 +54,7 @@ impl<'a> RenderGraphWrapper<'a> {
     }
 }
 
-pub trait Material: std::any::Any {
+pub trait Material: std::any::Any + Send + Sync {
     fn register_global(render_graph: &mut RenderGraphWrapper<'_>)
         where Self: Sized,
     {
