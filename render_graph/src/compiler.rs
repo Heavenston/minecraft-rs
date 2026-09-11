@@ -6,7 +6,7 @@ use itertools::{Either, Itertools as _, chain};
 use ordermap::OrderMap;
 use parking_lot::RwLock;
 #[cfg(debug_assertions)]
-use rand::{SeedableRng as _, seq::{IndexedRandom as _, IteratorRandom as _}};
+use rand::{SeedableRng as _, seq::IteratorRandom as _};
 
 use crate::{Label, NodeData, RenderGraph, ResourceConfig, ResourceData, UncheckedNodeHandle, UncheckedResourceHandle};
 
@@ -169,25 +169,6 @@ trait ResolvedResourcesContainer {
     fn borrowers_of(&self, ri: ResolvedInput) -> impl Iterator<Item = NodeRef> {
         self.node_refs().filter(move |&node2| self.resolved_borrows(node2).any(move |ri2| ri2 == ri))
     }
-}
-
-#[derive(Debug)]
-struct ResolvedResources {
-    node_refs: indexmap::IndexesIterator<NodeRef>,
-    explicit_orderings: Box<[(NodeRef, NodeRef)]>,
-    inputs: IndexMap<Box<[ResolvedInput]>, NodeRef>,
-    borrows: IndexMap<Box<[ResolvedInput]>, NodeRef>,
-    consumers: HashMap<ResolvedInput, NodeRef>,
-    borrowers: HashMap<ResolvedInput, Vec<NodeRef>>,
-}
-
-impl ResolvedResources {
-    fn users(&self, res: ResolvedInput) -> impl Iterator<Item = NodeRef> {
-        chain!(
-            self.consumers.get(&res),
-            self.borrowers.get(&res).map(Vec::as_slice).unwrap_or_default(),
-        ).copied()
-    }
 
     fn write_to_dot(&self, graph: &RenderGraph, f: &mut impl std::fmt::Write) -> std::fmt::Result {
         let node_labels = graph.get_simplified_node_labels();
@@ -254,6 +235,26 @@ impl ResolvedResources {
 
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct ResolvedResources {
+    node_refs: indexmap::IndexesIterator<NodeRef>,
+    explicit_orderings: Box<[(NodeRef, NodeRef)]>,
+    inputs: IndexMap<Box<[ResolvedInput]>, NodeRef>,
+    borrows: IndexMap<Box<[ResolvedInput]>, NodeRef>,
+    consumers: HashMap<ResolvedInput, NodeRef>,
+    borrowers: HashMap<ResolvedInput, Vec<NodeRef>>,
+}
+
+impl ResolvedResources {
+    fn users(&self, res: ResolvedInput) -> impl Iterator<Item = NodeRef> {
+        chain!(
+            self.consumers.get(&res),
+            self.borrowers.get(&res).map(Vec::as_slice).unwrap_or_default(),
+        ).copied()
+    }
+
 }
 
 impl ResolvedResourcesContainer for ResolvedResources {
@@ -364,7 +365,7 @@ impl ResolvedResourcesContainer for GraphResourceResolver {
 
 #[tracing::instrument(level = "trace", skip_all)]
 #[expect(clippy::single_call_fn, reason = "CompiledGraph construction algorithm")]
-fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
+fn resolve_resources(graph: &RenderGraph) -> Result<ResolvedResources, GraphResourceResolver> {
     #[cfg(debug_assertions)]
     let node_labels = graph.get_simplified_node_labels();
     #[cfg(debug_assertions)]
@@ -472,21 +473,29 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
                 let is_mutator = node_data.outputs().contains(&resource);
                 let is_unordered = graph.resource_cfg(resource).unordered;
                 
+                let ion_is_mutator = |ion: InputOrNode| match ion {
+                    InputOrNode::Input => false,
+                    InputOrNode::Node(node_ref) => graph.node(node_ref).is_mutator(resource),
+                };
+                
                 let producer = if is_mutator && is_unordered && let Err(options) = producer {
-                    #[cfg(debug_assertions)]
-                    { options.choose(&mut rng).ok_or(Either::Right(())).map(|p| (p, true)) }
-                    #[cfg(not(debug_assertions))]
-                    { let mut options = options; options.next().ok_or(Either::Right(())).map(|p| (p, true)) }
+                    options.clone().filter(|p| !ion_is_mutator(**p)).exactly_one().ok()
+                    // We always use the first one (no randomization even with debug assertions)
+                    // because all nodes currenctly selecting a producer for this
+                    // unordered resource need to conflict everytime otherwise
+                    // order between these nodes won't be respected
+                    .or_else(|| options.clone().find(|p| ion_is_mutator(**p)))
+                    .map(|p| (p, true)).ok_or(Either::Right(()))
                 } else {
                     producer.map(|p| (p, false)).map_err(Either::Left)
                 };
 
                 match producer {
                     Ok((&p, is_from_unordered)) => {
-                        rr_println!("{}{}", ton!(p), if is_unordered { " (using unordered)" } else { "" });
+                        rr_println!("*{}{}", ton!(p), if is_from_unordered { " (using unordered)" } else { "" });
                         claims.entry((resource, p)).or_default().consumes.push(ConsumeClaim { node, input_idx, is_from_unordered });
                     },
-                    #[cfg_attr(not(debug_assertions), expect(unused_variables))]
+                    #[cfg_attr(not(debug_assertions), expect(unused_variables, reason = "rr_println removed"))]
                     Err(Either::Left(options)) => {
                         rr_println!("{}", options.map(|&n| ton!(n)).join(", "));
                     },
@@ -516,10 +525,10 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
 
                 match producer {
                     Ok(&p) => {
-                        rr_println!("{}", ton!(p));
+                        rr_println!("*{}", ton!(p));
                         claims.entry((resource, p)).or_default().borrows.push((node, borrow_idx));
                     },
-                    #[cfg_attr(not(debug_assertions), expect(unused_variables))]
+                    #[cfg_attr(not(debug_assertions), expect(unused_variables, reason = "rr_println removed"))]
                     Err(options) => {
                         rr_println!("{}", options.map(|&n| ton!(n)).join(", "));
                     },
@@ -536,24 +545,32 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
             claims
         };
 
-        let accept_unordered = claims.iter().all(|(_,claim)| claim.borrows.is_empty() && claim.consumes.iter().all(|c| c.is_from_unordered));
+        let accept_unordered = claims.iter().all(|(_,claim)| claim.borrows.is_empty() && claim.consumes.iter().filter(|c| !c.is_from_unordered).count() != 1 && claim.consumes.iter().all(|c| c.is_from_unordered));
+
+        rr_println!("{} claims{}", claims.len(), if accept_unordered { ", accepting unordered" } else { "" });
 
         let mut found_valid = false;
         'claim_loop: for ((claim_resource, claim_producer), claimers) in claims {
             if claimers.borrows.is_empty() {
-                let wining_claim = claimers.consumes.iter().exactly_one().ok()
-                    .and_then(|p| (!p.is_from_unordered || accept_unordered).then_some(p))
-                    .map_or_else(|| {
-                        (accept_unordered && claimers.consumes.iter().all(|o| o.is_from_unordered))
-                            .then(|| {
-                                #[cfg(debug_assertions)]
-                                { claimers.consumes.choose(&mut rng).unwrap() }
-                                #[cfg(not(debug_assertions))]
-                                { &claimers.consumes[0] }
-                            })
-                    }, Some);
+                rr_println!("claims to consume {}.{}: {}", ton!(claim_producer), rn!(claim_resource), claimers.consumes.iter().map(|claim| format!("{}{}", nn!(claim.node), if claim.is_from_unordered { "(u)" } else { "" })).join(", "));
+                let wining_claim = claimers.consumes.iter()
+                    .filter(|p| !p.is_from_unordered || accept_unordered)
+                    .exactly_one().ok()
+                    .or_else(|| {
+                        accept_unordered.then_some(()).and_then(|()| {
+                            let options = claimers.consumes.iter().filter(|o| o.is_from_unordered);
+                            rr_println!("\tUsing unordered claim resolving: [0] {}", options.clone().map(|p| nn!(p.node)).join(", "));
+                            let options = options.clone().filter(|a| !options.clone().any(|b| b.node != a.node && this.is_after_or_equal(InputOrNode::Node(a.node), b.node)));
+                            rr_println!("\tUsing unordered claim resolving: [1] {}", options.clone().map(|p| nn!(p.node)).join(", "));
+                            #[cfg(debug_assertions)]
+                            { options.choose(&mut rng) }
+                            #[cfg(not(debug_assertions))]
+                            { let mut options = options; options.next() }
+                        })
+                    });
                 if let Some(&ConsumeClaim { node, input_idx, is_from_unordered }) = wining_claim {
-                    rr_println!("REVOLED {} consumes {} from {}", nn!(node), rn!(claim_resource), ton!(claim_producer));
+                    debug_assert!(accept_unordered || !is_from_unordered);
+                    rr_println!("\tREVOLED {} consumes {} from {}", nn!(node), rn!(claim_resource), ton!(claim_producer));
                     found_valid = true;
                     debug_assert!(this.resolved_inputs[node][input_idx].is_none());
                     this.resolved_inputs[node][input_idx] = Some(ResolvedInput {
@@ -562,7 +579,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
                     });
                     producers.get_mut(&claim_resource).unwrap().retain(|p| p != &claim_producer);
 
-                    // Unordered reseources may break the assumption that claims
+                    // Unordered resources may break the assumption that claims
                     // made at the same time are not 'incompatible'
                     // A claim can change node orderign (as per is_after_or_equal)
                     // and so make other claims invalid.
@@ -571,6 +588,9 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
                     if is_from_unordered {
                         break 'claim_loop;
                     }
+                }
+                else {
+                    rr_println!("\tClaim lost");
                 }
             }
             else {
@@ -586,7 +606,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
             }
         }
         if !found_valid {
-            return None;
+            return Err(this);
         }
 
         iterations += 1;
@@ -594,7 +614,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
 
     tracing::debug!(iterations, took = ?started_at.elapsed(), "Resolved render graph resources");
 
-    Some(ResolvedResources {
+    Ok(ResolvedResources {
         node_refs: this.node_refs,
         consumers: this.consumers(),
         borrowers: this.borrowers(),
@@ -662,12 +682,23 @@ impl CompiledGraph {
                 .all(|(_, v)| v.len() == 1),
             "Permanent resources must have exactly one producer"
         );
-        let resolved = resolve_resources(graph).expect("Could not resolve render graph resources");
+        let resolved = match resolve_resources(graph) {
+            Ok(resolved) => resolved,
+            Err(not_resolved) => {
+                if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
+                    let mut str = String::new();
+                    not_resolved.write_to_dot(graph, &mut str).unwrap();
+                    std::fs::write(path, str).unwrap();
+                    tracing::debug!(output = path, "Failed resolved graph, written dot version in given path");
+                }
+                panic!("Could not resolve render graph resources");
+            },
+        };
         if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
             let mut str = String::new();
             resolved.write_to_dot(graph, &mut str).unwrap();
             std::fs::write(path, str).unwrap();
-            tracing::debug!(output = path, "RUN graph, written dot version in given path");
+            tracing::debug!(output = path, "Resolved graph, written dot version in given path");
         }
         let total_order = compute_total_order(graph, &resolved);
         tracing::trace!(took = ?start.elapsed(), "Finished compiling graph");
