@@ -42,6 +42,7 @@ pub struct MinecraftData {
     blockstates: ResourceLocationMap<blockstate::BlockState>,
     models: ResourceLocationMap<model::Model>,
 }
+static_assertions::assert_impl_all!(MinecraftData: Send, Sync);
 
 impl MinecraftData {
     #[expect(clippy::single_call_fn, reason = "I sure hope this is created once")]
