@@ -427,11 +427,11 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
     #[cfg(debug_assertions)]
     let mut rng = {
         let seed = rand::random();
-        // Without unordered priorization, and this seed, it doesn't work
-        // let seed = 8720349752554370550u64;
         tracing::trace!(seed);
         rand::rngs::Xoshiro256PlusPlus::seed_from_u64(seed)
     };
+
+    let mut iterations = 0;
 
     while !this.is_complete() {
         rr_println!("\n\n##############################");
@@ -466,32 +466,12 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
 
                 let is_mutator = node_data.outputs().contains(&resource);
                 let is_unordered = graph.resource_cfg(resource).unordered;
-
-                let ion_is_mutator = |o: InputOrNode| match o {
-                    InputOrNode::Input => false,
-                    InputOrNode::Node(other) => graph.node(other).is_mutator(resource),
-                };
                 
                 let producer = if is_mutator && is_unordered && let Err(options) = producer {
-                    // We need to prioritize using non mutators first,
-                    // so that ordering with all other nodes for this resource
-                    // is resolved before begining to link unordered nodes
-                    // this can lead to loops in the graph otherwise
-                    // (not 100% sure to understand this one)
-                    let found_one_non_mutator = options.clone().filter(|&&p| !ion_is_mutator(p)).exactly_one();
-                    found_one_non_mutator.map_or_else(|mut non_mutators| {
-                        let empty = non_mutators.next().is_none();
-                        if empty {
-                            let o2 = options.clone().filter(|&&p| ion_is_mutator(p));
-                            #[cfg(debug_assertions)]
-                            { o2.choose(&mut rng) }
-                            #[cfg(not(debug_assertions))]
-                            { let mut o2 = o2; o2.next() }
-                        }
-                        else {
-                            None
-                        }
-                    }, Some).ok_or(Either::Right(())).map(|p| (p, true))
+                    #[cfg(debug_assertions)]
+                    { options.choose(&mut rng).ok_or(Either::Right(())).map(|p| (p, true)) }
+                    #[cfg(not(debug_assertions))]
+                    { let mut options = options; options.next().ok_or(Either::Right(())).map(|p| (p, true)) }
                 } else {
                     producer.map(|p| (p, false)).map_err(Either::Left)
                 };
@@ -538,15 +518,6 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
             }
         }
 
-        // This stores nodes that won claims along the way.
-        // Because it probably changed its ordering compared to other nodes.
-        // So no node should claim any of its output without checking again
-        // its ordering.
-        //
-        // Note that it doesn't help against any incompatible claims
-        // but it does for the one generated with the current claim code.
-        let mut claimed = HashSet::<NodeRef>::new();
-
         #[cfg(debug_assertions)]
         let claims = {
             use rand::seq::SliceRandom as _;
@@ -557,11 +528,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
         };
 
         let mut found_valid = false;
-        for ((claim_resource, claim_producer), claimers) in claims {
-            if let InputOrNode::Node(producer) = claim_producer && claimed.contains(&producer) {
-                continue;
-            }
-
+        'claim_loop: for ((claim_resource, claim_producer), claimers) in claims {
             if claimers.borrows.is_empty() {
                 let wining_claim = claimers.consumes.iter().exactly_one()
                     .map_or_else(|_| {
@@ -573,8 +540,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                                 { &claimers.consumes[0] }
                             })
                     }, Some);
-                if let Some(&ConsumeClaim { node, input_idx, .. }) = wining_claim {
-                    claimed.insert(node);
+                if let Some(&ConsumeClaim { node, input_idx, is_from_unordered }) = wining_claim {
                     rr_println!("REVOLED {} consumes {} from {}", nn!(node), rn!(claim_resource), ton!(claim_producer));
                     found_valid = true;
                     debug_assert!(this.resolved_inputs[node][input_idx].is_none());
@@ -583,6 +549,16 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                         producer: claim_producer,
                     });
                     producers.get_mut(&claim_resource).unwrap().retain(|p| p != &claim_producer);
+
+                    // Unordered reseources may break the assumption that claims
+                    // made at the same time are not 'incompatible'>
+                    // A claim can change node orderign (as per is_after_or_equal)
+                    // and so make other claims invalid.
+                    // FIXME: This could be replaced by a more specific "unordered"
+                    // claim logic(?)
+                    if is_from_unordered {
+                        break 'claim_loop;
+                    }
                 }
                 else {
                     tracing::warn!(resource = %rn!(claim_resource), producer = %ton!(claim_producer), claimers = ?claimers.consumes, "Consumer conflict");
@@ -600,8 +576,12 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                 }
             }
         }
-        assert!(found_valid, "Could not contruct render graph ordering");
+        assert!(found_valid, "Could not resolve render graph resources");
+
+        iterations += 1;
     }
+
+    tracing::trace!(iterations, "Resolved render graph resources");
 
     ResolvedResources {
         node_count: graph.nodes.len(),
