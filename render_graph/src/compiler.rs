@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, convert::identity, hash::Hash, ops::ControlFlow, rc::Rc, sync::Arc};
+use std::{collections::{HashMap, HashSet}, convert::identity, hash::Hash, ops::ControlFlow, rc::Rc, sync::{Arc, LazyLock}};
 
 use genmap::{AssumeAlive, DenseIdx};
 use indexmap::{IndexMap, IndexSlice, MapIndex as _};
@@ -155,20 +155,20 @@ fn compute_producers(graph: &RenderGraph) -> Producers {
 #[derive(Default, Clone)]
 struct ListLink(Option<Rc<Cons>>);
 struct Cons {
-    val: InputOrNode,
+    val: (InputOrNode, NodeRef),
     prev: ListLink,
 }
 
 impl ListLink {
-    fn iter(&self) -> impl Iterator<Item = &InputOrNode> {
+    fn iter(&self) -> impl Iterator<Item = (InputOrNode, NodeRef)> {
         struct Iter<'a>(Option<&'a Cons>);
-        impl<'a> Iterator for Iter<'a> {
-            type Item = &'a InputOrNode;
+        impl Iterator for Iter<'_> {
+            type Item = (InputOrNode, NodeRef);
 
             fn next(&mut self) -> Option<Self::Item> {
                 match self.0 {
                     Some(n) => {
-                        let val = &n.val;
+                        let val = n.val;
                         self.0 = n.prev.0.as_deref();
                         Some(val)
                     },
@@ -179,7 +179,7 @@ impl ListLink {
         Iter(self.0.as_deref())
     }
 
-    fn cons(self, val: InputOrNode) -> Self {
+    fn cons(self, val: (InputOrNode, NodeRef)) -> Self {
         Self(Some(Rc::new(Cons {
             val,
             prev: self,
@@ -201,36 +201,21 @@ trait ResolvedResourcesContainer {
         self.node_refs().filter(move |&node2| self.resolved_borrows(node2).any(move |ri2| ri2 == ri))
     }
 
-    #[tracing::instrument(skip(self, recursive))]
     fn is_after_or_equal(&self, recursive: ListLink, after: InputOrNode, before: NodeRef) -> bool {
-        if recursive.iter().any(|&o| o == after) {
-            // tracing::warn!("recursive");
+        if recursive.iter().any(|o| o == (after, before)) {
             return false;
         }
-        let recursive = recursive.cons(after);
+        let recursive = recursive.cons((after, before));
 
         let after = match after { InputOrNode::Input => return false, InputOrNode::Node(node) => node };
 
         after == before ||
         self.explicit_orderings().contains(&(before, after)) ||
         self.combined_inputs(after).any(|input| input.producer == before) ||
+        self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2)) ||
         self.node_refs()
             .filter(|&third| third != after && third != before)
-            .any(|third| self.is_after_or_equal(recursive.clone(), InputOrNode::Node(after), third) && self.is_after_or_equal(recursive.clone(), InputOrNode::Node(third), before)) ||
-        self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2))
-        // self.combined_inputs(after)
-        //     .any(|input| {
-        //         tracing::debug_span!("input", ?input.resource).in_scope(|| {
-        //             self.is_after_or_equal(recursive.clone(), input.producer, before)
-        //         })
-        //     }) ||
-        // self.resolved_inputs(after)
-        //     .flat_map(|i| self.borrowers_of(i))
-        //     .any(|o| {
-        //         tracing::debug_span!("cross-borrow").in_scope(|| {
-        //             self.is_after_or_equal(recursive.clone(), InputOrNode::Node(o), before)
-        //         })
-        //     })
+            .any(|third| self.is_after_or_equal(recursive.clone(), InputOrNode::Node(after), third) && self.is_after_or_equal(recursive.clone(), InputOrNode::Node(third), before))
     }
 }
 
@@ -563,8 +548,9 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
         let mut found_valid = false;
         'claim_loop: for ((claim_resource, claim_producer), claimers) in claims {
             if claimers.borrows.is_empty() {
-                let wining_claim = claimers.consumes.iter().exactly_one()
-                    .map_or_else(|_| {
+                let wining_claim = claimers.consumes.iter().exactly_one().ok()
+                    .and_then(|p| (!p.is_from_unordered || accept_unordered).then_some(p))
+                    .map_or_else(|| {
                         (accept_unordered && claimers.consumes.iter().all(|o| o.is_from_unordered))
                             .then(|| {
                                 #[cfg(debug_assertions)]
@@ -719,7 +705,7 @@ impl CompiledGraph {
             "Permanent resources must have exactly one producer"
         );
         let mut resolved = None;
-        for i in 0..100usize {
+        for i in 0..5usize {
             print!("\x1B[2J\x1B[3J\x1B[H");
             std::io::Write::flush(&mut std::io::stdout()).unwrap();
             println!("START {i}");
