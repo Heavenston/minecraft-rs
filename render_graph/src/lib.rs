@@ -141,22 +141,26 @@ macro_rules! graph_resource {
         impl $crate::GraphResourceId for $name {
             type Resource = $content
                 where Self: Sized;
+            #[inline]
             fn config() -> $crate::ResourceConfig
                 where Self: Sized,
             {
                 $crate::graph_resource!(@permanence $($parameters)*) |
                 $crate::graph_resource!(@unordered $($parameters)*)
             }
+            #[inline]
             fn new_resource(val: Self::Resource) -> Self
                 where Self: Sized
             {
                 Self(val)
             }
+            #[inline]
             fn get_resource(self) -> Self::Resource
                 where Self: Sized
             {
                 self.0
             }
+            #[inline]
             fn get_resource_ref(&self) -> &Self::Resource
                 where Self: Sized
             {
@@ -188,6 +192,7 @@ struct ResourceManager<'a> {
 }
 
 impl ResourceInfoProvider for ResourceManager<'_> {
+    #[inline]
     fn resource_from_type<R: GraphResourceId>(&mut self) -> ResourceHandle<R::Resource> {
         let handle = self.type_resources_info.entry(TypeId::of::<R>()).or_insert_with(|| {
             let handle = self.resources.insert(ResourceData {
@@ -207,21 +212,25 @@ impl ResourceInfoProvider for ResourceManager<'_> {
 }
 
 impl ResourceGatherer for ResourceManager<'_> {
+    #[inline]
     fn consume<R: Any>(&mut self, handle: ResourceHandle<R>) -> R {
         self.resources.get_mut(handle.inner).expect("valid resource handle")
             .get_mut().take().expect("resource present")
     }
 
+    #[inline]
     fn consume_untyped(&mut self, handle: UntypedResourceHandle) -> Box<dyn Any> {
         self.resources.get_mut(handle.0).expect("valid resource handle")
             .value.dyn_take().expect("resource present")
     }
 
+    #[inline]
     fn borrow<R: Any>(&self, handle: ResourceHandle<R>) -> &R {
         self.resources.get(handle.inner).expect("valid resource handle")
             .get().as_ref().expect("resource present")
     }
 
+    #[inline]
     fn borrow_untyped(&self, handle: UntypedResourceHandle) -> &dyn Any {
         self.resources.get(handle.0).expect("valid resource handle")
             .value.dyn_as_ref().expect("resource present")
@@ -229,10 +238,12 @@ impl ResourceGatherer for ResourceManager<'_> {
 }
 
 impl ResourceStorer for ResourceManager<'_> {
+    #[inline]
     fn store<R: Any>(&mut self, handle: ResourceHandle<R>, value: R) {
         *self.resources.get_mut(handle.inner).expect("valid resource handle").get_mut() = Some(value);
     }
 
+    #[inline]
     fn store_untyped(&mut self, handle: UntypedResourceHandle, value: Box<dyn Any>) {
         self.resources.get_mut(handle.0).expect("valid resource handle")
             .value.dyn_insert(value);

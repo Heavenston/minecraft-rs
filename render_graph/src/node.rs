@@ -4,6 +4,7 @@ pub trait GraphNode: 'static {
     type InputBundle: ResourceInputBundle;
     type OutputBundle: ResourceOutputBundle;
 
+    #[inline]
     fn label(&self) -> Label<'_> {
         Label::TypeName(std::any::type_name::<Self>())
     }

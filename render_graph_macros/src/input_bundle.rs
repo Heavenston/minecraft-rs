@@ -194,14 +194,17 @@ pub fn input_bundle_macro(input: PseudoStruct<Entry>) -> TokenStream {
         impl #render_graph::ResourceInputBundle for #struct_name {
             type Values<'a> = #value_struct_name #value_struct_gen_params;
 
+            #[inline]
             fn list_consumes(&self, gatherer: &mut impl #render_graph::ResourceInfoProvider) -> [#render_graph::UntypedResourceHandle; #consumed_count] {
                 [#(#consumed_resource_handles.into()),*]
             }
 
+            #[inline]
             fn list_borrows(&self, gatherer: &mut impl #render_graph::ResourceInfoProvider) -> [#render_graph::UntypedResourceHandle; #borrowed_count] {
                 [#(#borrowed_resource_handles.into()),*]
             }
 
+            #[inline]
             fn gather<'a>(&self, gatherer: &'a mut impl #render_graph::ResourceGatherer) -> Self::Values<'a> {
                 #(#gathered_handles_vars)*
                 #consume_resources_values_gather

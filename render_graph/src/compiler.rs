@@ -14,10 +14,12 @@ use crate::{Label, NodeData, RenderGraph, ResourceConfig, ResourceData, Unchecke
 struct NodeRef(DenseIdx);
 
 impl indexmap::MapIndex for NodeRef {
+    #[inline]
     fn from_usize(idx: usize) -> Self {
         Self(DenseIdx::from_usize(idx))
     }
 
+    #[inline]
     fn as_usize(&self) -> usize {
         self.0.as_usize()
     }
@@ -27,10 +29,12 @@ impl indexmap::MapIndex for NodeRef {
 struct ResourceRef(DenseIdx);
 
 impl indexmap::MapIndex for ResourceRef {
+    #[inline]
     fn from_usize(idx: usize) -> Self {
         Self(DenseIdx::from_usize(idx))
     }
 
+    #[inline]
     fn as_usize(&self) -> usize {
         self.0.as_usize()
     }

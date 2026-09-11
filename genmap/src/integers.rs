@@ -24,10 +24,12 @@ impl Generation {
 pub struct SparseIdx(u32);
 
 impl indexmap::MapIndex for SparseIdx {
+    #[inline]
     fn from_usize(idx: usize) -> Self {
         Self(idx.try_into().expect("GenMap overflowed u32 capacity"))
     }
 
+    #[inline]
     fn as_usize(&self) -> usize {
         sa::const_assert!(std::mem::size_of::<usize>() >= std::mem::size_of::<u32>());
         self.0 as usize
@@ -38,10 +40,12 @@ impl indexmap::MapIndex for SparseIdx {
 pub struct DenseIdx(u32);
 
 impl indexmap::MapIndex for DenseIdx {
+    #[inline]
     fn from_usize(idx: usize) -> Self {
         Self(idx.try_into().expect("GenMap overflowed u32 capacity"))
     }
 
+    #[inline]
     fn as_usize(&self) -> usize {
         sa::const_assert!(std::mem::size_of::<usize>() >= std::mem::size_of::<u32>());
         self.0 as usize
@@ -51,18 +55,22 @@ impl indexmap::MapIndex for DenseIdx {
 pub struct DenseOrSparse(u32);
 
 impl DenseOrSparse {
+    #[inline]
     pub fn new_sparse(val: SparseIdx) -> Self {
         Self(val.0)
     }
 
+    #[inline]
     pub fn new_dense(val: DenseIdx) -> Self {
         Self(val.0)
     }
 
+    #[inline]
     pub fn as_sparse(&self) -> SparseIdx {
         SparseIdx(self.0)
     }
 
+    #[inline]
     pub fn as_dense(&self) -> DenseIdx {
         DenseIdx(self.0)
     }
@@ -75,6 +83,7 @@ pub struct Handle<T> {
 }
 
 impl<T> Handle<T> {
+    #[inline]
     pub fn new(sparse: SparseIdx, generation: Generation) -> Self {
         Self {
             data: PhantomData,
@@ -82,16 +91,19 @@ impl<T> Handle<T> {
         }
     }
 
+    #[inline]
     pub fn sparse_index(&self) -> SparseIdx {
         SparseIdx(self.value.truncate())
     }
 
+    #[inline]
     pub fn generation(&self) -> Generation {
         Generation((self.value >> 32).truncate())
     }
 }
 
 impl<T> Clone for Handle<T> {
+    #[inline]
     fn clone(&self) -> Self {
         *self
     }
@@ -100,6 +112,7 @@ impl<T> Clone for Handle<T> {
 impl<T> Copy for Handle<T> { }
 
 impl<T> PartialEq for Handle<T> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
     }

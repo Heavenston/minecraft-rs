@@ -18,6 +18,7 @@ struct SparseCell {
 struct AliveCellRef<'a>(&'a SparseCell);
 
 impl AliveCellRef<'_> {
+    #[inline]
     fn dense_idx(&self) -> DenseIdx {
         self.0.dense_idx_or_next_free.as_dense()
     }
@@ -30,18 +31,22 @@ pub struct SlotRef<'a, T> {
 }
 
 impl<'a, T> SlotRef<'a, T> {
+    #[inline]
     pub fn sparse_idx(&self) -> SparseIdx {
         self.sparse_idx
     }
 
+    #[inline]
     pub fn dense_idx(&self) -> DenseIdx {
         self.dense_idx
     }
 
+    #[inline]
     pub fn handle(&self) -> Handle<T> {
         Handle::new(self.sparse_idx, self.map.sparse[self.sparse_idx].generation)
     }
 
+    #[inline]
     pub fn get(&self) -> &'a T {
         &self.map.dense_values[self.dense_idx()]
     }
@@ -54,30 +59,37 @@ pub struct SlotMut<'a, T> {
 }
 
 impl<'a, T> SlotMut<'a, T> {
+    #[inline]
     pub fn into_ref(self) -> SlotRef<'a, T> {
         SlotRef { map: self.map, sparse_idx: self.sparse_idx, dense_idx: self.dense_idx }
     }
 
+    #[inline]
     pub fn sparse_idx(&self) -> SparseIdx {
         self.sparse_idx
     }
 
+    #[inline]
     pub fn dense_idx(&self) -> DenseIdx {
         self.dense_idx
     }
 
+    #[inline]
     pub fn handle(&self) -> Handle<T> {
         Handle::new(self.sparse_idx, self.map.sparse[self.sparse_idx].generation)
     }
 
+    #[inline]
     pub fn get(&self) -> &T {
         &self.map.dense_values[self.dense_idx()]
     }
 
+    #[inline]
     pub fn get_mut(&mut self) -> &mut T {
         &mut self.map.dense_values[self.dense_idx]
     }
 
+    #[inline]
     pub fn into_mut(self) -> &'a mut T {
         &mut self.map.dense_values[self.dense_idx]
     }
@@ -116,10 +128,12 @@ impl<T> Sealed for Handle<T> { }
 impl<T> GenMapIndex<T> for Handle<T> {
     type Checked<U> = Option<U>;
 
+    #[inline]
     fn map_checked<U, V>(val: Option<U>, mapper: impl FnOnce(U) -> V) -> Option<V> {
         Option::map(val, mapper)
     }
 
+    #[inline]
     fn get(map: &GenMap<T>, handle: Self) -> Option<SlotRef<'_, T>> {
         let cell = map.get_cell(handle)?;
         Some(SlotRef {
@@ -129,6 +143,7 @@ impl<T> GenMapIndex<T> for Handle<T> {
         })
     }
 
+    #[inline]
     fn get_mut(map: &mut GenMap<T>, handle: Self) -> Option<SlotMut<'_, T>> {
         let cell = map.get_cell(handle)?;
         Some(SlotMut {
@@ -143,8 +158,10 @@ impl Sealed for DenseIdx { }
 impl<T> GenMapIndex<T> for DenseIdx {
     type Checked<U> = Option<U>;
 
+    #[inline]
     fn map_checked<U, V>(val: Option<U>, mapper: impl FnOnce(U) -> V) -> Option<V> { Option::map(val, mapper) }
 
+    #[inline]
     fn get(map: &GenMap<T>, handle: Self) -> Option<SlotRef<'_, T>> {
         Some(SlotRef {
             map,
@@ -153,6 +170,7 @@ impl<T> GenMapIndex<T> for DenseIdx {
         })
     }
 
+    #[inline]
     fn get_mut(map: &mut GenMap<T>, handle: Self) -> Option<SlotMut<'_, T>> {
         Some(SlotMut {
             sparse_idx: *map.dense_to_sparse.get(handle)?,
@@ -167,8 +185,10 @@ impl Sealed for AssumeAlive { }
 impl<T> GenMapIndex<T> for AssumeAlive {
     type Checked<U> = U;
 
+    #[inline]
     fn map_checked<U, V>(val: U, mapper: impl FnOnce(U) -> V) -> V { mapper(val) }
 
+    #[inline]
     fn get(map: &GenMap<T>, Self(sparse_idx): Self) -> Self::Checked<SlotRef<'_, T>> {
         SlotRef {
             map,
@@ -177,6 +197,7 @@ impl<T> GenMapIndex<T> for AssumeAlive {
         }
     }
 
+    #[inline]
     fn get_mut(map: &mut GenMap<T>, Self(sparse_idx): Self) -> Self::Checked<SlotMut<'_, T>> {
         SlotMut {
             sparse_idx,
@@ -194,38 +215,46 @@ pub struct GenMap<T> {
 }
 
 impl<T> GenMap<T> {
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[inline]
     fn get_cell(&self, handle: Handle<T>) -> Option<AliveCellRef<'_>> {
         let cell = self.sparse.get(handle.sparse_index())?;
         (cell.generation == handle.generation()).then_some(AliveCellRef(cell))
     }
 
+    #[inline]
     fn assume_cell_alive(&self, index: SparseIdx) -> AliveCellRef<'_> {
         AliveCellRef(&self.sparse[index])
     }
 
     /// Returns true if and only if the given handle is still alive.
+    #[inline]
     pub fn has(&self, handle: Handle<T>) -> bool {
         self.get_cell(handle).is_some()
     }
 
+    #[inline]
     pub fn with<I: GenMapIndex<T>>(&self, handle: I) -> I::Checked<SlotRef<'_, T>> {
         I::get(self, handle)
     }
 
+    #[inline]
     pub fn with_mut<I: GenMapIndex<T>>(&mut self, handle: I) -> I::Checked<SlotMut<'_, T>> {
         I::get_mut(self, handle)
     }
 
     /// Returns a reference to the value for the given handle if it is still valid.
+    #[inline]
     pub fn get<I: GenMapIndex<T>>(&self, handle: I) -> I::Checked<&T> {
         I::map_checked(self.with(handle), |slot| slot.get())
     }
 
     /// Returns a mutable reference to the value for the given handle if it is still valid.
+    #[inline]
     pub fn get_mut<I: GenMapIndex<T>>(&mut self, handle: I) -> I::Checked<&mut T> {
         I::map_checked(self.with_mut(handle), SlotMut::into_mut)
     }
@@ -261,44 +290,52 @@ impl<T> GenMap<T> {
 
     /// Returns a reference to the dense array.
     /// If [`Self::remove`] was never called, this array will be in insertion order.
+    #[inline]
     pub fn values(&self) -> &IndexSlice<T, DenseIdx> {
         &self.dense_values
     }
 
     /// Returns a mutable reference to the dense array.
     /// See [`Self::value`].
+    #[inline]
     pub fn values_mut(&mut self) -> &mut IndexSlice<T, DenseIdx> {
         &mut self.dense_values
     }
 
     /// Retunrs the amount of values in the map.
+    #[inline]
     pub fn len(&self) -> usize {
         self.dense_values.len()
     }
 
     /// Returns true if [`Self::len`] returns 0.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.dense_values.is_empty()
     }
 
     /// Returns an iterator of references over all values in the map
     /// in the same order as in the dense array.
+    #[inline]
     pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.dense_values.iter()
     }
 
     /// Iterate over the sparse indices of the values in the same order as in
     /// the dense array.
+    #[inline]
     pub fn iter_sparse_indexes(&self) -> std::iter::Copied<std::slice::Iter<'_, SparseIdx>> {
         self.dense_to_sparse.iter().copied()
     }
 
     /// Iterate over the dense indices of the values in the same order as in
     /// the dense array.
+    #[inline]
     pub fn iter_dense_indexes(&self) -> indexmap::IndexesIterator<DenseIdx> {
         self.dense_values.indexes()
     }
 
+    #[inline]
     pub fn enumerated(&self) -> impl Iterator<Item = (SparseIdx, DenseIdx, &'_ T)> + DoubleEndedIterator + ExactSizeIterator {
         izip!(
             self.iter_sparse_indexes(),
@@ -309,6 +346,7 @@ impl<T> GenMap<T> {
 
     /// Returns an iterator of mutable references over all values in the map
     /// in the same order as in the dense array.
+    #[inline]
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
         self.dense_values.iter_mut()
     }
@@ -329,6 +367,7 @@ impl<'a, T> IntoIterator for &'a GenMap<T> {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.dense_values.iter()
     }
@@ -338,6 +377,7 @@ impl<'a, T> IntoIterator for &'a mut GenMap<T> {
     type Item = &'a mut T;
     type IntoIter = std::slice::IterMut<'a, T>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.dense_values.iter_mut()
     }

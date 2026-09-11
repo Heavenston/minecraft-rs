@@ -153,10 +153,12 @@ pub fn output_bundle_macro(input: PseudoStruct::<Entry>) -> TokenStream {
         impl #render_graph::ResourceOutputBundle for #struct_name {
             type Values = #value_struct_name;
 
+            #[inline]
             fn list_resources(&self, storer: &mut impl #render_graph::ResourceInfoProvider) -> [#render_graph::UntypedResourceHandle; #resource_count] {
                 [#(#handles.into()),*]
             }
 
+            #[inline]
             fn store(&self, values: Self::Values, storer: &mut impl #render_graph::ResourceStorer) {
                 #(#gathered_resources_vars)*
                 #(#values_store)*

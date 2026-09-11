@@ -283,6 +283,7 @@ fn process_entry(input: &Input, entry: &Entry) -> TokenStream {
             impl #render_graph::GraphNode for #node_name {
                 type InputBundle = Input;
                 type OutputBundle = Output;
+                #[inline]
                 fn run(&mut self, InputValue(#(#arg_pats),*): InputValue) -> OutputValue #body
             }
         }
