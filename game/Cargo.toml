@@ -28,6 +28,7 @@ ustr = "1.1.0"
 enumflags2 = "0.7.12"
 dirwalk = "1.1.1"
 xxhash-rust = { version = "0.8.18", features = ["std", "xxh3"] }
+crossbeam-channel = "0.5.17"
 
 [lints]
 workspace = true

@@ -16,8 +16,8 @@ pub struct Ctx<'a> {
 }
 
 pub trait App: 'static {
-    fn resume(&mut self, renderer: &mut Renderer) -> Result<()> {
-        let _ = renderer;
+    fn resume(&mut self, ctx: Ctx<'_>) -> Result<()> {
+        let _ = ctx;
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 use crevice::std140::AsStd140;
-use engine::{ wgpu, material::Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
+use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
 use glam::Vec3;
 use render_graph::ResourceHandle;
 
@@ -47,7 +47,7 @@ struct ChunkList {
     chunks: Rc<[ChunkRenderData]>,
 }
 
-fn register_global(render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
+fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
     render_graph::node_helper!(into render_graph;
         CreateShaderModule
         (device: ref render_res::Device) -> (ShaderModule) {
@@ -100,7 +100,7 @@ fn register_global(render_graph: &mut engine::material::RenderGraphWrapper<'_>) 
     );
 }
 
-fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::RenderGraphWrapper<'_>) -> ResourceHandle<ChunkList> {
+fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_>) -> ResourceHandle<ChunkList> {
     use render_graph::ResourceConfig as Cfg;
     render_graph::node_helper!(into render_graph;
         using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::new());
@@ -271,13 +271,13 @@ impl ChunkMaterial {
 }
 
 impl Material for ChunkMaterial {
-    fn register_global(render_graph: &mut engine::material::RenderGraphWrapper<'_>)
+    fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>)
         where Self: Sized,
     {
         register_global(render_graph);
     }
 
-    fn register(&mut self, render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
+    fn register(&mut self, render_graph: &mut engine::RenderGraphWrapper<'_>) {
         self.chunk_list_resource = Some(register(&self.cfg, render_graph));
     }
 

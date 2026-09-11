@@ -19,7 +19,6 @@ resolver = "3"
 members = ["harness", "game", "render_graph", "typemap", "engine", "genmap", "render_graph_macros"]
 
 [workspace.dependencies]
-typemap = { path = "./typemap" }
 indexmap = { path = "./indexmap" }
 genmap = { path = "./genmap" }
 harness = { path = "./harness" }

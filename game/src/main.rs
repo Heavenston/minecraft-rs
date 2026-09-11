@@ -11,7 +11,7 @@
 use std::{cell::RefCell, collections::HashMap, time::Instant};
 
 use anyhow::{Context as _, Result};
-use engine::{wgpu::{self, util::DeviceExt as _}, world::MaterialHandle};
+use engine::{MaterialHandle, wgpu::{self, util::DeviceExt as _}};
 use enum_map::EnumMap;
 use glam::{ISizeVec3, Vec3, Vec4};
 use image::{EncodableLayout as _, Pixel as _};
@@ -56,7 +56,7 @@ struct App {
 }
 
 impl App {
-    fn get_texture(&self, ctx: &engine::ResumeCtx<'_>, location: ResourceLocation) -> Result<TextureData> {
+    fn get_texture(&self, ctx: &engine::Ctx<'_>, location: ResourceLocation) -> Result<TextureData> {
         if let Some(texture) = self.textures.borrow().get(&location).cloned() {
             return Ok(texture);
         }
@@ -94,7 +94,7 @@ impl App {
         Ok(data)
     }
 
-    fn get_chunk_material(&self, ctx: &mut engine::ResumeCtx<'_>, texture_location: ResourceLocation, force_translucent: bool) -> Result<MaterialHandle<ChunkMaterial>> {
+    fn get_chunk_material(&self, ctx: &mut engine::Ctx<'_>, texture_location: ResourceLocation, force_translucent: bool) -> Result<MaterialHandle<ChunkMaterial>> {
         let TextureData { texture, present_transparency } = self.get_texture(ctx, texture_location)?;
         let transparency = if force_translucent {
             ChunkTransparencyMode::Translucent
@@ -106,7 +106,7 @@ impl App {
             return Ok(material);
         }
 
-        let material = ctx.world.add_material(ChunkMaterial::new(materials::ChunkRenderConfig {
+        let material = ctx.materials.add_material(ChunkMaterial::new(materials::ChunkRenderConfig {
             texture,
             transparency,
         }));
@@ -133,7 +133,7 @@ impl App {
 }
 
 impl engine::App for App {
-    fn resume(&mut self, ctx: &mut engine::ResumeCtx<'_>) -> Result<()> {
+    fn resume(&mut self, ctx: &mut engine::Ctx<'_>) -> Result<()> {
         tracing::info!("Meshing start chunks");
 
         let mut face_count: usize = 0;
@@ -156,7 +156,7 @@ impl engine::App for App {
                 buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(bytemuck::cast_slice::<_, u8>(&submesh.instances));
                 buffer.unmap();
                 let material = self.get_chunk_material(ctx, submesh.texture, submesh.force_translucent)?;
-                let material = ctx.world.get_material_mut(material).unwrap();
+                let material = ctx.materials.get_material_mut(material).unwrap();
                 material.chunk_list = material.chunk_list.iter().cloned().chain([ChunkRenderData {
                     direction: submesh.direction,
                     position: (chunk_position * CHUNK_SIZE.as_isizevec3()).as_vec3(),
@@ -174,7 +174,7 @@ impl engine::App for App {
         Ok(())
     }
 
-    fn update(&mut self, ctx: engine::Ctx<'_>) -> Result<()> {
+    fn update(&mut self, ctx: &mut engine::Ctx<'_>) -> Result<()> {
         let time = self.start.elapsed().as_secs_f32();
 
         let window_size = ctx.renderer.window().outer_size();

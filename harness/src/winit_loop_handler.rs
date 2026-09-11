@@ -52,7 +52,7 @@ impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let mut renderer = pollster::block_on(Renderer::new(event_loop.owned_display_handle(), window)).unwrap();
-            self.app.resume(&mut renderer).unwrap();
+            self.app.resume(Ctx { inputs_state: &mut self.inputs_state, renderer: &mut renderer }).unwrap();
             self.renderer = Some(renderer);
         }
 
@@ -86,7 +86,7 @@ impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
                 event.window.inner_size().height,
             );
         }
-        self.app.resume(&mut event).unwrap();
+        self.app.resume(Ctx { inputs_state: &mut self.inputs_state, renderer: &mut event }).unwrap();
         self.renderer = Some(event);
     }
 
