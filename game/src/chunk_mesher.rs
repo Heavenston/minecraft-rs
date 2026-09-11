@@ -223,7 +223,8 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
                 }
             }
             let culling_directions = full_block_faces.iter()
-                .filter_map(|(dir, faces)| (!faces.is_empty()).then_some(dir))
+                .filter(|(_, faces)| faces.iter().any(|face| !face.force_translucent))
+                .map(|(dir,_)| dir)
                 .fold(BitFlags::empty(), std::ops::BitOr::bitor);
             self.block_models.push(BlockModel {
                 culling_directions,
