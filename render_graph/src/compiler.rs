@@ -152,41 +152,6 @@ fn compute_producers(graph: &RenderGraph) -> Producers {
     ).into_group_map()
 }
 
-#[derive(Default, Clone)]
-struct ListLink(Option<Rc<Cons>>);
-struct Cons {
-    val: (InputOrNode, NodeRef),
-    prev: ListLink,
-}
-
-impl ListLink {
-    fn iter(&self) -> impl Iterator<Item = (InputOrNode, NodeRef)> {
-        struct Iter<'a>(Option<&'a Cons>);
-        impl Iterator for Iter<'_> {
-            type Item = (InputOrNode, NodeRef);
-
-            fn next(&mut self) -> Option<Self::Item> {
-                match self.0 {
-                    Some(n) => {
-                        let val = n.val;
-                        self.0 = n.prev.0.as_deref();
-                        Some(val)
-                    },
-                    None => None,
-                }
-            }
-        }
-        Iter(self.0.as_deref())
-    }
-
-    fn cons(self, val: (InputOrNode, NodeRef)) -> Self {
-        Self(Some(Rc::new(Cons {
-            val,
-            prev: self,
-        })))
-    }
-}
-
 trait ResolvedResourcesContainer {
     fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator;
     fn explicit_orderings(&self) -> &[(NodeRef, NodeRef)];
@@ -361,17 +326,15 @@ impl GraphResourceResolver {
             .into_group_map()
     }
 
-    fn is_after_or_equal_rec(&self, recursive: ListLink, after: InputOrNode, before: NodeRef) -> bool {
+    fn is_after_or_equal_rec(&self, mut recursive: HashSet<(InputOrNode, NodeRef)>, after: InputOrNode, before: NodeRef) -> bool {
         if self.after_or_equal_cache.borrow().contains(&(after, before)) { return true; }
         if self.after_or_equal_cache_inv.borrow().contains(&(after, before)) { return false; }
-        if recursive.iter().any(|o| o == (after, before)) {
+        if recursive.contains(&(after, before)) {
             return false;
         }
 
-        let recursive = recursive.cons((after, before));
+        recursive.insert((after, before));
         let after = match after { InputOrNode::Input => return false, InputOrNode::Node(node) => node };
-
-        if self.after_or_equal_cache.borrow().contains(&(InputOrNode::Node(before), after)) { return false; }
 
         let result = after == before || (
             !self.resolved_inputs[after].iter().all(Option::is_none) && !self.resolved_inputs[before].iter().all(Option::is_none) && (
@@ -381,7 +344,11 @@ impl GraphResourceResolver {
             self.node_refs().any(|third| self.is_after_or_equal_rec(recursive.clone(), InputOrNode::Node(after), third) && self.is_after_or_equal_rec(recursive.clone(), InputOrNode::Node(third), before))
         ));
         if result {
-            self.after_or_equal_cache.borrow_mut().insert((InputOrNode::Node(before), after));
+            let mut cache = self.after_or_equal_cache.borrow_mut();
+            cache.insert((InputOrNode::Node(before), after));
+            for after2 in cache.iter().filter(|&&(_,before2)| before2 == after).map(|&(after2,_)| after2).collect_vec() {
+                cache.insert((after2, before));
+            }
         }
         else {
             self.after_or_equal_cache_inv.borrow_mut().insert((InputOrNode::Node(before), after));
@@ -390,7 +357,7 @@ impl GraphResourceResolver {
     }
 
     fn is_after_or_equal(&self, after: InputOrNode, before: NodeRef) -> bool {
-        self.is_after_or_equal_rec(ListLink::default(), after, before)
+        self.is_after_or_equal_rec(Default::default(), after, before)
     }
 }
 
@@ -475,7 +442,17 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
     let mut iterations = 0;
 
     while !this.is_complete() {
-        this.after_or_equal_cache_inv.borrow_mut().clear();
+        {
+            let cache = this.after_or_equal_cache.borrow();
+            let mut cache_inv = this.after_or_equal_cache_inv.borrow_mut();
+            cache_inv.clear();
+            #[expect(clippy::iter_over_hash_type, reason = "t")]
+            for &(k, v) in cache.iter() {
+                if let InputOrNode::Node(k) = k {
+                    cache_inv.insert((InputOrNode::Node(v), k));
+                }
+            }
+        }
 
         rr_println!("##############################");
         #[derive(Debug, Clone, Copy)]
@@ -732,6 +709,7 @@ impl CompiledGraph {
             print!("\x1B[2J\x1B[3J\x1B[H");
             std::io::Write::flush(&mut std::io::stdout()).unwrap();
             println!("START {i}");
+            println!("{}", graph.nodes.len());
             resolved = resolve_resources(graph);
             if resolved.is_some() { break }
             tracing::trace!("Fail");
