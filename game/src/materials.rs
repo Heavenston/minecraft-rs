@@ -10,6 +10,10 @@ static SHADER_CODE: &str = include_str!("chunk_material.wgsl");
 
 render_graph::graph_resource!(pub struct EnableWireframes(pub bool); permanent);
 
+render_graph::graph_resource!(pub struct ShaderModule(pub wgpu::ShaderModule); permanent);
+render_graph::graph_resource!(pub struct BindGroupLayout(pub wgpu::BindGroupLayout); permanent);
+render_graph::graph_resource!(pub struct RenderPipelineLayout(pub wgpu::PipelineLayout); permanent);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChunkTransparencyMode {
     Opaque,
@@ -39,23 +43,10 @@ struct ChunkList {
     chunks: Rc<[ChunkRenderData]>,
 }
 
-fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::RenderGraphWrapper<'_>) -> ResourceHandle<ChunkList> {
-    use render_graph::ResourceConfig as Cfg;
+fn register_global(render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
     render_graph::node_helper!(into render_graph;
-        using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::new());
-
-        using @shader_module: wgpu::ShaderModule = render_graph.create_resource("chunk_material::shader_module", Cfg::permanent());
-        using @transparency: ChunkTransparencyMode = render_graph.create_resource("chunk_material::transparency", Cfg::permanent());
-        using @texture: wgpu::Texture = render_graph.create_resource("chunk_material::texture", Cfg::permanent());
-
-        using @bind_group_layout: wgpu::BindGroupLayout = render_graph.create_resource("chunk_material::bind_group_layout", Cfg::permanent());
-        using @bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_material::bind_group", Cfg::permanent());
-
-        using @render_pipeline_layout: wgpu::PipelineLayout = render_graph.create_resource("chunk_material::render_pipeline_layout", Cfg::permanent());
-        using @render_pipeline: wgpu::RenderPipeline = render_graph.create_resource("chunk_material::render_pipeline", Cfg::permanent());
-
         CreateShaderModule
-        (device: ref render_res::Device) -> (@shader_module) {
+        (device: ref render_res::Device) -> (ShaderModule) {
             OutputValue(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Chunk material"),
                 source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(SHADER_CODE)),
@@ -63,7 +54,7 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
         };
 
         CreateBindGroupLayout
-        (device: ref render_res::Device) -> (@bind_group_layout) {
+        (device: ref render_res::Device) -> (BindGroupLayout) {
             OutputValue(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Chunk material"),
                 entries: &[
@@ -87,9 +78,34 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
             }))
         };
 
+        CreateRenderPipelineLayout (
+            device: ref render_res::Device,
+            world_bind_group_layout: ref engine_graph::WorldBindGroupLayout,
+            bind_group_layout: ref BindGroupLayout,
+        ) -> (RenderPipelineLayout) {
+            OutputValue(device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Chunk material"),
+                bind_group_layouts: &[Some(world_bind_group_layout), Some(bind_group_layout)],
+                immediate_size: Immediates::std140_size_static().try_into().unwrap(),
+            }))
+        };
+    );
+}
+
+fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::RenderGraphWrapper<'_>) -> ResourceHandle<ChunkList> {
+    use render_graph::ResourceConfig as Cfg;
+    render_graph::node_helper!(into render_graph;
+        using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::new());
+
+        using @transparency: ChunkTransparencyMode = render_graph.create_resource("chunk_material::transparency", Cfg::permanent());
+        using @texture: wgpu::Texture = render_graph.create_resource("chunk_material::texture", Cfg::permanent());
+
+        using @bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_material::bind_group", Cfg::permanent());
+        using @render_pipeline: wgpu::RenderPipeline = render_graph.create_resource("chunk_material::render_pipeline", Cfg::permanent());
+
         CreateBindGroup (
             device: ref render_res::Device,
-            bind_group_layout: ref @bind_group_layout,
+            bind_group_layout: ref BindGroupLayout,
             texture: ref @texture,
         ) -> (@bind_group) {
             let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -112,21 +128,9 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
             }))
         };
 
-        CreateRenderPipelineLayout (
-            device: ref render_res::Device,
-            world_bind_group_layout: ref engine_graph::WorldBindGroupLayout,
-            bind_group_layout: ref @bind_group_layout,
-        ) -> (@render_pipeline_layout) {
-            OutputValue(device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Chunk material"),
-                bind_group_layouts: &[Some(world_bind_group_layout), Some(bind_group_layout)],
-                immediate_size: Immediates::std140_size_static().try_into().unwrap(),
-            }))
-        };
-
         CreateRenderPipeline(
             device: ref render_res::Device,
-            shader_module: ref @shader_module, render_pipeline_layout: ref @render_pipeline_layout,
+            shader_module: ref ShaderModule, render_pipeline_layout: ref RenderPipelineLayout,
             &enable_wireframes: ref EnableWireframes,
             &transparency: ref @transparency,
         ) -> (@render_pipeline) {
@@ -252,6 +256,12 @@ impl ChunkMaterial {
 }
 
 impl Material for ChunkMaterial {
+    fn register_global(render_graph: &mut engine::material::RenderGraphWrapper<'_>)
+        where Self: Sized,
+    {
+        register_global(render_graph);
+    }
+
     fn register(&mut self, render_graph: &mut engine::material::RenderGraphWrapper<'_>) {
         self.chunk_list_resource = Some(register(&self.cfg, render_graph));
     }

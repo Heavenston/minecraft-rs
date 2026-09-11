@@ -1,8 +1,9 @@
-use std::{ any::Any, marker::PhantomData, time::Instant };
+use std::{ any::{Any, TypeId}, collections::{HashMap, HashSet, hash_map}, marker::PhantomData, time::Instant };
 
 use crevice::std140::AsStd140;
 use glam::{ Mat4, Vec4 };
 use genmap::{ GenMap, Handle };
+use itertools::chain;
 use render_graph::RenderGraph;
 
 use crate::material::{Material, RenderGraphWrapper};
@@ -48,6 +49,12 @@ impl<M: Material> Clone for MaterialHandle<M> {
     fn clone(&self) -> Self { *self }
 }
 
+struct MaterialTypeData {
+    refcount: usize,
+    register: Box<dyn Fn(&mut RenderGraphWrapper<'_>)>,
+    registered_nodes: Option<Vec<render_graph::UntypedNodeHandle>>,
+}
+
 pub struct World {
     pub(crate) created_at: Instant,
 
@@ -55,16 +62,70 @@ pub struct World {
     pub camera_transform: Mat4,
     pub camera_projection: Mat4,
 
+    material_type_register_queue: HashSet<TypeId>,
+    material_type_unregister_queue: HashSet<TypeId>,
+    material_types_datas: HashMap<TypeId, MaterialTypeData>,
+
+    node_unregister_queue: Vec<render_graph::UntypedNodeHandle>,
     materials: GenMap<StoredMaterial>,
 }
 
 impl World {
+    fn increment_material_type<M: Material>(&mut self) {
+        let type_id = TypeId::of::<M>();
+        let data = match self.material_types_datas.entry(type_id) {
+            hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
+            hash_map::Entry::Vacant(vacant) => {
+                vacant.insert(MaterialTypeData {
+                    refcount: 0,
+                    register: Box::new(|render_graph| M::register_global(render_graph)),
+                    registered_nodes: None,
+                })
+            },
+        };
+        data.refcount += 1;
+        self.material_type_unregister_queue.remove(&type_id);
+        if data.registered_nodes.is_none() {
+            self.material_type_register_queue.insert(type_id);
+        }
+    }
+
+    fn decrement_material_type<M: Material>(&mut self) {
+        let type_id = TypeId::of::<M>();
+        let mut entry = match self.material_types_datas.entry(type_id) {
+            hash_map::Entry::Occupied(occupied) => occupied,
+            hash_map::Entry::Vacant(_) => unreachable!(),
+        };
+        entry.get_mut().refcount -= 1;
+        if entry.get().refcount == 0 {
+            self.material_type_register_queue.remove(&type_id);
+            if entry.get().registered_nodes.is_none() {
+                debug_assert!(!self.material_type_unregister_queue.contains(&type_id));
+                entry.remove();
+            }
+            else {
+                self.material_type_unregister_queue.insert(type_id);
+            }
+        }
+    }
+
     pub fn add_material<M: Material>(&mut self, material: M) -> MaterialHandle<M> {
+        self.increment_material_type::<M>();
         let handle = self.materials.insert(StoredMaterial::new(material));
         MaterialHandle {
             _material: PhantomData,
             handle,
         }
+    }
+
+    pub fn remove_material<M: Material>(&mut self, handle: MaterialHandle<M>) -> Option<M> {
+        let stored = self.materials.remove(handle.handle)?;
+        self.node_unregister_queue.extend(stored.registered_nodes.into_iter().flatten());
+
+        assert_eq!(stored.material.as_ref().type_id(), TypeId::of::<M>());
+        self.decrement_material_type::<M>();
+        
+        Some(*(stored.material as Box<dyn Any>).downcast().expect("Correct type associated with handle"))
     }
 
     pub fn get_material<M: Material>(&self, handle: MaterialHandle<M>) -> Option<&M> {
@@ -85,14 +146,30 @@ impl World {
             },
         });
 
-        for m in self.materials.values_mut().iter_mut() {
-            if m.registered_nodes.is_none() {
+        let material_types_nodes = self.material_type_unregister_queue.drain()
+            .flat_map(|material_type_id| self.material_types_datas.remove(&material_type_id).and_then(|m| m.registered_nodes).expect("unregister material exists and has registered nodes"));
+        let material_nodes = self.node_unregister_queue.drain(..);
+        for node in chain!(material_types_nodes, material_nodes) {
+            render_graph.remove_node_untyped(node);
+        }
+
+        #[expect(clippy::iter_over_hash_type, reason = "Order (should) not matter")]
+        for type_id in self.material_type_register_queue.drain() {
+            let data = self.material_types_datas.get_mut(&type_id).expect("materials types scheduled to registering exists");
+            debug_assert!(data.registered_nodes.is_none());
+            let mut wrapper = RenderGraphWrapper::new(render_graph);
+            (data.register)(&mut wrapper);
+            data.registered_nodes = Some(wrapper.finish());
+        }
+
+        for stored_material in self.materials.values_mut().iter_mut() {
+            if stored_material.registered_nodes.is_none() {
                 let mut wrapper = RenderGraphWrapper::new(render_graph);
-                m.material.register(&mut wrapper);
-                m.registered_nodes = Some(wrapper.finish());
+                stored_material.material.register(&mut wrapper);
+                stored_material.registered_nodes = Some(wrapper.finish());
             }
             else {
-                m.material.update(render_graph);
+                stored_material.material.update(render_graph);
             }
         }
     }
@@ -107,7 +184,12 @@ impl Default for World {
             camera_transform: Mat4::IDENTITY,
             camera_projection: Mat4::IDENTITY,
 
+            material_type_register_queue: HashSet::default(),
+            material_type_unregister_queue: HashSet::default(),
+            material_types_datas: HashMap::default(),
+
             materials: GenMap::new(),
+            node_unregister_queue: vec![],
         }
     }
 }
