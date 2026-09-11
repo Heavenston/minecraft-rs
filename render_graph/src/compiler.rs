@@ -298,8 +298,7 @@ struct GraphResourceResolver {
     resolved_inputs: IndexMap<Box<[Option<ResolvedInput>]>, NodeRef>,
     resolved_borrows: IndexMap<Box<[Option<ResolvedInput>]>, NodeRef>,
 
-    after_or_equal_cache: RefCell<HashSet<(InputOrNode, NodeRef)>>,
-    after_or_equal_cache_inv: RefCell<HashSet<(InputOrNode, NodeRef)>>,
+    after_or_equal_cache: HashSet<(NodeRef, NodeRef)>,
 }
 
 impl GraphResourceResolver {
@@ -326,38 +325,35 @@ impl GraphResourceResolver {
             .into_group_map()
     }
 
-    fn is_after_or_equal_rec(&self, mut recursive: HashSet<(InputOrNode, NodeRef)>, after: InputOrNode, before: NodeRef) -> bool {
-        if self.after_or_equal_cache.borrow().contains(&(after, before)) { return true; }
-        if self.after_or_equal_cache_inv.borrow().contains(&(after, before)) { return false; }
-        if recursive.contains(&(after, before)) {
-            return false;
-        }
+    fn is_after_or_equal_partial(&self, after: NodeRef, before: NodeRef) -> bool {
+        after == before ||
+        self.explicit_orderings().contains(&(before, after)) ||
+        self.combined_inputs(after).any(|input| input.producer == before) ||
+        self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2)) ||
+        self.node_refs().any(|third| self.after_or_equal_cache.contains(&(after, third)) && self.after_or_equal_cache.contains(&(third, before)))
+    }
 
-        recursive.insert((after, before));
-        let after = match after { InputOrNode::Input => return false, InputOrNode::Node(node) => node };
-
-        let result = after == before || (
-            !self.resolved_inputs[after].iter().all(Option::is_none) && !self.resolved_inputs[before].iter().all(Option::is_none) && (
-            self.explicit_orderings().contains(&(before, after)) ||
-            self.combined_inputs(after).any(|input| input.producer == before) ||
-            self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2)) ||
-            self.node_refs().any(|third| self.is_after_or_equal_rec(recursive.clone(), InputOrNode::Node(after), third) && self.is_after_or_equal_rec(recursive.clone(), InputOrNode::Node(third), before))
-        ));
-        if result {
-            let mut cache = self.after_or_equal_cache.borrow_mut();
-            cache.insert((InputOrNode::Node(before), after));
-            for after2 in cache.iter().filter(|&&(_,before2)| before2 == after).map(|&(after2,_)| after2).collect_vec() {
-                cache.insert((after2, before));
+    fn resolve_is_after_or_equal(&mut self) {
+        let mut finished = false;
+        while !finished {
+            finished = true;
+            for after in self.node_refs.clone() {
+                for before in self.node_refs.clone() {
+                    if self.after_or_equal_cache.contains(&(after, before)) { continue }
+                    if self.is_after_or_equal_partial(after, before) {
+                        self.after_or_equal_cache.insert((after, before));
+                        finished = false;
+                    }
+                }
             }
         }
-        else {
-            self.after_or_equal_cache_inv.borrow_mut().insert((InputOrNode::Node(before), after));
-        }
-        result
     }
 
     fn is_after_or_equal(&self, after: InputOrNode, before: NodeRef) -> bool {
-        self.is_after_or_equal_rec(Default::default(), after, before)
+        match after {
+            InputOrNode::Input => false,
+            InputOrNode::Node(after) => self.after_or_equal_cache.contains(&(after, before)),
+        }
     }
 }
 
@@ -427,8 +423,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
         resolved_inputs: graph.nodes.iter().map(|node| vec![None; node.consumes.len()]).map_into().collect(),
         resolved_borrows: graph.nodes.iter().map(|node| vec![None; node.borrows.len()]).map_into().collect(),
 
-        after_or_equal_cache: RefCell::default(),
-        after_or_equal_cache_inv: RefCell::default(),
+        after_or_equal_cache: Default::default(),
     };
 
     #[cfg(debug_assertions)]
@@ -442,17 +437,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
     let mut iterations = 0;
 
     while !this.is_complete() {
-        {
-            let cache = this.after_or_equal_cache.borrow();
-            let mut cache_inv = this.after_or_equal_cache_inv.borrow_mut();
-            cache_inv.clear();
-            #[expect(clippy::iter_over_hash_type, reason = "t")]
-            for &(k, v) in cache.iter() {
-                if let InputOrNode::Node(k) = k {
-                    cache_inv.insert((InputOrNode::Node(v), k));
-                }
-            }
-        }
+        this.resolve_is_after_or_equal();
 
         rr_println!("##############################");
         #[derive(Debug, Clone, Copy)]
@@ -579,9 +564,6 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
                         break 'claim_loop;
                     }
                 }
-                else {
-                    tracing::warn!(resource = %rn!(claim_resource), producer = %ton!(claim_producer), claimers = ?claimers.consumes, "Consumer conflict");
-                }
             }
             else {
                 found_valid = true;
@@ -616,29 +598,6 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
 
 #[expect(clippy::single_call_fn, reason = "CompiledGraph construction algorithm")]
 fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box<[NodeRef]> {
-    let node_labels = graph.get_simplified_node_labels();
-    let resource_labels = graph.get_simplified_resource_labels();
-    macro_rules! rn {
-        ($t:expr) => {{
-            // &graph.resources.with($t.0).unwrap().get().label
-            resource_labels[&graph.resource_handle($t)].clone()
-        }};
-    }
-    macro_rules! nn {
-        ($n:expr) => {
-            node_labels.get(&graph.node_handle($n)).cloned().unwrap_or_default()
-        };
-    }
-    macro_rules! ton {
-        ($n:expr) => {
-            match $n {
-                InputOrNode::Input => "<input>".to_string(),
-                InputOrNode::Node(n) => nn!(n),
-            }
-        };
-    }
-
-    tracing::debug!("Computing graph total order");
     let mut successors: IndexMap<HashSet<NodeRef>, NodeRef> = vec![HashSet::new(); graph.nodes.len()].into();
     for (node_idx, input) in chain!(resolved.borrows.enumerated(), resolved.inputs.enumerated()).flat_map(|(node_idx, inputs)| inputs.iter().map(move |input| (node_idx, input))) {
         if let InputOrNode::Node(node_idx2) = &input.producer {
@@ -650,7 +609,6 @@ fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box
             let consumer = resolved.inputs.enumerated().flat_map(|(consumer, inputs)| inputs.iter().map(move |input| (consumer, input)))
                 .find(|&(_,p)| p == borrow);
             if let Some((consumer,_)) = consumer {
-                println!("{consumer_} is after {borrower_} because {borrower_} borrows {} from {} which is consumed by {consumer_}", rn!(borrow.resource), ton!(borrow.producer), consumer_ = nn!(consumer), borrower_ = nn!(borrower_node));
                 successors[&borrower_node].insert(consumer);
             }
         }
@@ -661,16 +619,7 @@ fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box
     let mut output = Vec::<NodeRef>::new();
     while !done.iter().copied().all(identity) {
         let Some((node, _)) = successors.enumerated().filter(|(i, _)| !done[i]).find(|(_,succ)| !succ.iter().any(|o| !done[o]))
-        else {
-            println!("Remaining:");
-            for (r,_) in graph.nodes() {
-                if done[r] { continue }
-                println!("\t{}: {}", nn!(r), successors[r].iter().filter(|p| !done[**p]).map(|p| nn!(*p)).join(", "));
-            }
-            println!();
-            panic!("Could not resolve graph ordering");
-        };
-        println!("push({})", nn!(node));
+        else { panic!("Could not resolve graph ordering (this is a internal render_graph error, there is depedency loops inside the resolved resources)") };
         done[&node] = true;
         output.push(node);
     }
@@ -704,17 +653,7 @@ impl CompiledGraph {
                 .all(|(_, v)| v.len() == 1),
             "Permanent resources must have exactly one producer"
         );
-        let mut resolved = None;
-        for i in 0..5usize {
-            print!("\x1B[2J\x1B[3J\x1B[H");
-            std::io::Write::flush(&mut std::io::stdout()).unwrap();
-            println!("START {i}");
-            println!("{}", graph.nodes.len());
-            resolved = resolve_resources(graph);
-            if resolved.is_some() { break }
-            tracing::trace!("Fail");
-        }
-        let resolved = resolved.expect("Could not resolve render graph resources");
+        let resolved = resolve_resources(graph).expect("Could not resolve render graph resources");
         if let Some(found) = resolved.find_loop() {
             tracing::warn!("FOUND A LOOP");
             let node_labels = graph.get_simplified_node_labels();

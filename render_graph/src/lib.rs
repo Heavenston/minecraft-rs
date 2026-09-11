@@ -594,14 +594,13 @@ impl RenderGraph {
     }
 
     pub fn prepare_run(&mut self) {
+        if self.compiled.is_some() { return; }
         if let Some(path) = option_env!("DEBUG_GRAPH_PRECOMPUTE_PATH") {
             let mut str = String::new();
             self.write_to_dot(&mut str, None).unwrap();
             std::fs::write(path, str).unwrap();
             tracing::debug!(output = path, "Stored prepare_run() dot graph");
         }
-
-        if self.compiled.is_some() { return; }
         let compiled = CompiledGraph::new(self);
         self.compiled = Some(compiled);
     }
