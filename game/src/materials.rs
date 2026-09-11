@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use crevice::std140::AsStd140;
 use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
-use glam::Vec3;
+use glam::{Mat4, Vec3, Vec4};
 use render_graph::ResourceHandle;
 
 use crate::utils::CardinalDirection;
+use crate::chunk::CHUNK_SIZE;
 
 static SHADER_CODE: &str = include_str!("chunk_material.wgsl");
 
@@ -45,6 +46,29 @@ pub struct ChunkRenderData {
 
 struct ChunkList {
     chunks: Arc<[ChunkRenderData]>,
+}
+
+fn test_aabb_against_frustum(mvp: &Mat4, min: Vec3, max: Vec3) -> bool {
+    // Use our min max to define eight corners
+    let corners: [Vec4; 8] = [
+        Vec4::new(min.x, min.y, min.z, 1.0), // x y z
+        Vec4::new(max.x, min.y, min.z, 1.0), // X y z
+        Vec4::new(min.x, max.y, min.z, 1.0), // x Y z
+        Vec4::new(max.x, max.y, min.z, 1.0), // X Y z
+
+        Vec4::new(min.x, min.y, max.z, 1.0), // x y Z
+        Vec4::new(max.x, min.y, max.z, 1.0), // X y Z
+        Vec4::new(min.x, max.y, max.z, 1.0), // x Y Z
+        Vec4::new(max.x, max.y, max.z, 1.0), // X Y Z
+    ];
+
+    corners.iter()
+        .map(|corner| mvp * corner)
+        .any(|corner| {
+            (-corner.w..=corner.w).contains(&corner.x) &&
+            (-corner.w..=corner.w).contains(&corner.y) &&
+            (0f32..=corner.w).contains(&corner.z)
+        })
 }
 
 fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
@@ -223,6 +247,7 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::RenderGraphWrapp
 
         Draw (
             mut render_pass: engine_graph::RenderPass,
+            world: ref engine_graph::WorldResource,
             bind_group: ref @bind_group,
             render_pipeline: ref @render_pipeline,
             chunk_list: @chunk_list,
@@ -230,10 +255,21 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::RenderGraphWrapp
             &transparency: ref @transparency,
             _: ref @draw_step,
         ) -> (engine_graph::RenderPass) {
+            let camera_position = world.camera_clip_transform.transform_point3(Vec3::ZERO);
+            let view_projection = world.camera_projection * world.camera_clip_transform.inverse_or_zero();
+
             render_pass.push_debug_group(&format!("{transparency:?} Chunk renderer"));
             render_pass.set_pipeline(render_pipeline);
             render_pass.set_bind_group(1, bind_group, &[]);
             for chunk in &*chunk_list.chunks {
+                let max_pos = chunk.position + CHUNK_SIZE.as_vec3();
+                let clip = if chunk.direction.is_positive() {
+                    camera_position[chunk.direction.axis()] < chunk.position[chunk.direction.axis()]
+                } else {
+                    camera_position[chunk.direction.axis()] > max_pos[chunk.direction.axis()]
+                };
+                if clip { continue }
+                if !test_aabb_against_frustum(&view_projection, chunk.position, max_pos) { continue }
                 render_pass.set_immediates(0, Immediates {
                     position: chunk.position,
                     direction: enum_map::Enum::into_usize(chunk.direction).try_into().unwrap(),

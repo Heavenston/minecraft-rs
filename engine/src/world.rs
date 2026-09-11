@@ -10,6 +10,7 @@ pub struct World {
 
     pub clear_color: Vec4,
     pub camera_transform: Mat4,
+    pub camera_clip_transform: Mat4,
     pub camera_projection: Mat4,
 }
 sa::assert_impl_all!(World: Send, Sync);
@@ -34,6 +35,7 @@ impl Default for World {
 
             clear_color: Vec4::new(0., 0., 0., 1.),
             camera_transform: Mat4::IDENTITY,
+            camera_clip_transform: Mat4::IDENTITY,
             camera_projection: Mat4::IDENTITY,
         }
     }

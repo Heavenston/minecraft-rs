@@ -31,6 +31,7 @@ mod data_extractor;
 struct App {
     vsync: bool,
     enable_wireframe: bool,
+    pause_clipping: bool,
 
     mc_data: Arc<MinecraftData>,
     start: Instant,
@@ -84,6 +85,9 @@ impl engine::App for App {
         let height = 25.;
         ctx.world.camera_transform = glam::camera::rh::view::look_at_mat4(Vec3::new((time / 2.).cos() * distance, height, (time / 2.).sin() * distance), Vec3::ZERO, Vec3::Y).inverse_or_zero();
         ctx.world.camera_projection = glam::camera::rh::proj::directx::perspective(50f32.to_radians(), aspect_ratio, 0.01, 1_000.);
+        if !self.pause_clipping {
+            ctx.world.camera_clip_transform = ctx.world.camera_transform;
+        }
 
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyV) {
             self.set_enable_vsync(ctx.renderer.render_graph(), !self.vsync);
@@ -96,6 +100,9 @@ impl engine::App for App {
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyG) {
             ctx.renderer.render_graph().clear_cache();
             tracing::info!("Cleared render graph cache");
+        }
+        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyC) {
+            self.pause_clipping = !self.pause_clipping;
         }
 
         Ok(())
@@ -110,6 +117,7 @@ async fn main() -> Result<()> {
     engine::start(App {
         vsync: true,
         enable_wireframe: false,
+        pause_clipping: false,
 
         mc_data,
         start: Instant::now(),
