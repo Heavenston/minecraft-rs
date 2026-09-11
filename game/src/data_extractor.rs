@@ -1,5 +1,6 @@
 use std::{io::BufReader, path::Path};
-use anyhow::{Context as _, Result};
+use anyhow::Result;
+use image::{Pixel as _, RgbaImage};
 use itertools::Itertools as _;
 
 use crate::resource_location::{ResourceLocation, ResourceLocationMap};
@@ -9,10 +10,12 @@ pub mod model;
 
 const ASSETS_BASE_PATH: &str = "./minecraft_resources/assets";
 
-fn read_folder<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>, namespace: &str) -> Result<ResourceLocationMap<T>> {
+fn read_folder<T, F>(path: impl AsRef<Path>, namespace: &str, extension: &str, mut parser: F) -> Result<ResourceLocationMap<T>>
+    where F: FnMut(BufReader<std::fs::File>) -> Result<T>,
+{
     let path = path.as_ref();
     let entries = dirwalk::WalkBuilder::new(path)
-        .extensions(["json"])
+        .extensions([extension])
         .iter()?;
 
     let mut result = ResourceLocationMap::default();
@@ -22,9 +25,9 @@ fn read_folder<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>, namespace
         let file_path = path.join(&entry.relative_path);
 
         let file = BufReader::new(std::fs::File::open(&file_path)?);
-        match serde_json::from_reader::<_, T>(file) {
+        match parser(file) {
             Ok(value) => {
-                let filename = entry.relative_path.trim_end_matches(".json").to_string();
+                let filename = entry.relative_path.trim_end_matches(&format!(".{extension}")).to_string();
                 let Some(resource_location) = ResourceLocation::new(&format!("{namespace}:{filename}"))
                 else {
                     tracing::warn!(?file_path, filename, "Invalid resource location name");
@@ -38,9 +41,39 @@ fn read_folder<T: serde::de::DeserializeOwned>(path: impl AsRef<Path>, namespace
     Ok(result)
 }
 
+pub struct TextureInfo {
+    pub image: RgbaImage,
+    /// Wether the image contains any completely transparent pixels.
+    pub has_transparent: bool,
+    /// Wether the image contains any partially transparent pixels.
+    pub has_translucent: bool,
+}
+
+impl TextureInfo {
+    fn from_file(file: BufReader<std::fs::File>) -> Result<Self> {
+        let mut image = image::load(file, image::ImageFormat::Png)?;
+        image.apply_color_space(image::metadata::Cicp::SRGB, image::ConvertColorOptions::default())?;
+        let image = image.to_rgba8();
+
+        let has_transparent = image.pixels().any(|p| p.alpha() == 0);
+        let has_translucent = image.pixels().any(|p| (1..u8::MAX).contains(&p.alpha()));
+        
+        Ok(Self {
+            image,
+            has_transparent,
+            has_translucent,
+        })
+    }
+
+    pub fn is_opaque(&self) -> bool {
+        !self.has_transparent && !self.has_translucent
+    }
+}
+
 pub struct MinecraftData {
     blockstates: ResourceLocationMap<blockstate::BlockState>,
     models: ResourceLocationMap<model::Model>,
+    textures: ResourceLocationMap<TextureInfo>,
 }
 static_assertions::assert_impl_all!(MinecraftData: Send, Sync);
 
@@ -49,6 +82,7 @@ impl MinecraftData {
     pub fn read() -> Result<Self> {
         let mut blockstates = ResourceLocationMap::<blockstate::BlockState>::default();
         let mut models = ResourceLocationMap::<model::Model>::default();
+        let mut textures = ResourceLocationMap::<TextureInfo>::default();
         for subfolder in std::fs::read_dir(ASSETS_BASE_PATH)? {
             let subfolder = subfolder?;
             if !subfolder.file_type()?.is_dir() { continue }
@@ -60,13 +94,20 @@ impl MinecraftData {
                     tracing::warn!(namespace = s, "Folder in assets is not a valid namespace");
                 },
                 Ok(namespace) => {
-                    blockstates.extend(read_folder(subfolder.path().join("blockstates"), &namespace)?);
-                    models.extend(read_folder(subfolder.path().join("models"), &namespace)?);
+                    blockstates.extend(read_folder(subfolder.path().join("blockstates"), &namespace, "json", |p| Ok(serde_json::from_reader::<_,blockstate::BlockState>(p)?))?);
+                    models.extend(read_folder(subfolder.path().join("models"), &namespace, "json", |p| Ok(serde_json::from_reader::<_,model::Model>(p)?))?);
+                    textures.extend(read_folder(subfolder.path().join("textures"), &namespace, "png", TextureInfo::from_file)?);
                 },
             }
         }
-        tracing::info!(blockstate_count = blockstates.len(), model_count = models.len(), namespaces = ?blockstates.keys().chain(models.keys()).copied().map(ResourceLocation::namespace).unique().collect_vec(), "Exaction finished");
-        Ok(Self { blockstates, models })
+        tracing::info!(
+            blockstate_count = blockstates.len(),
+            model_count = models.len(),
+            texture_count = textures.len(),
+            namespaces = ?blockstates.keys().chain(models.keys()).chain(textures.keys()).copied().map(ResourceLocation::namespace).unique().collect_vec(),
+            "Exaction finished",
+        );
+        Ok(Self { blockstates, models, textures })
     }
 
     pub fn blockstate(&self, location: ResourceLocation) -> &blockstate::BlockState {
@@ -77,9 +118,7 @@ impl MinecraftData {
         self.models.get(&location).unwrap_or_else(|| panic!("Could not find block model {location}"))
     }
 
-    pub fn read_texture(location: ResourceLocation) -> Result<image::DynamicImage> {
-        let file_path = Path::new(ASSETS_BASE_PATH).join(location.namespace()).join("textures").join(location.path()).with_extension("png");
-        let file = BufReader::new(std::fs::File::open(&file_path).with_context(|| format!("reading file at {}", file_path.display()))?);
-        Ok(image::load(file, image::ImageFormat::Png)?)
+    pub fn texture(&self, location: ResourceLocation) -> &TextureInfo {
+        self.textures.get(&location).unwrap_or_else(|| panic!("Could not find texture {location}"))
     }
 }

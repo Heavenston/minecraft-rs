@@ -11,7 +11,7 @@ use ordermap::OrderMap;
 use parking_lot::RwLock;
 use render_graph::RenderGraph;
 
-use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData, ChunkTransparencyMode}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
+use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::ChunkMesher, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData, ChunkTransparencyMode}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ChunkMaterialKey {
@@ -28,6 +28,7 @@ struct TextureData {
 struct MeshingState {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    mesher: ChunkMesher,
     mcdata: Arc<MinecraftData>,
     materials: Arc<RwLock<engine::MaterialStore>>,
     textures: ResourceLocationMap<TextureData>,
@@ -36,17 +37,13 @@ struct MeshingState {
 }
 
 impl MeshingState {
-    fn get_texture(&mut self, location: ResourceLocation) -> Result<TextureData> {
+    fn get_texture(&mut self, location: ResourceLocation) -> TextureData {
         if let Some(texture) = self.textures.get(&location).cloned() {
-            return Ok(texture);
+            return texture;
         }
 
-        let mut image = MinecraftData::read_texture(location).with_context(|| format!("reading mc texture {location}"))?;
-        image.apply_color_space(image::metadata::Cicp::SRGB, image::ConvertColorOptions::default())?;
-        let image = image.to_rgba8();
-
-        let has_transparent = image.pixels().any(|p| p.alpha() == 0);
-        let has_translucent = image.pixels().any(|p| (1..u8::MAX).contains(&p.alpha()));
+        let texture_data = self.mcdata.texture(location);
+        let image = &texture_data.image;
 
         let texture = self.device.create_texture_with_data(&self.queue, &wgpu::wgt::TextureDescriptor {
             label: Some(location.as_str()),
@@ -61,9 +58,9 @@ impl MeshingState {
 
         let data = TextureData {
             texture,
-            present_transparency: if has_translucent {
+            present_transparency: if texture_data.has_translucent {
                 ChunkTransparencyMode::Translucent
-            } else if has_transparent {
+            } else if texture_data.has_transparent {
                 ChunkTransparencyMode::Cutout
             } else {
                 ChunkTransparencyMode::Opaque
@@ -71,11 +68,11 @@ impl MeshingState {
         };
         self.textures.insert(location, data.clone());
 
-        Ok(data)
+        data
     }
 
-    fn get_chunk_material(&mut self, texture_location: ResourceLocation, force_translucent: bool) -> Result<MaterialHandle<ChunkMaterial>> {
-        let TextureData { texture, present_transparency } = self.get_texture(texture_location)?;
+    fn get_chunk_material(&mut self, texture_location: ResourceLocation, force_translucent: bool) -> MaterialHandle<ChunkMaterial> {
+        let TextureData { texture, present_transparency } = self.get_texture(texture_location);
         let transparency = if force_translucent {
             ChunkTransparencyMode::Translucent
         } else {
@@ -83,7 +80,7 @@ impl MeshingState {
         };
         let key = ChunkMaterialKey { texture_location, transparency };
         if let Some(&material) = self.chunk_materials.get(&key) {
-            return Ok(material);
+            return material;
         }
 
         let material = self.materials.write().add_material(ChunkMaterial::new(crate::materials::ChunkRenderConfig {
@@ -92,17 +89,17 @@ impl MeshingState {
         }));
         self.chunk_materials.insert(key, material);
 
-        Ok(material)
+        material
     }
 
-    fn mesh_chunk(&mut self, chunk_pos: ISizeVec3) -> Result<bool> {
+    fn mesh_chunk(&mut self, chunk_pos: ISizeVec3) -> bool {
         let chunk = &self.chunks[&chunk_pos];
         let Ok(neighbors) = EnumMap::<CardinalDirection, _>::try_from_fn(|direction| {
             let new_pos = chunk_pos + direction;
             self.chunks.get(&new_pos).ok_or(())
-        }) else { return Ok(false) };
+        }) else { return false };
 
-        let mesh = crate::chunk_mesher::mesh_chunk(&self.mcdata, chunk, neighbors);
+        let mesh = self.mesher.mesh_chunk(chunk, neighbors);
         for submesh in mesh.quad_submeshes {
             let buffer = self.device.create_buffer(&wgpu::wgt::BufferDescriptor {
                 label: Some(&format!("chunk,{chunk_pos},{:?},{}", submesh.direction, submesh.texture)),
@@ -112,7 +109,7 @@ impl MeshingState {
             });
             buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(bytemuck::cast_slice::<_, u8>(&submesh.instances));
             buffer.unmap();
-            let material = self.get_chunk_material(submesh.texture, submesh.force_translucent)?;
+            let material = self.get_chunk_material(submesh.texture, submesh.force_translucent);
 
             let mut materials = self.materials.write();
             let material = materials.get_material_mut(material).unwrap();
@@ -123,7 +120,7 @@ impl MeshingState {
             }]).collect();
         }
 
-        Ok(true)
+        true
     }
 }
 
@@ -139,7 +136,7 @@ impl State {
         if self.store.chunks.contains_key(&chunk_pos) { return }
         self.store.chunks.insert(chunk_pos, self.generator.generate_chunk(chunk_pos));
         self.mesh_queue.push(chunk_pos);
-        self.mesh_queue.retain(|&pos| !self.store.mesh_chunk(pos).unwrap());
+        self.mesh_queue.retain(|&pos| !self.store.mesh_chunk(pos));
     }
 }
 
@@ -149,6 +146,7 @@ pub fn chunk_thread(seed: u64, mcdata: Arc<MinecraftData>, device: wgpu::Device,
         store: MeshingState {
             device,
             queue,
+            mesher: ChunkMesher::new(Arc::clone(&mcdata)),
             mcdata,
             textures: Default::default(),
             chunk_materials: Default::default(),

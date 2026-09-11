@@ -1,12 +1,12 @@
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use enum_map::EnumMap;
 use enumflags2::BitFlags;
 use glam::{USizeVec3, Vec2, Vec3};
 use static_assertions as ca;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftData, blockstate::{BlockState, ModelChoice}, model::{self, Texture}}, resource_location::{ResourceLocation, location}, utils::{CardinalDirection, Vec3Range}};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftData, blockstate::{BlockState, ModelChoice}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, Vec3Range}};
 
 ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
@@ -110,26 +110,26 @@ struct ResolvedElements<'a> {
     textures: HashMap<String, ResolvedTexture>,
 }
 
+#[derive(Debug, Clone)]
 struct FullBlockFace {
     texture: ResourceLocation,
     force_translucent: bool,
     tint_index: u8,
 }
 
+#[derive(Debug, Clone)]
 struct BlockModel {
     culling_directions: BitFlags<CardinalDirection>,
     full_block_faces: EnumMap<CardinalDirection, Box<[FullBlockFace]>>,
 }
 
-struct ChunkMesherCtx<'mc, 'chunk, 'neighbor> {
-    mcdata: &'mc MinecraftData,
-    chunk: &'chunk Chunk,
-    neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
-    block_models: Vec<BlockModel>,
+struct BlockModelResolver {
+    mcdata: Arc<MinecraftData>,
+    cache: HashMap<BlockData, BlockModel>,
 }
 
-impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
-    fn resolve_model_elements(&mut self, mut textures: HashMap<String, ResolvedTexture>, model_location: ResourceLocation) -> ResolvedElements<'mc> {
+impl BlockModelResolver {
+    fn resolve_model_elements(&self, mut textures: HashMap<String, ResolvedTexture>, model_location: ResourceLocation) -> ResolvedElements<'_> {
         let model = self.mcdata.model(model_location);
 
         #[expect(clippy::iter_over_hash_type, reason = "ordering should not matter -> not 'self' references")]
@@ -180,7 +180,7 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
         }
     }
 
-    fn resolve_block_elements(&mut self, block_data: &BlockData) -> ResolvedElements<'mc> {
+    fn resolve_block_elements(&self, block_data: &BlockData) -> ResolvedElements<'_> {
         let blockstate = self.mcdata.blockstate(block_data.id);
 
         let model_choice = match blockstate {
@@ -197,51 +197,50 @@ impl<'mc> ChunkMesherCtx<'mc, '_, '_> {
         self.resolve_model_elements(HashMap::new(), blockstate_model.location)
     }
 
-    fn resolve_blocks_models(&mut self) {
-        for block_data in self.chunk.palette() {
-            let ResolvedElements { model, elements, textures } = self.resolve_block_elements(block_data);
-            let mut full_block_faces = EnumMap::<CardinalDirection, Vec<FullBlockFace>>::default();
-            for element in elements {
-                if element.rotation.is_some() {
-                    tracing::warn!(?model, "Unsuported block model element rotation");
-                }
-                let from = Vec3::from_array(element.from);
-                let to = Vec3::from_array(element.to);
+    fn resolve_block_model(&mut self, block_data: &BlockData) -> &BlockModel {
+        if let Some(model) = self.cache.get(block_data) {
+            return model;
+        }
 
-                #[expect(clippy::iter_over_hash_type, reason = "iteration order does not matter")]
-                for (&direction, face) in &element.faces {
-                    let Some(&texture) = textures.get(face.texture.trim_start_matches('#'))
-                    else { tracing::warn!(?model, texture = face.texture, ?textures, "Could not get face texture ref"); continue };
-                    let axis = direction.axis();
-                    if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
-                        full_block_faces[direction].push(FullBlockFace {
-                            texture: texture.location,
-                            force_translucent: texture.force_translucent,
-                            tint_index: (face.tintindex + 1i32).try_into().unwrap(),
-                        });
-                    }
+        let ResolvedElements { model, elements, textures } = self.resolve_block_elements(block_data);
+        let mut full_block_faces = EnumMap::<CardinalDirection, Vec<FullBlockFace>>::default();
+        for element in elements {
+            if element.rotation.is_some() {
+                tracing::warn!(?model, "Unsuported block model element rotation");
+            }
+            let from = Vec3::from_array(element.from);
+            let to = Vec3::from_array(element.to);
+
+            #[expect(clippy::iter_over_hash_type, reason = "iteration order does not matter")]
+            for (&direction, face) in &element.faces {
+                let Some(&texture) = textures.get(face.texture.trim_start_matches('#'))
+                else { tracing::warn!(?model, texture = face.texture, ?textures, "Could not get face texture ref"); continue };
+                let axis = direction.axis();
+                if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
+                    full_block_faces[direction].push(FullBlockFace {
+                        texture: texture.location,
+                        force_translucent: texture.force_translucent,
+                        tint_index: (face.tintindex + 1i32).try_into().unwrap(),
+                    });
                 }
             }
-            let culling_directions = full_block_faces.iter()
-                .filter(|(_, faces)| faces.iter().any(|face| !face.force_translucent))
-                .map(|(dir,_)| dir)
-                .fold(BitFlags::empty(), std::ops::BitOr::bitor);
-            self.block_models.push(BlockModel {
-                culling_directions,
-                full_block_faces: full_block_faces.map(|_, vec| vec.into_boxed_slice()),
-            });
         }
+        let culling_directions = full_block_faces.iter()
+            .filter(|(_, faces)| faces.iter().any(|face| !face.force_translucent && self.mcdata.texture(face.texture).is_opaque()))
+            .map(|(dir,_)| dir)
+            .fold(BitFlags::empty(), std::ops::BitOr::bitor);
+        self.cache.entry(block_data.clone()).insert_entry(BlockModel {
+            culling_directions,
+            full_block_faces: full_block_faces.map(|_, vec| vec.into_boxed_slice()),
+        }).into_mut()
     }
+}
 
-    fn is_face_opaque(&self, dir: CardinalDirection, pos: USizeVec3) -> bool {
-        self.block_models[self.chunk.get(pos)].culling_directions.contains(dir)
-    }
-
-    fn is_neighbor_chunk_face_opaque(&self, neighbor_chunk: CardinalDirection, face: CardinalDirection, pos: USizeVec3) -> bool {
-        // TODO
-        let _ = face;
-        self.neighbors[neighbor_chunk].get_data(pos).id != location!("minecraft:air")
-    }
+struct ChunkMeshingCtx<'mc, 'chunk, 'neighbor, 'resolver> {
+    mcdata: &'mc MinecraftData,
+    chunk: &'chunk Chunk,
+    neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
+    model_resolver: &'resolver mut BlockModelResolver,
 }
 
 #[derive(Default)]
@@ -284,51 +283,74 @@ impl ChunkMeshBuilder {
     }
 }
 
-fn mesh_for_direction(ctx: &ChunkMesherCtx<'_,'_,'_>, builder: &mut ChunkMeshBuilder, direction: CardinalDirection) {
-    for pos in INTERIOR_RANGES[direction] {
-        let palette_idx = ctx.chunk.get(pos);
-        let faces = &ctx.block_models[palette_idx].full_block_faces[direction];
-        if faces.is_empty() { continue; }
-        if ctx.is_face_opaque(direction.opposit(), pos + direction) { continue }
-        for face in faces {
-            builder.push_face(direction, pos, face);
+fn exterior_neighbor(pos: USizeVec3, direction: CardinalDirection) -> USizeVec3 {
+    let mut neighbor = pos;
+    if direction.is_positive() {
+        neighbor[direction.axis()] = 0;
+    }
+    else {
+        neighbor[direction.axis()] = CHUNK_SIZE[direction.axis()]-1;
+    }
+    neighbor
+}
+
+fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
+    let block_models: Box<[BlockModel]> = ctx.chunk.palette().iter()
+        .map(|block_data| ctx.model_resolver.resolve_block_model(block_data).clone())
+        .collect();
+
+    for direction in CardinalDirection::VALUES {
+        for pos in INTERIOR_RANGES[direction] {
+            let palette_idx = ctx.chunk.get(pos);
+            let faces = &block_models[palette_idx].full_block_faces[direction];
+            if faces.is_empty() { continue; }
+            if block_models[ctx.chunk.get(pos + direction)].culling_directions.contains(direction.opposit()) { continue }
+            for face in faces {
+                builder.push_face(direction, pos, face);
+            }
         }
     }
 
-    for pos in EXTERIOR_RANGES[direction] {
-        let palette_idx = ctx.chunk.get(pos);
-        let faces = &ctx.block_models[palette_idx].full_block_faces[direction];
-        if faces.is_empty() { continue; }
-
-        let neighbor_block_idx = {
-            let mut neighbor = pos;
-            if direction.is_positive() {
-                neighbor[direction.axis()] = 0;
+    for direction in CardinalDirection::VALUES {
+        for pos in EXTERIOR_RANGES[direction] {
+            let palette_idx = ctx.chunk.get(pos);
+            let faces = &block_models[palette_idx].full_block_faces[direction];
+            if faces.is_empty() { continue; }
+            let neighbor_block_idx = exterior_neighbor(pos, direction);
+            let neighbor_model = ctx.model_resolver.resolve_block_model(ctx.neighbors[direction].get_data(neighbor_block_idx));
+            if neighbor_model.culling_directions.contains(direction.opposit()) { continue }
+            for face in faces {
+                builder.push_face(direction, pos, face);
             }
-            else {
-                neighbor[direction.axis()] = CHUNK_SIZE[direction.axis()]-1;
-            }
-            neighbor
-        };
-
-        if ctx.is_neighbor_chunk_face_opaque(direction, direction.opposit(), neighbor_block_idx) { continue }
-        for face in faces {
-            builder.push_face(direction, pos, face);
         }
     }
 }
 
-pub fn mesh_chunk(mcdata: &MinecraftData, chunk: &Chunk, neighbors: EnumMap<CardinalDirection, &Chunk>) -> ChunkMesh {
-    let mut ctx = ChunkMesherCtx {
-        mcdata,
-        chunk,
-        neighbors,
-        block_models: vec![],
-    };
-    ctx.resolve_blocks_models();
-    let mut builder = ChunkMeshBuilder::default();
-    for dir in CardinalDirection::VALUES {
-        mesh_for_direction(&ctx, &mut builder, dir);
+pub struct ChunkMesher {
+    mcdata: Arc<MinecraftData>,
+    resolver: BlockModelResolver,
+}
+
+impl ChunkMesher {
+    pub fn new(mcdata: Arc<MinecraftData>) -> Self {
+        Self {
+            mcdata: Arc::clone(&mcdata),
+            resolver: BlockModelResolver {
+                mcdata,
+                cache: HashMap::default(),
+            },
+        }
     }
-    builder.finish()
+
+    pub fn mesh_chunk(&mut self, chunk: &Chunk, neighbors: EnumMap<CardinalDirection, &Chunk>) -> ChunkMesh {
+        let mut ctx = ChunkMeshingCtx {
+            mcdata: &self.mcdata,
+            chunk,
+            neighbors,
+            model_resolver: &mut self.resolver,
+        };
+        let mut builder = ChunkMeshBuilder::default();
+        mesh_chunk(&mut ctx, &mut builder);
+        builder.finish()
+    }
 }
