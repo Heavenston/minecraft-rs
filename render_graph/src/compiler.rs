@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::{HashMap, HashSet}, convert::identity, hash::Hash, ops::ControlFlow, rc::Rc, sync::Arc};
+use std::{collections::{HashMap, HashSet}, convert::identity, hash::Hash, sync::Arc, time::Instant};
 
 use genmap::{AssumeAlive, DenseIdx};
 use indexmap::{IndexMap, IndexSlice, MapIndex as _};
@@ -178,30 +178,6 @@ struct ResolvedResources {
 }
 
 impl ResolvedResources {
-    fn find_loop_rec(&self, current: NodeRef, mut previous: Vec<InputOrNode>) -> ControlFlow<Vec<InputOrNode>> {
-        previous.push(InputOrNode::Node(current));
-        for i in self.combined_inputs(current) {
-            if previous.contains(&i.producer) {
-                previous.push(i.producer);
-                return ControlFlow::Break(previous);
-            }
-            if let InputOrNode::Node(n) = i.producer {
-                self.find_loop_rec(n, previous.clone())?;
-            }
-        }
-
-        ControlFlow::Continue(())
-    }
-
-    fn find_loop(&self) -> Option<Vec<InputOrNode>> {
-        for nr in self.node_refs() {
-            if let Ok(found) = self.find_loop_rec(nr, vec![]).break_ok() {
-                return Some(found);
-            }
-        }
-        None
-    }
-
     fn users(&self, res: ResolvedInput) -> impl Iterator<Item = NodeRef> {
         chain!(
             self.consumers.get(&res),
@@ -375,19 +351,24 @@ impl ResolvedResourcesContainer for GraphResourceResolver {
 #[tracing::instrument(level = "trace", skip_all)]
 #[expect(clippy::single_call_fn, reason = "CompiledGraph construction algorithm")]
 fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
+    #[cfg(debug_assertions)]
     let node_labels = graph.get_simplified_node_labels();
+    #[cfg(debug_assertions)]
     let resource_labels = graph.get_simplified_resource_labels();
+    #[cfg(debug_assertions)]
     macro_rules! rn {
         ($t:expr) => {{
             // &graph.resources.with($t.0).unwrap().get().label
             resource_labels[&graph.resource_handle($t)].clone()
         }};
     }
+    #[cfg(debug_assertions)]
     macro_rules! nn {
         ($n:expr) => {
             node_labels.get(&graph.node_handle($n)).cloned().unwrap_or_default()
         };
     }
+    #[cfg(debug_assertions)]
     macro_rules! ton {
         ($n:expr) => {
             match $n {
@@ -399,6 +380,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
 
     macro_rules! rr_println {
         ($($t:tt)*) => {
+            #[cfg(debug_assertions)]
             if let Some(_) = option_env!("ENABLE_GRAPH_COMPILER_DEBUG") {
                 println!($($t)*);
             }
@@ -406,11 +388,14 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
     }
     macro_rules! rr_print {
         ($($t:tt)*) => {
+            #[cfg(debug_assertions)]
             if let Some(_) = option_env!("ENABLE_GRAPH_COMPILER_DEBUG") {
                 print!($($t)*);
             }
         };
     }
+
+    let started_at = Instant::now();
 
     let mut producers = compute_producers(graph);
     let producers_for_borrows = producers.clone();
@@ -429,7 +414,6 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
     #[cfg(debug_assertions)]
     let mut rng = {
         let seed = rand::random();
-        // let seed = 6_449_357_397_300_112_446_u64;
         tracing::trace!(seed);
         rand::rngs::Xoshiro256PlusPlus::seed_from_u64(seed)
     };
@@ -460,7 +444,10 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
             for (input_idx, resource) in node_data.consumes().enumerate() {
                 if this.resolved_inputs[&node][input_idx].is_some() { continue; }
                 let Some(potential_producers) = producers.get(&resource)
-                else { panic!("Missing producers for {}", rn!(resource)) };
+                else {
+                    #[cfg(debug_assertions)] { panic!("Missing producers for {}", rn!(resource)); }
+                    #[cfg(not(debug_assertions))] { panic!("Missing some producers"); }
+                };
 
                 rr_print!("\tconsumes({}): ", rn!(resource));
 
@@ -485,6 +472,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
                         rr_println!("{}{}", ton!(p), if is_unordered { " (using unordered)" } else { "" });
                         claims.entry((resource, p)).or_default().consumes.push(ConsumeClaim { node, input_idx, is_from_unordered });
                     },
+                    #[cfg_attr(not(debug_assertions), expect(unused_variables))]
                     Err(Either::Left(options)) => {
                         rr_println!("{}", options.map(|&n| ton!(n)).join(", "));
                     },
@@ -496,7 +484,12 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
             for (borrow_idx, resource) in node_data.borrows().enumerate() {
                 if this.resolved_borrows[&node][borrow_idx].is_some() { continue }
                 let Some(potential_producers) = producers_for_borrows.get(&resource)
-                else { panic!("Missing producers for {}", rn!(resource)) };
+                else {
+                    #[cfg(debug_assertions)]
+                    { panic!("Missing producers for {}", rn!(resource)) }
+                    #[cfg(not(debug_assertions))]
+                    { panic!("Missing some producers") }
+                };
 
                 rr_print!("\tborrows({}): ", rn!(resource));
 
@@ -512,6 +505,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
                         rr_println!("{}", ton!(p));
                         claims.entry((resource, p)).or_default().borrows.push((node, borrow_idx));
                     },
+                    #[cfg_attr(not(debug_assertions), expect(unused_variables))]
                     Err(options) => {
                         rr_println!("{}", options.map(|&n| ton!(n)).join(", "));
                     },
@@ -584,7 +578,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
         iterations += 1;
     }
 
-    tracing::trace!(iterations, "Resolved render graph resources");
+    tracing::debug!(iterations, took = ?started_at.elapsed(), "Resolved render graph resources");
 
     Some(ResolvedResources {
         node_count: graph.nodes.len(),
@@ -654,28 +648,6 @@ impl CompiledGraph {
             "Permanent resources must have exactly one producer"
         );
         let resolved = resolve_resources(graph).expect("Could not resolve render graph resources");
-        if let Some(found) = resolved.find_loop() {
-            tracing::warn!("FOUND A LOOP");
-            let node_labels = graph.get_simplified_node_labels();
-            macro_rules! nn {
-                ($n:expr) => {
-                    node_labels.get(&graph.node_handle($n)).cloned().unwrap_or_default()
-                };
-            }
-            macro_rules! ton {
-                ($n:expr) => {
-                    match $n {
-                        InputOrNode::Input => "<input>".to_string(),
-                        InputOrNode::Node(n) => nn!(n),
-                    }
-                };
-            }
-            for f in found {
-                print!("-> {}", ton!(f));
-            }
-            println!();
-            panic!();
-        }
         if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
             let mut str = String::new();
             resolved.write_to_dot(graph, &mut str).unwrap();
