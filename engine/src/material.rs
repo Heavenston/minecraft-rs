@@ -22,6 +22,10 @@ impl<'a> RenderGraphWrapper<'a> {
         self.added_nodes
     }
 
+    pub fn resource_from_type<R: render_graph::GraphResourceId>(&mut self) -> render_graph::ResourceHandle<R::Resource> {
+        self.render_graph.resource_from_type::<R>()
+    }
+
     pub fn create_resource<S: std::any::Any>(&mut self, label: impl Into<Cow<'static, str>>, config: render_graph::ResourceConfig) -> render_graph::ResourceHandle<S> {
         self.render_graph.create_resource::<S>(label.into(), config)
     }

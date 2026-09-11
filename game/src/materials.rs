@@ -14,6 +14,10 @@ render_graph::graph_resource!(pub struct ShaderModule(pub wgpu::ShaderModule); p
 render_graph::graph_resource!(pub struct BindGroupLayout(pub wgpu::BindGroupLayout); permanent);
 render_graph::graph_resource!(pub struct RenderPipelineLayout(pub wgpu::PipelineLayout); permanent);
 
+render_graph::graph_resource!(pub struct OpaqueRenderStep(pub ()));
+render_graph::graph_resource!(pub struct CutoutRenderStep(pub ()));
+render_graph::graph_resource!(pub struct TranslucentRenderStep(pub ()));
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChunkTransparencyMode {
     Opaque,
@@ -89,6 +93,10 @@ fn register_global(render_graph: &mut engine::material::RenderGraphWrapper<'_>) 
                 immediate_size: Immediates::std140_size_static().try_into().unwrap(),
             }))
         };
+
+        BeginOpaqueStep() -> (default OpaqueRenderStep);
+        BeginCutoutStep(_: OpaqueRenderStep) -> (default CutoutRenderStep);
+        BeginTranslucentStep(_: CutoutRenderStep) -> (default TranslucentRenderStep);
     );
 }
 
@@ -102,6 +110,12 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
 
         using @bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_material::bind_group", Cfg::permanent());
         using @render_pipeline: wgpu::RenderPipeline = render_graph.create_resource("chunk_material::render_pipeline", Cfg::permanent());
+
+        using @draw_step: () = match cfg.transparency {
+            ChunkTransparencyMode::Opaque => render_graph.resource_from_type::<OpaqueRenderStep>(),
+            ChunkTransparencyMode::Cutout => render_graph.resource_from_type::<CutoutRenderStep>(),
+            ChunkTransparencyMode::Translucent => render_graph.resource_from_type::<TranslucentRenderStep>(),
+        };
 
         CreateBindGroup (
             device: ref render_res::Device,
@@ -214,6 +228,7 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
             chunk_list: @chunk_list,
 
             &transparency: ref @transparency,
+            _: ref @draw_step,
         ) -> (engine_graph::RenderPass) {
             render_pass.push_debug_group(&format!("{transparency:?} Chunk renderer"));
             render_pass.set_pipeline(render_pipeline);
