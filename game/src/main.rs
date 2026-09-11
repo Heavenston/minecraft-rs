@@ -15,6 +15,7 @@ use engine::{wgpu::{self, util::DeviceExt as _}, world::MaterialHandle};
 use enum_map::EnumMap;
 use glam::{ISizeVec3, Vec3, Vec4};
 use image::{EncodableLayout as _, Pixel as _};
+use ordermap::OrderMap;
 use render_graph::RenderGraph;
 
 use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::mesh_chunk, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData, ChunkTransparencyMode}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, ISizeVec3Range}};
@@ -45,7 +46,7 @@ struct App {
     enable_wireframe: bool,
 
     mc_data: MinecraftData,
-    chunks: HashMap<ISizeVec3, Chunk>,
+    chunks: OrderMap<ISizeVec3, Chunk>,
     #[expect(dead_code, reason = "not yet used")]
     generator: proc_gen::Generator,
 
@@ -137,7 +138,6 @@ impl engine::App for App {
 
         let mut face_count: usize = 0;
 
-        #[expect(clippy::iter_over_hash_type, reason = "order does not matter")]
         for (&chunk_position, chunk) in &self.chunks {
             let Some(neighbors) = CardinalDirection::VALUES.try_map(|direction| {
                 let new_pos = chunk_position + direction;
@@ -210,7 +210,7 @@ async fn main() -> Result<()> {
     tracing::info!("Extracting minecraft data");
     let mc_data = data_extractor::MinecraftData::read()?;
 
-    let mut chunks = HashMap::<ISizeVec3, Chunk>::new();
+    let mut chunks = OrderMap::<ISizeVec3, Chunk>::new();
     let generator = proc_gen::Generator::new(0);
 
     tracing::info!("Generating start chunks");
