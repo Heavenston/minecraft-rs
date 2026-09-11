@@ -5,6 +5,7 @@ use glam::{DVec2, DVec3, ISizeVec3, USizeVec2, USizeVec3, Vec3Swizzles as _};
 
 use noise::{HybridMulti, NoiseFn as _, Simplex};
 use rand::{Rng as _, RngExt as _, SeedableRng as _, rngs::SmallRng};
+use xxhash_rust::xxh3::{Xxh3, Xxh3Builder};
 use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, resource_location::location};
 
 const MAX_HEIGHT: f64 = 16.;
@@ -17,6 +18,7 @@ pub struct Generator {
     backbone_noise: HybridMulti<Simplex>,
     heightmap_offset: DVec2,
     heightmap_noise: HybridMulti<Simplex>,
+    xxh3: Box<Xxh3>,
 }
 
 impl Generator {
@@ -29,6 +31,10 @@ impl Generator {
             heightmap_offset: rng.random(),
             heightmap_noise: HybridMulti::new(rng.next_u32())
                 .set_sources(std::iter::repeat_with(|| Simplex::new(rng.next_u32())).take(32).collect()),
+            xxh3: Xxh3Builder::new()
+                .with_seed(rng.random())
+                .build()
+                .into(),
             rng,
         }
     }
@@ -55,6 +61,9 @@ impl Generator {
         let mut chunk = Chunk::new();
         let top_block = BlockData { id: location!("minecraft:grass_block"), state: "snowy=false".to_string(), };
         let bottom_block = BlockData { id: location!("minecraft:dirt"), state: String::new(), };
+        let glass_block = BlockData { id: location!("minecraft:glass"), state: String::new(), };
+
+        let mut xxh3 = self.xxh3.clone();
 
         let chunk_offset = chunk_pos * CHUNK_SIZE.as_isizevec3();
         for dx in 0..CHUNK_SIZE.x {
@@ -74,7 +83,15 @@ impl Generator {
                             chunk.set(delta_pos, &bottom_block);
                         }
                         else {
-                            chunk.set(delta_pos, &top_block);
+                            xxh3.reset();
+                            xxh3.update(bytemuck::bytes_of(&global_pos));
+                            let t = xxh3.digest();
+                            if t.is_multiple_of(10) {
+                                chunk.set(delta_pos, &glass_block);
+                            }
+                            else {
+                                chunk.set(delta_pos, &top_block);
+                            }
                         }
                         prev = true;
                     }
