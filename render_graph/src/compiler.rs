@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, convert::identity, hash::Hash, rc::Rc, sync::Arc};
+use std::{collections::{HashMap, HashSet}, convert::identity, hash::Hash, ops::ControlFlow, rc::Rc, sync::Arc};
 
 use genmap::{AssumeAlive, DenseIdx};
 use indexmap::{IndexMap, IndexSlice, MapIndex as _};
@@ -204,7 +204,7 @@ trait ResolvedResourcesContainer {
     #[tracing::instrument(skip(self, recursive))]
     fn is_after_or_equal(&self, recursive: ListLink, after: InputOrNode, before: NodeRef) -> bool {
         if recursive.iter().any(|&o| o == after) {
-            tracing::warn!("recursive");
+            // tracing::warn!("recursive");
             return false;
         }
         let recursive = recursive.cons(after);
@@ -214,20 +214,23 @@ trait ResolvedResourcesContainer {
         after == before ||
         self.explicit_orderings().contains(&(before, after)) ||
         self.combined_inputs(after).any(|input| input.producer == before) ||
-        self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2)) ||
-        self.combined_inputs(after)
-            .any(|input| {
-                tracing::debug_span!("input", ?input.resource).in_scope(|| {
-                    self.is_after_or_equal(recursive.clone(), input.producer, before)
-                })
-            }) ||
-        self.resolved_inputs(after)
-            .flat_map(|i| self.borrowers_of(i))
-            .any(|o| {
-                tracing::debug_span!("cross-borrow").in_scope(|| {
-                    self.is_after_or_equal(recursive.clone(), InputOrNode::Node(o), before)
-                })
-            })
+        self.node_refs()
+            .filter(|&third| third != after && third != before)
+            .any(|third| self.is_after_or_equal(recursive.clone(), InputOrNode::Node(after), third) && self.is_after_or_equal(recursive.clone(), InputOrNode::Node(third), before)) ||
+        self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2))
+        // self.combined_inputs(after)
+        //     .any(|input| {
+        //         tracing::debug_span!("input", ?input.resource).in_scope(|| {
+        //             self.is_after_or_equal(recursive.clone(), input.producer, before)
+        //         })
+        //     }) ||
+        // self.resolved_inputs(after)
+        //     .flat_map(|i| self.borrowers_of(i))
+        //     .any(|o| {
+        //         tracing::debug_span!("cross-borrow").in_scope(|| {
+        //             self.is_after_or_equal(recursive.clone(), InputOrNode::Node(o), before)
+        //         })
+        //     })
     }
 }
 
@@ -242,6 +245,30 @@ struct ResolvedResources {
 }
 
 impl ResolvedResources {
+    fn find_loop_rec(&self, current: NodeRef, mut previous: Vec<InputOrNode>) -> ControlFlow<Vec<InputOrNode>> {
+        previous.push(InputOrNode::Node(current));
+        for i in self.combined_inputs(current) {
+            if previous.contains(&i.producer) {
+                previous.push(i.producer);
+                return ControlFlow::Break(previous);
+            }
+            if let InputOrNode::Node(n) = i.producer {
+                self.find_loop_rec(n, previous.clone())?;
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+
+    fn find_loop(&self) -> Option<Vec<InputOrNode>> {
+        for nr in self.node_refs() {
+            if let Ok(found) = self.find_loop_rec(nr, vec![]).break_ok() {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     fn users(&self, res: ResolvedInput) -> impl Iterator<Item = NodeRef> {
         chain!(
             self.consumers.get(&res),
@@ -381,7 +408,7 @@ impl ResolvedResourcesContainer for GraphResourceResolver {
 
 #[tracing::instrument(level = "trace", skip_all)]
 #[expect(clippy::single_call_fn, reason = "CompiledGraph construction algorithm")]
-fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
+fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
     let node_labels = graph.get_simplified_node_labels();
     let resource_labels = graph.get_simplified_resource_labels();
     macro_rules! rn {
@@ -411,6 +438,13 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
             }
         };
     }
+    macro_rules! rr_print {
+        ($($t:tt)*) => {
+            if let Some(_) = option_env!("ENABLE_GRAPH_COMPILER_DEBUG") {
+                print!($($t)*);
+            }
+        };
+    }
 
     let mut producers = compute_producers(graph);
     let producers_for_borrows = producers.clone();
@@ -427,6 +461,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
     #[cfg(debug_assertions)]
     let mut rng = {
         let seed = rand::random();
+        // let seed = 6_449_357_397_300_112_446_u64;
         tracing::trace!(seed);
         rand::rngs::Xoshiro256PlusPlus::seed_from_u64(seed)
     };
@@ -434,7 +469,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
     let mut iterations = 0;
 
     while !this.is_complete() {
-        rr_println!("\n\n##############################");
+        rr_println!("##############################");
         #[derive(Debug, Clone, Copy)]
         struct ConsumeClaim {
             node: NodeRef,
@@ -449,16 +484,15 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
         // We use OrderMap for deterministic iteration
         let mut claims = OrderMap::<(ResourceRef, InputOrNode), ClaimList>::new();
         for (node, node_data) in graph.nodes() {
-            rr_println!("{}{}", if chain!(&this.resolved_inputs[&node], &this.resolved_borrows[&node]).any(Option::is_none) { " " } else { "*" }, nn!(node));
+            let finished = chain!(&this.resolved_inputs[&node], &this.resolved_borrows[&node]).all(Option::is_some);
+            if finished { continue }
+            rr_println!("{}", nn!(node));
             for (input_idx, resource) in node_data.consumes().enumerate() {
-                rr_println!("\tconsumes({})", rn!(resource));
-
-                if let Some(resolved) = &this.resolved_inputs[&node][input_idx] {
-                    rr_println!("\t\t*{}", ton!(resolved.producer));
-                    continue;
-                }
+                if this.resolved_inputs[&node][input_idx].is_some() { continue; }
                 let Some(potential_producers) = producers.get(&resource)
                 else { panic!("Missing producers for {}", rn!(resource)) };
+
+                rr_print!("\tconsumes({}): ", rn!(resource));
 
                 let producer = potential_producers.iter().filter(|&&producer| {
                     !this.is_after_or_equal(ListLink::default(), producer, node)
@@ -478,26 +512,23 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
 
                 match producer {
                     Ok((&p, is_from_unordered)) => {
-                        rr_println!("\t\t{}{}", ton!(p), if is_unordered { " (using unordered)" } else { "" });
+                        rr_println!("{}{}", ton!(p), if is_unordered { " (using unordered)" } else { "" });
                         claims.entry((resource, p)).or_default().consumes.push(ConsumeClaim { node, input_idx, is_from_unordered });
                     },
                     Err(Either::Left(options)) => {
-                        rr_println!("\t\t{}", options.map(|&n| ton!(n)).join(", "));
+                        rr_println!("{}", options.map(|&n| ton!(n)).join(", "));
                     },
                     Err(Either::Right(())) => {
-                        rr_println!("\t\tNo producers for unordered");
+                        rr_println!("No producers for unordered");
                     },
                 }
             }
             for (borrow_idx, resource) in node_data.borrows().enumerate() {
-                rr_println!("\tborrows({})", rn!(resource));
-
-                if let Some(resolved) = &this.resolved_borrows[&node][borrow_idx] {
-                    rr_println!("\t\t*{}", ton!(resolved.producer));
-                    continue
-                }
+                if this.resolved_borrows[&node][borrow_idx].is_some() { continue }
                 let Some(potential_producers) = producers_for_borrows.get(&resource)
                 else { panic!("Missing producers for {}", rn!(resource)) };
+
+                rr_print!("\tborrows({}): ", rn!(resource));
 
                 let producer = potential_producers.iter().filter(|&&producer| {
                     !this.is_after_or_equal(ListLink::default(), producer, node)
@@ -508,11 +539,11 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
 
                 match producer {
                     Ok(&p) => {
-                        rr_println!("\t\t{}", ton!(p));
+                        rr_println!("{}", ton!(p));
                         claims.entry((resource, p)).or_default().borrows.push((node, borrow_idx));
                     },
                     Err(options) => {
-                        rr_println!("\t\t{}", options.map(|&n| ton!(n)).join(", "));
+                        rr_println!("{}", options.map(|&n| ton!(n)).join(", "));
                     },
                 }
             }
@@ -527,12 +558,14 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
             claims
         };
 
+        let accept_unordered = claims.iter().all(|(_,claim)| claim.borrows.is_empty() && claim.consumes.iter().all(|c| c.is_from_unordered));
+
         let mut found_valid = false;
         'claim_loop: for ((claim_resource, claim_producer), claimers) in claims {
             if claimers.borrows.is_empty() {
                 let wining_claim = claimers.consumes.iter().exactly_one()
                     .map_or_else(|_| {
-                        claimers.consumes.iter().all(|o| o.is_from_unordered)
+                        (accept_unordered && claimers.consumes.iter().all(|o| o.is_from_unordered))
                             .then(|| {
                                 #[cfg(debug_assertions)]
                                 { claimers.consumes.choose(&mut rng).unwrap() }
@@ -551,7 +584,7 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                     producers.get_mut(&claim_resource).unwrap().retain(|p| p != &claim_producer);
 
                     // Unordered reseources may break the assumption that claims
-                    // made at the same time are not 'incompatible'>
+                    // made at the same time are not 'incompatible'
                     // A claim can change node orderign (as per is_after_or_equal)
                     // and so make other claims invalid.
                     // FIXME: This could be replaced by a more specific "unordered"
@@ -576,25 +609,49 @@ fn resolve_resources(graph: &RenderGraph) -> ResolvedResources {
                 }
             }
         }
-        assert!(found_valid, "Could not resolve render graph resources");
+        if !found_valid {
+            return None;
+        }
 
         iterations += 1;
     }
 
     tracing::trace!(iterations, "Resolved render graph resources");
 
-    ResolvedResources {
+    Some(ResolvedResources {
         node_count: graph.nodes.len(),
         consumers: this.consumers(),
         borrowers: this.borrowers(),
         explicit_orderings: this.explicit_orderings,
         inputs: this.resolved_inputs.into_iter().map(|p| p.into_iter().map(Option::unwrap).collect()).collect(),
         borrows: this.resolved_borrows.into_iter().map(|p| p.into_iter().map(Option::unwrap).collect()).collect(),
-    }
+    })
 }
 
 #[expect(clippy::single_call_fn, reason = "CompiledGraph construction algorithm")]
 fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box<[NodeRef]> {
+    let node_labels = graph.get_simplified_node_labels();
+    let resource_labels = graph.get_simplified_resource_labels();
+    macro_rules! rn {
+        ($t:expr) => {{
+            // &graph.resources.with($t.0).unwrap().get().label
+            resource_labels[&graph.resource_handle($t)].clone()
+        }};
+    }
+    macro_rules! nn {
+        ($n:expr) => {
+            node_labels.get(&graph.node_handle($n)).cloned().unwrap_or_default()
+        };
+    }
+    macro_rules! ton {
+        ($n:expr) => {
+            match $n {
+                InputOrNode::Input => "<input>".to_string(),
+                InputOrNode::Node(n) => nn!(n),
+            }
+        };
+    }
+
     tracing::debug!("Computing graph total order");
     let mut successors: IndexMap<HashSet<NodeRef>, NodeRef> = vec![HashSet::new(); graph.nodes.len()].into();
     for (node_idx, input) in chain!(resolved.borrows.enumerated(), resolved.inputs.enumerated()).flat_map(|(node_idx, inputs)| inputs.iter().map(move |input| (node_idx, input))) {
@@ -602,12 +659,13 @@ fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box
             successors[node_idx2].insert(node_idx);
         }
     }
-    for (node, borrows) in resolved.borrows.enumerated() {
+    for (borrower_node, borrows) in resolved.borrows.enumerated() {
         for borrow in borrows {
             let consumer = resolved.inputs.enumerated().flat_map(|(consumer, inputs)| inputs.iter().map(move |input| (consumer, input)))
                 .find(|&(_,p)| p == borrow);
             if let Some((consumer,_)) = consumer {
-                successors[&node].insert(consumer);
+                println!("{consumer_} is after {borrower_} because {borrower_} borrows {} from {} which is consumed by {consumer_}", rn!(borrow.resource), ton!(borrow.producer), consumer_ = nn!(consumer), borrower_ = nn!(borrower_node));
+                successors[&borrower_node].insert(consumer);
             }
         }
     }
@@ -617,7 +675,16 @@ fn compute_total_order(graph: &RenderGraph, resolved: &ResolvedResources) -> Box
     let mut output = Vec::<NodeRef>::new();
     while !done.iter().copied().all(identity) {
         let Some((node, _)) = successors.enumerated().filter(|(i, _)| !done[i]).find(|(_,succ)| !succ.iter().any(|o| !done[o]))
-        else { panic!("Could not resolve graph ordering") };
+        else {
+            println!("Remaining:");
+            for (r,_) in graph.nodes() {
+                if done[r] { continue }
+                println!("\t{}: {}", nn!(r), successors[r].iter().filter(|p| !done[**p]).map(|p| nn!(*p)).join(", "));
+            }
+            println!();
+            panic!("Could not resolve graph ordering");
+        };
+        println!("push({})", nn!(node));
         done[&node] = true;
         output.push(node);
     }
@@ -651,7 +718,45 @@ impl CompiledGraph {
                 .all(|(_, v)| v.len() == 1),
             "Permanent resources must have exactly one producer"
         );
-        let resolved = resolve_resources(graph);
+        let mut resolved = None;
+        for i in 0..100usize {
+            print!("\x1B[2J\x1B[3J\x1B[H");
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+            println!("START {i}");
+            resolved = resolve_resources(graph);
+            if resolved.is_some() { break }
+            tracing::trace!("Fail");
+        }
+        let resolved = resolved.expect("Could not resolve render graph resources");
+        if let Some(found) = resolved.find_loop() {
+            tracing::warn!("FOUND A LOOP");
+            let node_labels = graph.get_simplified_node_labels();
+            let resource_labels = graph.get_simplified_resource_labels();
+            macro_rules! rn {
+                ($t:expr) => {{
+                    // &graph.resources.with($t.0).unwrap().get().label
+                    resource_labels[&graph.resource_handle($t)].clone()
+                }};
+            }
+            macro_rules! nn {
+                ($n:expr) => {
+                    node_labels.get(&graph.node_handle($n)).cloned().unwrap_or_default()
+                };
+            }
+            macro_rules! ton {
+                ($n:expr) => {
+                    match $n {
+                        InputOrNode::Input => "<input>".to_string(),
+                        InputOrNode::Node(n) => nn!(n),
+                    }
+                };
+            }
+            for f in found {
+                print!("-> {}", ton!(f));
+            }
+            println!();
+            panic!();
+        }
         if let Some(path) = option_env!("DEBUG_GRAPH_PATH") {
             let mut str = String::new();
             resolved.write_to_dot(graph, &mut str).unwrap();
