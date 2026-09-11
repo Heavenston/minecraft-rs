@@ -166,7 +166,10 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::material::Render
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
+                    depth_write_enabled: Some(match transparency {
+                        ChunkTransparencyMode::Opaque | ChunkTransparencyMode::Cutout => true,
+                        ChunkTransparencyMode::Translucent => false,
+                    }),
                     depth_compare: Some(wgpu::CompareFunction::LessEqual),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
