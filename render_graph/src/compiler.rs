@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, convert::identity, hash::Hash, ops::ControlFlow, rc::Rc, sync::{Arc, LazyLock}};
+use std::{cell::RefCell, collections::{HashMap, HashSet}, convert::identity, hash::Hash, ops::ControlFlow, rc::Rc, sync::Arc};
 
 use genmap::{AssumeAlive, DenseIdx};
 use indexmap::{IndexMap, IndexSlice, MapIndex as _};
@@ -200,23 +200,6 @@ trait ResolvedResourcesContainer {
     fn borrowers_of(&self, ri: ResolvedInput) -> impl Iterator<Item = NodeRef> {
         self.node_refs().filter(move |&node2| self.resolved_borrows(node2).any(move |ri2| ri2 == ri))
     }
-
-    fn is_after_or_equal(&self, recursive: ListLink, after: InputOrNode, before: NodeRef) -> bool {
-        if recursive.iter().any(|o| o == (after, before)) {
-            return false;
-        }
-        let recursive = recursive.cons((after, before));
-
-        let after = match after { InputOrNode::Input => return false, InputOrNode::Node(node) => node };
-
-        after == before ||
-        self.explicit_orderings().contains(&(before, after)) ||
-        self.combined_inputs(after).any(|input| input.producer == before) ||
-        self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2)) ||
-        self.node_refs()
-            .filter(|&third| third != after && third != before)
-            .any(|third| self.is_after_or_equal(recursive.clone(), InputOrNode::Node(after), third) && self.is_after_or_equal(recursive.clone(), InputOrNode::Node(third), before))
-    }
 }
 
 #[derive(Debug)]
@@ -349,6 +332,9 @@ struct GraphResourceResolver {
     explicit_orderings: Box<[(NodeRef, NodeRef)]>,
     resolved_inputs: IndexMap<Box<[Option<ResolvedInput>]>, NodeRef>,
     resolved_borrows: IndexMap<Box<[Option<ResolvedInput>]>, NodeRef>,
+
+    after_or_equal_cache: RefCell<HashSet<(InputOrNode, NodeRef)>>,
+    after_or_equal_cache_inv: RefCell<HashSet<(InputOrNode, NodeRef)>>,
 }
 
 impl GraphResourceResolver {
@@ -373,6 +359,38 @@ impl GraphResourceResolver {
         self.node_refs()
             .flat_map(|i| self.resolved_borrows(i).map(move |input| (input, i)))
             .into_group_map()
+    }
+
+    fn is_after_or_equal_rec(&self, recursive: ListLink, after: InputOrNode, before: NodeRef) -> bool {
+        if self.after_or_equal_cache.borrow().contains(&(after, before)) { return true; }
+        if self.after_or_equal_cache_inv.borrow().contains(&(after, before)) { return false; }
+        if recursive.iter().any(|o| o == (after, before)) {
+            return false;
+        }
+
+        let recursive = recursive.cons((after, before));
+        let after = match after { InputOrNode::Input => return false, InputOrNode::Node(node) => node };
+
+        if self.after_or_equal_cache.borrow().contains(&(InputOrNode::Node(before), after)) { return false; }
+
+        let result = after == before || (
+            !self.resolved_inputs[after].iter().all(Option::is_none) && !self.resolved_inputs[before].iter().all(Option::is_none) && (
+            self.explicit_orderings().contains(&(before, after)) ||
+            self.combined_inputs(after).any(|input| input.producer == before) ||
+            self.resolved_inputs(after).any(|input1| self.resolved_borrows(before).any(|input2| input1 == input2)) ||
+            self.node_refs().any(|third| self.is_after_or_equal_rec(recursive.clone(), InputOrNode::Node(after), third) && self.is_after_or_equal_rec(recursive.clone(), InputOrNode::Node(third), before))
+        ));
+        if result {
+            self.after_or_equal_cache.borrow_mut().insert((InputOrNode::Node(before), after));
+        }
+        else {
+            self.after_or_equal_cache_inv.borrow_mut().insert((InputOrNode::Node(before), after));
+        }
+        result
+    }
+
+    fn is_after_or_equal(&self, after: InputOrNode, before: NodeRef) -> bool {
+        self.is_after_or_equal_rec(ListLink::default(), after, before)
     }
 }
 
@@ -441,6 +459,9 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
         explicit_orderings,
         resolved_inputs: graph.nodes.iter().map(|node| vec![None; node.consumes.len()]).map_into().collect(),
         resolved_borrows: graph.nodes.iter().map(|node| vec![None; node.borrows.len()]).map_into().collect(),
+
+        after_or_equal_cache: RefCell::default(),
+        after_or_equal_cache_inv: RefCell::default(),
     };
 
     #[cfg(debug_assertions)]
@@ -454,6 +475,8 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
     let mut iterations = 0;
 
     while !this.is_complete() {
+        this.after_or_equal_cache_inv.borrow_mut().clear();
+
         rr_println!("##############################");
         #[derive(Debug, Clone, Copy)]
         struct ConsumeClaim {
@@ -480,7 +503,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
                 rr_print!("\tconsumes({}): ", rn!(resource));
 
                 let producer = potential_producers.iter().filter(|&&producer| {
-                    !this.is_after_or_equal(ListLink::default(), producer, node)
+                    !this.is_after_or_equal(producer, node)
                 }).exactly_one();
 
                 let is_mutator = node_data.outputs().contains(&resource);
@@ -516,10 +539,10 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
                 rr_print!("\tborrows({}): ", rn!(resource));
 
                 let producer = potential_producers.iter().filter(|&&producer| {
-                    !this.is_after_or_equal(ListLink::default(), producer, node)
+                    !this.is_after_or_equal(producer, node)
                 }).filter(|&&producer| {
                     this.consumer(ResolvedInput { resource, producer })
-                        .is_none_or(|p| !this.is_after_or_equal(ListLink::default(), InputOrNode::Node(node), p))
+                        .is_none_or(|p| !this.is_after_or_equal(InputOrNode::Node(node), p))
                 }).exactly_one();
 
                 match producer {
@@ -717,13 +740,6 @@ impl CompiledGraph {
         if let Some(found) = resolved.find_loop() {
             tracing::warn!("FOUND A LOOP");
             let node_labels = graph.get_simplified_node_labels();
-            let resource_labels = graph.get_simplified_resource_labels();
-            macro_rules! rn {
-                ($t:expr) => {{
-                    // &graph.resources.with($t.0).unwrap().get().label
-                    resource_labels[&graph.resource_handle($t)].clone()
-                }};
-            }
             macro_rules! nn {
                 ($n:expr) => {
                     node_labels.get(&graph.node_handle($n)).cloned().unwrap_or_default()
