@@ -289,13 +289,13 @@ impl<T> GenMap<T> {
 
     /// Iterate over the sparse indices of the values in the same order as in
     /// the dense array.
-    pub fn iter_sparse_indexes(&self) -> impl Iterator<Item = SparseIdx> + DoubleEndedIterator + ExactSizeIterator {
+    pub fn iter_sparse_indexes(&self) -> std::iter::Copied<std::slice::Iter<'_, SparseIdx>> {
         self.dense_to_sparse.iter().copied()
     }
 
     /// Iterate over the dense indices of the values in the same order as in
     /// the dense array.
-    pub fn iter_dense_indexes(&self) -> impl Iterator<Item = DenseIdx> + DoubleEndedIterator + ExactSizeIterator {
+    pub fn iter_dense_indexes(&self) -> indexmap::IndexesIterator<DenseIdx> {
         self.dense_values.indexes()
     }
 

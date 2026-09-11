@@ -1,9 +1,49 @@
+#![feature(type_alias_impl_trait)]
+
 use std::{borrow::Borrow, marker::PhantomData, ops::{Deref, DerefMut, Index, IndexMut}};
 use ref_cast::{ref_cast_custom, RefCastCustom};
 
 pub trait MapIndex {
     fn from_usize(idx: usize) -> Self;
     fn as_usize(&self) -> usize;
+}
+
+/// This is an opaque type because we cannot make faster iterators manually
+/// than using the std's ones, so this opaque is actually a mapped range iterator.
+pub type IndexesIteratorInner<I: MapIndex> = impl Iterator<Item = I> + ExactSizeIterator + DoubleEndedIterator + Clone + Sized + std::fmt::Debug;
+
+pub struct IndexesIterator<I> {
+    i: PhantomData<fn(I) -> I>,
+    len: usize,
+}
+
+impl<I> IndexesIterator<I> {
+    #[inline]
+    pub fn as_with_index<O>(self) -> IndexesIterator<O> {
+        IndexesIterator {
+            i: PhantomData,
+            len: self.len,
+        }
+    }
+}
+
+impl<I> Copy for IndexesIterator<I> { }
+impl<I> Clone for IndexesIterator<I> { fn clone(&self) -> Self { *self } }
+
+impl<I> std::fmt::Debug for IndexesIterator<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndexesIterator").field("len", &self.len).finish()
+    }
+}
+
+impl<I: MapIndex> IntoIterator for IndexesIterator<I> {
+    type Item = I;
+    type IntoIter = IndexesIteratorInner<I>;
+
+    #[define_opaque(IndexesIteratorInner)]
+    fn into_iter(self) -> IndexesIteratorInner<I> {
+        (0..self.len).map(I::from_usize)
+    }
 }
 
 #[derive(RefCastCustom)]
@@ -84,18 +124,18 @@ impl<T, I> IndexSlice<T, I>
         self.len().checked_sub(1).map(I::from_usize)
     }
 
-    pub fn indexes(&self) -> impl Iterator<Item = I> + ExactSizeIterator + DoubleEndedIterator + use<T, I> {
-        (0..self.len()).map(I::from_usize)
+    pub fn indexes(&self) -> IndexesIterator<I> {
+        IndexesIterator { i: PhantomData, len: self.len() }
     }
 
-    pub fn enumerated(&self) -> impl Iterator<Item = (I, &T)> + ExactSizeIterator + DoubleEndedIterator {
+    pub fn enumerated(&self) -> std::iter::Zip<IndexesIteratorInner<I>, std::slice::Iter<'_, T>> {
         std::iter::zip(
             self.indexes(),
             self.iter(),
         )
     }
 
-    pub fn enumerated_mut(&mut self) -> impl Iterator<Item = (I, &mut T)> + ExactSizeIterator + DoubleEndedIterator {
+    pub fn enumerated_mut(&mut self) -> std::iter::Zip<IndexesIteratorInner<I>, std::slice::IterMut<'_, T>> {
         std::iter::zip(
             self.indexes(),
             self.iter_mut(),

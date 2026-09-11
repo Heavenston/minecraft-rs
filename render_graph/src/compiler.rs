@@ -153,7 +153,7 @@ fn compute_producers(graph: &RenderGraph) -> Producers {
 }
 
 trait ResolvedResourcesContainer {
-    fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator;
+    fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator + use<Self>;
     fn explicit_orderings(&self) -> &[(NodeRef, NodeRef)];
     fn resolved_inputs(&self, node: NodeRef) -> impl Iterator<Item = ResolvedInput> + use<'_, Self>;
     fn resolved_borrows(&self, node: NodeRef) -> impl Iterator<Item = ResolvedInput> + use<'_, Self>;
@@ -169,7 +169,7 @@ trait ResolvedResourcesContainer {
 
 #[derive(Debug)]
 struct ResolvedResources {
-    node_count: usize,
+    node_refs: indexmap::IndexesIterator<NodeRef>,
     explicit_orderings: Box<[(NodeRef, NodeRef)]>,
     inputs: IndexMap<Box<[ResolvedInput]>, NodeRef>,
     borrows: IndexMap<Box<[ResolvedInput]>, NodeRef>,
@@ -253,8 +253,8 @@ impl ResolvedResources {
 }
 
 impl ResolvedResourcesContainer for ResolvedResources {
-    fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator {
-        (0..self.node_count).map(|i| NodeRef(DenseIdx::from_usize(i)))
+    fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator + use<> {
+        self.node_refs.into_iter()
     }
     fn explicit_orderings(&self) -> &[(NodeRef, NodeRef)] {
         &self.explicit_orderings
@@ -269,7 +269,7 @@ impl ResolvedResourcesContainer for ResolvedResources {
 
 #[derive(Debug)]
 struct GraphResourceResolver {
-    node_refs: Box<[NodeRef]>,
+    node_refs: indexmap::IndexesIterator<NodeRef>,
     explicit_orderings: Box<[(NodeRef, NodeRef)]>,
     resolved_inputs: IndexMap<Box<[Option<ResolvedInput>]>, NodeRef>,
     resolved_borrows: IndexMap<Box<[Option<ResolvedInput>]>, NodeRef>,
@@ -313,8 +313,8 @@ impl GraphResourceResolver {
         let mut finished = false;
         while !finished {
             finished = true;
-            for after in self.node_refs.clone() {
-                for before in self.node_refs.clone() {
+            for after in self.node_refs() {
+                for before in self.node_refs() {
                     if self.after_or_equal_cache.contains(&(after, before)) { continue }
                     if self.is_after_or_equal_partial(after, before) {
                         self.after_or_equal_cache.insert((after, before));
@@ -334,8 +334,8 @@ impl GraphResourceResolver {
 }
 
 impl ResolvedResourcesContainer for GraphResourceResolver {
-    fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator {
-        self.node_refs.iter().copied()
+    fn node_refs(&self) -> impl Iterator<Item = NodeRef> + ExactSizeIterator + DoubleEndedIterator + use<> {
+        self.node_refs.into_iter()
     }
     fn explicit_orderings(&self) -> &[(NodeRef, NodeRef)] {
         &self.explicit_orderings
@@ -403,7 +403,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
         .map(|&(before, after)| (graph.node_ref(before), graph.node_ref(after)))
         .collect_vec().into_boxed_slice();
     let mut this = GraphResourceResolver {
-        node_refs: graph.nodes.iter_dense_indexes().map(NodeRef).collect(),
+        node_refs: graph.nodes.iter_dense_indexes().as_with_index::<NodeRef>(),
         explicit_orderings,
         resolved_inputs: graph.nodes.iter().map(|node| vec![None; node.consumes.len()]).map_into().collect(),
         resolved_borrows: graph.nodes.iter().map(|node| vec![None; node.borrows.len()]).map_into().collect(),
@@ -581,7 +581,7 @@ fn resolve_resources(graph: &RenderGraph) -> Option<ResolvedResources> {
     tracing::debug!(iterations, took = ?started_at.elapsed(), "Resolved render graph resources");
 
     Some(ResolvedResources {
-        node_count: graph.nodes.len(),
+        node_refs: this.node_refs,
         consumers: this.consumers(),
         borrowers: this.borrowers(),
         explicit_orderings: this.explicit_orderings,
