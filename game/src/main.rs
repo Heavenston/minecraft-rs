@@ -91,7 +91,7 @@ impl engine::App for App {
 
         let distance = 80.;
         let height = 25.;
-        ctx.world.camera_transform = glam::camera::rh::view::look_at_mat4(Vec3::new((time / 2.).cos() * distance, height, (time / 2.).sin() * distance), Vec3::ZERO, Vec3::Y).inverse_or_zero();
+        ctx.world.camera_transform = glam::camera::rh::view::look_at_mat4(Vec3::new((time / 2.).cos() * distance, height, (time / 2.).sin() * distance) + Vec3::ONE/2., Vec3::ONE/2., Vec3::Y).inverse_or_zero();
         ctx.world.camera_projection = glam::camera::rh::proj::directx::perspective(50f32.to_radians(), aspect_ratio, 0.01, 1_000.);
         if !self.pause_clipping {
             ctx.world.camera_clip_transform = ctx.world.camera_transform;

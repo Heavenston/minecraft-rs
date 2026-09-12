@@ -58,6 +58,7 @@ impl Generator {
         let mut chunk = Chunk::new();
         let top_block = BlockData { id: location!("minecraft:grass_block"), state: "snowy=false".to_string(), };
         let bottom_block = BlockData { id: location!("minecraft:dirt"), state: String::new(), };
+        let log_block = BlockData { id: location!("minecraft:oak_log"), state: "axis=y".to_string(), };
 
         let chunk_offset = chunk_pos * CHUNK_SIZE.as_isizevec3();
         for dx in 0..CHUNK_SIZE.x {
@@ -66,8 +67,13 @@ impl Generator {
                 let global_pos2d = chunk_offset.xz() + delta_pos2d.as_isizevec2();
                 let global_pos2d = global_pos2d.as_dvec2();
                 let height = self.height_at(global_pos2d);
+                if height + 17. < chunk_offset.y as f64 {
+                    continue;
+                }
 
                 let mut prev = self.generate_block(DVec3::new(global_pos2d.x, chunk_offset.y as f64 + CHUNK_SIZE.y as f64, global_pos2d.y), height);
+
+                let mut ground: Option<usize> = None;
                 for dy in (0..CHUNK_SIZE.y).rev() {
                     let delta_pos = USizeVec3::new(dx, dy, dz);
                     let global_y = chunk_offset.y.wrapping_add_unsigned(dy);
@@ -77,12 +83,28 @@ impl Generator {
                             chunk.set(delta_pos, &bottom_block);
                         }
                         else {
+                            ground = Some(dy);
                             chunk.set(delta_pos, &top_block);
                         }
                         prev = true;
                     }
                     else {
                         prev = false;
+                    }
+                }
+
+                if global_pos2d == DVec2::ZERO {
+                    if let Some(g) = ground {
+                        for dy in g+1..CHUNK_SIZE.y {
+                            chunk.set(USizeVec3::new(dx, dy, dz), &log_block);
+                        }
+                    }
+                    else if !prev {
+                        for dy in 0..CHUNK_SIZE.y {
+                            if dy % 2 == 0 {
+                                chunk.set(USizeVec3::new(dx, dy, dz), &log_block);
+                            }
+                        }
                     }
                 }
             }
