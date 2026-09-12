@@ -69,7 +69,7 @@ static EXTERIOR_RANGES: EnumMap<CardinalDirection, Vec3Range> = create_exterior_
 fn test_interior_range() {
     for (dir, &range) in &INTERIOR_RANGES {
         for val in range {
-            assert_matches!(val.checked_add_signed(dir.as_isizevec3()), Some(_));
+            std::assert_matches!(val.checked_add_signed(dir.as_isizevec3()), Some(_));
         }
     }
 }

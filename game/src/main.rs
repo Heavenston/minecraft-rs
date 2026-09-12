@@ -43,6 +43,7 @@ struct App {
     paused_movement: bool,
 
     mc_data: Arc<MinecraftData>,
+    previous_update: Option<Instant>,
     start: Instant,
     pause_delta: Duration,
     paused_at: Instant,
@@ -94,6 +95,8 @@ impl engine::App for App {
 
     fn update(&mut self, ctx: &mut engine::Ctx<'_>) -> Result<()> {
         let mut elapsed = self.start.elapsed().saturating_sub(self.pause_delta);
+        let delta_t = self.previous_update.map_or(f32::INFINITY, |i| i.elapsed().as_secs_f32());
+        self.previous_update = Some(Instant::now());
         if self.paused_movement {
             elapsed = elapsed.saturating_sub(self.paused_at.elapsed());
         }
@@ -105,7 +108,10 @@ impl engine::App for App {
 
         let distance = self.distance;
         let height = (self.distance / 80.) * 25.;
-        ctx.world.camera_transform = glam::camera::rh::view::look_at_mat4(Vec3::new((time / 2.).cos() * distance, height, (time / 2.).sin() * distance) + Vec3::ONE/2., Vec3::ONE/2., Vec3::Y).inverse_or_zero();
+        {
+            let target_transform = glam::camera::rh::view::look_at_mat4(Vec3::new((time / 2.).cos() * distance, height, (time / 2.).sin() * distance) + Vec3::ONE/2., Vec3::ONE/2., Vec3::Y).inverse_or_zero();
+            ctx.world.camera_transform = target_transform + (ctx.world.camera_transform - target_transform) * f32::exp2(-delta_t / 0.05);
+        }
         ctx.world.camera_projection = glam::camera::rh::proj::directx::perspective(50f32.to_radians(), aspect_ratio, 0.01, 1_000.);
         if !self.pause_clipping {
             ctx.world.camera_clip_transform = ctx.world.camera_transform;
@@ -171,6 +177,7 @@ async fn main() -> Result<()> {
         distance: 0.,
 
         mc_data,
+        previous_update: None,
         start: Instant::now(),
         pause_delta: Duration::ZERO,
         paused_at: Instant::now(),
