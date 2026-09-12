@@ -61,6 +61,12 @@ pub trait Material: std::any::Any + Send + Sync {
         let _ = render_graph;
     }
 
+    fn update_global(render_graph: &mut RenderGraph)
+        where Self: Sized,
+    {
+        let _ = render_graph;
+    }
+
     fn register(&mut self, render_graph: &mut RenderGraphWrapper<'_>);
     fn update(&mut self, render_graph: &mut RenderGraph) {
         let _ = render_graph;

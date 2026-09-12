@@ -31,6 +31,8 @@ parking_lot = { version = "0.12.5", features = ["arc_lock"] }
 serde_repr = "0.1.21"
 crossbeam-channel = "0.5.17"
 bitfield-struct = "0.13.0"
+resource = "0.6.1"
+wgpu = { workspace = true, features = ["naga-ir"] }
 
 [lints]
 workspace = true

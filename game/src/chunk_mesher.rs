@@ -4,15 +4,15 @@ use std::{collections::HashMap, num::Wrapping, sync::Arc};
 use enum_map::EnumMap;
 use glam::{ISizeVec2, ISizeVec3, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
-use static_assertions as ca;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, EnumSet, GridAngle, Vec3Range}};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, EnumSet, GridAngle, Vec3Range, enum_set::{bit_array_to_integer, integer_to_bit_array}}};
 
-ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
-ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
-ca::const_assert!(CHUNK_SIZE.z.is_power_of_two());
-const CHUNK_OFFSET_BITS: u32 = CHUNK_SIZE.x.ilog2() + CHUNK_SIZE.y.ilog2() + CHUNK_SIZE.z.ilog2();
-ca::const_assert!(CHUNK_OFFSET_BITS == 12);
+#[bitfield_struct::bitfield(u8, order = Lsb)]
+#[derive(bytemuck::NoUninit)]
+struct FaceAmbientOcclusion {
+    #[bits(8, from = integer_to_bit_array::<_, u8>, into = bit_array_to_integer::<_, u8>)]
+    faces: [bool; 8],
+}
 
 #[bitfield_struct::bitfield(u32, order = Lsb)]
 #[derive(bytemuck::NoUninit)]
@@ -365,12 +365,13 @@ impl ChunkMeshingCtx<'_, '_, '_> {
         }
     }
 
-    fn accumulate_ao(&mut self, direction: CardinalDirection, pos: USizeVec3) -> usize {
+    fn accumulate_ambient_occlusion(&mut self, direction: CardinalDirection, pos: USizeVec3) -> usize {
         let ambient_occlusion_sides: [bool; 8] = [
             ISizeVec2::new(-1,  0),
             ISizeVec2::new(-1, -1),
             ISizeVec2::new( 0, -1),
             ISizeVec2::new( 1, -1),
+
             ISizeVec2::new( 1,  0),
             ISizeVec2::new( 1,  1),
             ISizeVec2::new( 0,  1),
@@ -385,15 +386,22 @@ impl ChunkMeshingCtx<'_, '_, '_> {
                 CardinalDirection::PosZ => ISizeVec3::new( u,  v,  1),
                 CardinalDirection::NegZ => ISizeVec3::new(-u,  v, -1),
             };
+            // let offset = base_offset.with_direction(direction);
 
             self.get_delta_signed(pos.as_isizevec3() + offset)
         });
 
-        (0..3usize).map(|vertex_idx| {
-            let offset = vertex_idx * 2;
-            let a = ambient_occlusion_sides[offset];
-            let b = ambient_occlusion_sides[offset+1];
-            let c = ambient_occlusion_sides[(offset+2)%8];
+        let mapmap: [[usize; 3];4] = [
+            [0,1,2],
+            [2,3,4],
+            [0,7,6],
+            [4,5,6],
+        ];
+
+        mapmap.into_iter().map(|[a, b, c]| {
+            let a = ambient_occlusion_sides[a];
+            let b = ambient_occlusion_sides[b];
+            let c = ambient_occlusion_sides[c];
             if a && c {
                 3
             } else {
@@ -503,7 +511,7 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
             if faces.is_empty() { continue; }
             if model_for_pos(pos.checked_add_signed(direction.as_isizevec3()).expect("INTERIOR_RANGE should only return positions for which this works")).culling_directions.contains(direction.opposit()) { continue }
             for face in faces {
-                let ao = ctx.accumulate_ao(direction, pos);
+                let ao = ctx.accumulate_ambient_occlusion(direction, pos);
                 builder.push_face(direction, pos, face, ao);
             }
         }
@@ -522,7 +530,7 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
             };
             if neighbor_model.culling_directions.contains(direction.opposit()) { continue }
             for face in faces {
-                let ao = ctx.accumulate_ao(direction, pos);
+                let ao = ctx.accumulate_ambient_occlusion(direction, pos);
                 builder.push_face(direction, pos, face, ao);
             }
         }

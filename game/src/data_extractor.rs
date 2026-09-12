@@ -14,6 +14,7 @@ fn read_folder<T, F>(path: impl AsRef<Path>, namespace: &str, extension: &str, m
     where F: FnMut(BufReader<std::fs::File>) -> Result<T>,
 {
     let path = path.as_ref();
+    if !std::fs::exists(path)? { return Ok(Default::default()); }
     let entries = dirwalk::WalkBuilder::new(path)
         .extensions([extension])
         .iter()?;

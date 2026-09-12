@@ -19,7 +19,7 @@ use engine::wgpu;
 use glam::{Vec3, Vec3Swizzles as _, Vec4};
 use render_graph::RenderGraph;
 
-use crate::data_extractor::MinecraftData ;
+use crate::data_extractor::MinecraftData;
 
 mod chunk;
 mod chunk_mesher;

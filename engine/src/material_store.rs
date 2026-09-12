@@ -52,6 +52,7 @@ struct MaterialTypeData {
     refcount: usize,
     register: Box<dyn Send + Sync + Fn(&mut RenderGraphWrapper<'_>)>,
     registered_nodes: Option<Vec<render_graph::UntypedNodeHandle>>,
+    update: Box<dyn Send + Sync + Fn(&mut RenderGraph)>,
 }
 
 #[derive(Default)]
@@ -75,6 +76,7 @@ impl MaterialStore {
                     refcount: 0,
                     register: Box::new(|render_graph| M::register_global(render_graph)),
                     registered_nodes: None,
+                    update: Box::new(|render_graph| M::update_global(render_graph)),
                 })
             },
         };
@@ -146,6 +148,11 @@ impl MaterialStore {
             let mut wrapper = RenderGraphWrapper::new(render_graph);
             (data.register)(&mut wrapper);
             data.registered_nodes = Some(wrapper.finish());
+        }
+
+        #[expect(clippy::iter_over_hash_type, reason = "Order (should) not matter")]
+        for data in self.material_types_datas.values_mut() {
+            (data.update)(render_graph);
         }
 
         for stored_material in self.materials.values_mut().iter_mut() {

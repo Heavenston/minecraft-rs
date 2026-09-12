@@ -1,20 +1,21 @@
-#![expect(dead_code, reason = "Utils with functions maybe not used")]
-
 use std::hash::Hash;
 
-pub impl(self) trait Integer: Copy + Clone + Sized + PartialEq + Eq + Hash + std::ops::BitAnd<Output = Self> + std::ops::BitOr<Output = Self> + std::ops::BitXor<Output = Self> + std::ops::Not<Output = Self> {
+pub impl(self) const trait Integer: Copy + Clone + Sized + PartialEq + Eq + Hash + std::ops::BitAnd<Output = Self> + std::ops::BitOr<Output = Self> + std::ops::BitXor<Output = Self> + std::ops::Not<Output = Self> {
     const BITS: u32;
+    const BITS_LEN: usize = Self::BITS as usize;
 
     fn zero() -> Self;
     fn filled(count: u32) -> Self;
     fn with_bit(idx: u32) -> Self;
     fn iter_ones(self) -> impl ExactSizeIterator<Item = u32> + DoubleEndedIterator;
     fn count_ones(self) -> u32;
+    fn to_bit_array<const N: usize>(self) -> [bool; N];
+    fn from_bit_array<const N: usize>(bit_array: [bool; N]) -> Self;
 }
 
 macro_rules! impl_integer {
     ($t: ty) => {
-        impl Integer for $t {
+        const impl Integer for $t {
             const BITS: u32 = <$t>::BITS;
 
             fn zero() -> Self {
@@ -83,6 +84,22 @@ macro_rules! impl_integer {
             fn count_ones(self) -> u32 {
                 self.count_ones()
             }
+
+            fn to_bit_array<const N: usize>(self) -> [bool; N] {
+                const { assert!(N <= Self::BITS_LEN) };
+                std::array::from_fn(const |i| (Self::with_bit(match i.try_into() { Ok(i) => i, Err(_) => panic!() }) & self) != 0)
+            }
+
+            fn from_bit_array<const N: usize>(bit_array: [bool; N]) -> Self {
+                const { assert!(N <= Self::BITS_LEN) };
+                let mut acc: Self = 0;
+                let mut i = bit_array.len();
+                while i > 0 {
+                    acc = (acc << 1usize) | Self::from(bit_array[i - 1]);
+                    i -= 1;
+                }
+                acc
+            }
         }
     };
 }
@@ -90,6 +107,20 @@ impl_integer!(u8);
 impl_integer!(u16);
 impl_integer!(u32);
 impl_integer!(u64);
+
+pub const fn integer_to_bit_array<const N: usize, I: [const] Integer>(v: I) -> [bool; N] {
+    v.to_bit_array()
+}
+
+pub const fn bit_array_to_integer<const N: usize, I: [const] Integer>(bit_array: [bool; N]) -> I {
+    I::from_bit_array(bit_array)
+}
+
+#[test]
+fn test_integer_to_from_bit_array() {
+    assert_eq!(bit_array_to_integer::<_, u8>(integer_to_bit_array::<8, u8>(12)), 12);
+    assert_eq!(bit_array_to_integer::<_, u8>(integer_to_bit_array::<3, u8>(0b1111)), 0b111);
+}
 
 pub trait Enum: enum_map::Enum {
     #[expect(clippy::cast_possible_truncation, reason = "Done at compile time")]

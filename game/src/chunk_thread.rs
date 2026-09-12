@@ -173,7 +173,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
         }
         distance += 1;
 
-        while let Some(msg) = if distance < 20 { receiver.try_recv().ok() } else { receiver.recv().ok() } {
+        while let Some(msg) = if distance < 10 { receiver.try_recv().ok() } else { receiver.recv().ok() } {
             match msg {
                 ToChunkThreadMessage::RegenWithSeed(new_seed) => {
                     state.generator = crate::proc_gen::Generator::new(new_seed);

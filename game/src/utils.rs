@@ -1,7 +1,12 @@
+#![expect(dead_code, reason = "Utils with functions maybe not used")]
+#![expect(unused_imports, reason = "Utils with functions maybe not used")]
+
 use glam::{DVec2, DVec3, ISizeVec3, USizeVec3, Vec2, Vec3};
 
 pub mod enum_set;
 pub use enum_set::{ EnumSet };
+mod glam_ext;
+pub use glam_ext::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vec3Range(pub USizeVec3, pub USizeVec3);
@@ -239,53 +244,6 @@ impl std::fmt::Display for Axis {
     }
 }
 
-macro_rules! impl_index_axis {
-    () => {};
-    ($name:ty, $ty2d:ty, $ty:ty$(;$($rest:tt)*)?) => {
-        const impl std::ops::Index<Axis> for $name {
-            type Output = $ty;
-
-            fn index(&self, index: Axis) -> &Self::Output {
-                match index {
-                    Axis::X => &self.x,
-                    Axis::Y => &self.y,
-                    Axis::Z => &self.z,
-                }
-            }
-        }
-
-        const impl std::ops::IndexMut<Axis> for $name {
-            fn index_mut(&mut self, index: Axis) -> &mut Self::Output {
-                match index {
-                    Axis::X => &mut self.x,
-                    Axis::Y => &mut self.y,
-                    Axis::Z => &mut self.z,
-                }
-            }
-        }
-
-        const impl std::ops::Sub<Axis> for $name {
-            type Output = $ty2d;
-
-            fn sub(self, rhs: Axis) -> Self::Output {
-                match rhs {
-                    Axis::X => <$ty2d>::new(self.y, self.z),
-                    Axis::Y => <$ty2d>::new(self.x, self.z),
-                    Axis::Z => <$ty2d>::new(self.x, self.y),
-                }
-            }
-        }
-
-        impl_index_axis!($($($rest)*)?);
-    };
-}
-impl_index_axis!(
-    glam::I8Vec3, glam::I8Vec2, i8 ; glam::I16Vec3, glam::I16Vec2, i16; glam::IVec3, glam::IVec2, i32 ; glam::I64Vec3, glam::I64Vec2, i64;
-    glam::U8Vec3, glam::U8Vec2, u8 ; glam::U16Vec3, glam::U16Vec2, u16; glam::UVec3, glam::UVec2, u32 ; glam::U64Vec3, glam::U64Vec2, u64;
-    glam::Vec3, glam::Vec2  , f32; glam::DVec3, glam::DVec2  , f64;
-    glam::USizeVec3, glam::USizeVec2, usize; glam::ISizeVec3, glam::ISizeVec2, isize;
-);
-
 #[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
 pub enum Sign {
     Positive,
@@ -295,25 +253,23 @@ pub enum Sign {
 impl Sign {
     pub const VALUES: [Self; 2] = [Self::Positive, Self::Negative];
 
-    pub const fn as_isize(self) -> isize {
+    pub const fn as_i8(self) -> i8 {
         match self {
             Self::Positive =>  1,
             Self::Negative => -1,
         }
     }
 
+    pub const fn as_isize(self) -> isize {
+        self.as_i8().into()
+    }
+
     pub const fn as_f32(self) -> f32 {
-        match self {
-            Self::Positive =>  1.,
-            Self::Negative => -1.,
-        }
+        self.as_i8().into()
     }
 
     pub const fn as_f64(self) -> f64 {
-        match self {
-            Self::Positive =>  1.,
-            Self::Negative => -1.,
-        }
+        self.as_i8().into()
     }
 
     pub const fn is_positive(self) -> bool {

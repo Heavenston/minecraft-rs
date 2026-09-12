@@ -1,24 +1,27 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use crevice::std140::AsStd140;
 use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
 use glam::{Mat4, Vec3, Vec4};
+use parking_lot::Mutex;
 use render_graph::ResourceHandle;
+use resource::resource_str;
 
 use crate::chunk_mesher::ChunkTransparencyMode;
 use crate::utils::CardinalDirection;
 use crate::chunk::CHUNK_SIZE;
 
-static SHADER_CODE: &str = include_str!("chunk_material.wgsl");
+static SHADER_CODE: LazyLock<Mutex<resource::Resource<str>>> = LazyLock::new(|| Mutex::new(resource_str!("src/chunk_material.wgsl")));
 
 render_graph::graph_resource!(pub struct EnableWireframes(pub bool); permanent);
 
-render_graph::graph_resource!(pub struct ShaderModule(pub wgpu::ShaderModule); permanent);
-render_graph::graph_resource!(pub struct BindGroupLayout(pub wgpu::BindGroupLayout); permanent);
-render_graph::graph_resource!(pub struct RenderPipelineLayout(pub wgpu::PipelineLayout); permanent);
+render_graph::graph_resource!(struct ShaderSourceCode(wgpu::naga::Module); permanent);
+render_graph::graph_resource!(struct ShaderModule(wgpu::ShaderModule); permanent);
+render_graph::graph_resource!(struct BindGroupLayout(wgpu::BindGroupLayout); permanent);
+render_graph::graph_resource!(struct RenderPipelineLayout(wgpu::PipelineLayout); permanent);
 
-render_graph::graph_resource!(pub struct OpaqueRenderStep(pub ()));
-render_graph::graph_resource!(pub struct CutoutRenderStep(pub ()));
-render_graph::graph_resource!(pub struct TranslucentRenderStep(pub ()));
+render_graph::graph_resource!(struct OpaqueRenderStep(()));
+render_graph::graph_resource!(struct CutoutRenderStep(()));
+render_graph::graph_resource!(struct TranslucentRenderStep(()));
 
 pub struct ChunkRenderConfig {
     pub texture: wgpu::Texture,
@@ -70,10 +73,10 @@ fn test_aabb_against_frustum(mvp: &Mat4, min: Vec3, max: Vec3) -> bool {
 fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
     render_graph::node_helper!(into render_graph;
         CreateShaderModule
-        (device: ref render_res::Device) -> (ShaderModule) {
+        (device: ref render_res::Device, shader_code: ref ShaderSourceCode) -> (ShaderModule) {
             OutputValue(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Chunk material"),
-                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(SHADER_CODE)),
+                source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(shader_code.clone())),
             }))
         };
 
@@ -306,7 +309,35 @@ impl Material for ChunkMaterial {
     fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>)
         where Self: Sized,
     {
+        {
+            let code = SHADER_CODE.lock();
+            match wgpu::naga::front::wgsl::parse_str(code.as_ref()) {
+                Ok(module) => render_graph.set_input::<ShaderSourceCode>(module),
+                Err(error) => {
+                    eprintln!("{}", error.emit_to_string(code.as_ref()));
+                    panic!();
+                }
+            }
+        }
         register_global(render_graph);
+    }
+
+    fn update_global(render_graph: &mut render_graph::RenderGraph)
+        where Self: Sized,
+    {
+        let mut code = SHADER_CODE.lock();
+        if code.reload_if_changed() {
+            match wgpu::naga::front::wgsl::parse_str(code.as_ref()) {
+                Ok(module) => {
+                    tracing::info!("Hot Reloaded chunk_material.wgsl");
+                    render_graph.set_input::<ShaderSourceCode>(module);
+                },
+                Err(error) => {
+                    tracing::error!(%error, "Error while compiling chunk_material.wgsl");
+                    eprintln!("{}", error.emit_to_string(code.as_ref()));
+                },
+            }
+        }
     }
 
     fn register(&mut self, render_graph: &mut engine::RenderGraphWrapper<'_>) {
