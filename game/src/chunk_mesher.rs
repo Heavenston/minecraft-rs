@@ -3,11 +3,11 @@ use std::{collections::HashMap, num::Wrapping, sync::Arc};
 
 use enum_map::EnumMap;
 use enumflags2::BitFlags;
-use glam::{ISizeVec3, USizeVec3, Vec2, Vec3};
+use glam::{ISizeVec2, ISizeVec3, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
 use static_assertions as ca;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, GridAngle, Vec3Range}};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, GridAngle, Vec2AxisExt as _, Vec3Range}};
 
 ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
@@ -24,16 +24,15 @@ pub struct FaceInstanceData {
     pub offset_y: usize,
     #[bits(4)]
     pub offset_z: usize,
-    #[bits(4)]
+    #[bits(2)]
     pub tint_index: u32,
-    #[bits(8)]
+    #[bits(7)]
     pub texture_index: usize,
     #[bits(2)]
     pub uv_rotation: GridAngle,
     pub uv_flipped: bool,
-
-    #[bits(5)]
-    pub _padding: usize,
+    #[bits(8)]
+    pub ambient_occlusion: usize,
 }
 
 const fn create_interior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
@@ -327,6 +326,61 @@ struct ChunkMeshingCtx<'chunk, 'neighbor, 'resolver> {
     model_resolver: &'resolver mut BlockModelResolver,
 }
 
+impl ChunkMeshingCtx<'_, '_, '_> {
+    fn get_delta_signed(&mut self, delta: ISizeVec3) -> bool {
+        let chunk_delta = delta.div_euclid(CHUNK_SIZE.as_isizevec3());
+        if chunk_delta == ISizeVec3::ZERO {
+            self.model_resolver.resolve_block_model(self.chunk.get_data(delta.as_usizevec3()))[0]
+                .culling_directions.is_all()
+        }
+        else if let Some(&dir) = CardinalDirection::VALUES.iter().find(|dir| dir.as_isizevec3() == chunk_delta) {
+            self.model_resolver.resolve_block_model(self.neighbors[dir].get_data(delta.rem_euclid(CHUNK_SIZE.as_isizevec3()).as_usizevec3()))[0]
+                .culling_directions.is_all()
+        }
+        else {
+            // TODO
+            false
+        }
+    }
+
+    fn accumulate_ao(&mut self, direction: CardinalDirection, pos: USizeVec3) -> usize {
+        let ambient_occlusion_sides: [bool; 8] = [
+            ISizeVec2::new(-1,  0),
+            ISizeVec2::new(-1, -1),
+            ISizeVec2::new( 0, -1),
+            ISizeVec2::new( 1, -1),
+            ISizeVec2::new( 1,  0),
+            ISizeVec2::new( 1,  1),
+            ISizeVec2::new( 0,  1),
+            ISizeVec2::new(-1,  1),
+        ].map(|base_offset| {
+            let ISizeVec2 { x: u, y: v } = base_offset;
+            let offset = match direction {
+                CardinalDirection::PosX => ISizeVec3::new( 1,  v, -u),
+                CardinalDirection::NegX => ISizeVec3::new(-1,  v,  u),
+                CardinalDirection::PosY => ISizeVec3::new( u,  1, -v),
+                CardinalDirection::NegY => ISizeVec3::new( u, -1,  v),
+                CardinalDirection::PosZ => ISizeVec3::new( u,  v,  1),
+                CardinalDirection::NegZ => ISizeVec3::new(-u,  v, -1),
+            };
+
+            self.get_delta_signed(pos.as_isizevec3() + offset)
+        });
+
+        (0..3usize).map(|vertex_idx| {
+            let offset = vertex_idx * 2;
+            let a = ambient_occlusion_sides[offset];
+            let b = ambient_occlusion_sides[offset+1];
+            let c = ambient_occlusion_sides[(offset+2)%8];
+            if a && c {
+                3
+            } else {
+                usize::from(a || c) + usize::from(b)
+            }
+        }).rfold(0usize, |acc, val| (acc << 2usize) | val)
+    }
+}
+
 /// Should be similar to how minecraft does it.
 /// Though they do not use this value the same way.
 fn get_coordinate_seed(pos: ISizeVec3) -> u64 {
@@ -346,7 +400,7 @@ struct ChunkMeshBuilder<'a> {
 }
 
 impl ChunkMeshBuilder<'_> {
-    fn push_face(&mut self, dir: CardinalDirection, pos: USizeVec3, face: &FullBlockFace) {
+    fn push_face(&mut self, dir: CardinalDirection, pos: USizeVec3, face: &FullBlockFace, ambient_occlusion: usize) {
         let texture_data = self.mcdata.texture(face.texture);
         let transparency = ChunkTransparencyMode::from_data(texture_data, face.force_translucent);
         let key = DirAndTransparency(dir, transparency);
@@ -358,6 +412,7 @@ impl ChunkMeshBuilder<'_> {
             .with_texture_index(texture_idx)
             .with_uv_flipped(face.uv_flipped)
             .with_uv_rotation(face.uv_rotation)
+            .with_ambient_occlusion(ambient_occlusion)
         );
     }
 
@@ -419,13 +474,15 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
         }
     };
 
+
     for direction in CardinalDirection::VALUES {
         for pos in INTERIOR_RANGES[direction] {
             let faces = &model_for_pos(pos).full_block_faces[direction];
             if faces.is_empty() { continue; }
             if model_for_pos(pos + direction).culling_directions.contains(direction.opposit()) { continue }
             for face in faces {
-                builder.push_face(direction, pos, face);
+                let ao = ctx.accumulate_ao(direction, pos);
+                builder.push_face(direction, pos, face, ao);
             }
         }
     }
@@ -443,7 +500,8 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
             };
             if neighbor_model.culling_directions.contains(direction.opposit()) { continue }
             for face in faces {
-                builder.push_face(direction, pos, face);
+                let ao = ctx.accumulate_ao(direction, pos);
+                builder.push_face(direction, pos, face, ao);
             }
         }
     }

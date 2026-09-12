@@ -1,4 +1,4 @@
-use glam::{DVec2, DVec3, ISizeVec3, USizeVec3, Vec2, Vec3, Vec3Swizzles};
+use glam::{DVec2, DVec3, ISizeVec3, USizeVec3, Vec2, Vec2Swizzles, Vec3, Vec3Swizzles};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vec3Range(pub USizeVec3, pub USizeVec3);
@@ -248,9 +248,14 @@ impl std::hash::Hash for Axis {
     }
 }
 
+pub trait Vec2AxisExt: Vec2Swizzles {
+    type Elem;
+    fn with_axis(self, axis: Axis, value: Self::Elem) -> Self::Vec3;
+}
+
 macro_rules! impl_index_axis {
     () => {};
-    ($name:ty, $ty:ty$(;$($rest:tt)*)?) => {
+    ($name:ty, $ty2d:ty, $ty:ty$(;$($rest:tt)*)?) => {
         const impl std::ops::Index<Axis> for $name {
             type Output = $ty;
 
@@ -274,13 +279,24 @@ macro_rules! impl_index_axis {
         }
 
         const impl std::ops::Sub<Axis> for $name {
-            type Output = <Self as Vec3Swizzles>::Vec2;
+            type Output = $ty2d;
 
             fn sub(self, rhs: Axis) -> Self::Output {
                 match rhs {
-                    Axis::X => <Self as Vec3Swizzles>::Vec2::new(self.y, self.z),
-                    Axis::Y => <Self as Vec3Swizzles>::Vec2::new(self.x, self.z),
-                    Axis::Z => <Self as Vec3Swizzles>::Vec2::new(self.x, self.y),
+                    Axis::X => <$ty2d>::new(self.y, self.z),
+                    Axis::Y => <$ty2d>::new(self.x, self.z),
+                    Axis::Z => <$ty2d>::new(self.x, self.y),
+                }
+            }
+        }
+
+        impl Vec2AxisExt for $ty2d {
+            type Elem = $ty;
+            fn with_axis(self, axis: Axis, value: $ty) -> $name {
+                match axis {
+                    Axis::X => <$name>::new(value, self.x, self.y),
+                    Axis::Y => <$name>::new(self.x, value, self.y),
+                    Axis::Z => <$name>::new(self.x, self.y, value),
                 }
             }
         }
@@ -289,10 +305,10 @@ macro_rules! impl_index_axis {
     };
 }
 impl_index_axis!(
-    glam::I8Vec3, i8 ; glam::I16Vec3, i16; glam::IVec3, i32 ; glam::I64Vec3, i64;
-    glam::U8Vec3, u8 ; glam::U16Vec3, u16; glam::UVec3, u32 ; glam::U64Vec3, u64;
-    glam::Vec3  , f32; glam::DVec3  , f64;
-    glam::USizeVec3, usize; glam::ISizeVec3, isize;
+    glam::I8Vec3, glam::I8Vec2, i8 ; glam::I16Vec3, glam::I16Vec2, i16; glam::IVec3, glam::IVec2, i32 ; glam::I64Vec3, glam::I64Vec2, i64;
+    glam::U8Vec3, glam::U8Vec2, u8 ; glam::U16Vec3, glam::U16Vec2, u16; glam::UVec3, glam::UVec2, u32 ; glam::U64Vec3, glam::U64Vec2, u64;
+    glam::Vec3, glam::Vec2  , f32; glam::DVec3, glam::DVec2  , f64;
+    glam::USizeVec3, glam::USizeVec2, usize; glam::ISizeVec3, glam::ISizeVec2, isize;
 );
 
 #[derive(serde::Deserialize, Debug, Clone, Copy, enum_map::Enum)]
