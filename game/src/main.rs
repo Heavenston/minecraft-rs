@@ -12,6 +12,7 @@
 use std::{sync::Arc, time::Instant};
 
 use anyhow::Result;
+use crossbeam_channel::Sender;
 use engine::wgpu;
 use glam::{Vec3, Vec4};
 use render_graph::RenderGraph;
@@ -28,6 +29,10 @@ mod chunk_thread;
 
 mod data_extractor;
 
+enum ToChunkThreadMessage {
+    RegenWithSeed(u64),
+}
+
 struct App {
     vsync: bool,
     enable_wireframe: bool,
@@ -35,6 +40,7 @@ struct App {
 
     mc_data: Arc<MinecraftData>,
     start: Instant,
+    to_chunk_thread: Option<Sender<ToChunkThreadMessage>>,
 }
 
 impl App {
@@ -57,15 +63,17 @@ impl App {
 
 impl engine::App for App {
     fn resume(&mut self, ctx: &mut engine::Ctx<'_>) -> Result<()> {
+        let (to_chunk_thread, to_chunk_thread_receiver) = crossbeam_channel::unbounded();
         {
             let mcdata = Arc::clone(&self.mc_data);
             let device = ctx.renderer.device().clone();
             let queue = ctx.renderer.queue().clone();
             let materials = Arc::clone(ctx.materials_arc);
             std::thread::spawn(move || {
-                chunk_thread::chunk_thread(0, mcdata, device, queue, materials);
+                chunk_thread::chunk_thread(0, to_chunk_thread_receiver, mcdata, device, queue, materials);
             });
         }
+        self.to_chunk_thread = Some(to_chunk_thread);
 
         ctx.world.clear_color = Vec4::new(0., 0., 0., 1.);
         self.set_enable_wireframe(ctx.renderer.render_graph(), self.enable_wireframe);
@@ -104,6 +112,11 @@ impl engine::App for App {
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyC) {
             self.pause_clipping = !self.pause_clipping;
         }
+        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyS) {
+            let seed = rand::random::<u64>();
+            tracing::info!(seed, "Changind seed");
+            self.to_chunk_thread.as_ref().unwrap().send(ToChunkThreadMessage::RegenWithSeed(seed)).unwrap();
+        }
 
         Ok(())
     }
@@ -121,6 +134,7 @@ async fn main() -> Result<()> {
 
         mc_data,
         start: Instant::now(),
+        to_chunk_thread: None,
     })?;
 
     Ok(())

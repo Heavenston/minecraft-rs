@@ -3,6 +3,7 @@
 use std::{cell::RefCell, collections::{HashMap, HashSet}, sync::Arc, time::Instant};
 
 use anyhow::{Context as _, Result};
+use crossbeam_channel::Receiver;
 use engine::{MaterialHandle, wgpu::{self, util::DeviceExt as _}};
 use enum_map::EnumMap;
 use glam::{ISizeVec3, USizeVec3, Vec3, Vec4};
@@ -11,7 +12,7 @@ use ordermap::OrderMap;
 use parking_lot::RwLock;
 use render_graph::RenderGraph;
 
-use crate::{chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::{ChunkMesher, ChunkTransparencyMode}, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::CardinalDirection};
+use crate::{ToChunkThreadMessage, chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::{ChunkMesher, ChunkTransparencyMode}, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::CardinalDirection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ChunkMaterialKey {
@@ -31,39 +32,13 @@ struct MeshingState {
 }
 
 impl MeshingState {
-    // fn get_texture(&mut self, location: ResourceLocation) -> TextureData {
-    //     if let Some(texture) = self.textures.get(&location).cloned() {
-    //         return texture;
-    //     }
-
-    //     let texture_data = self.mcdata.texture(location);
-    //     let image = &texture_data.image;
-
-    //     let texture = self.device.create_texture_with_data(&self.queue, &wgpu::wgt::TextureDescriptor {
-    //         label: Some(location.as_str()),
-    //         size: wgpu::Extent3d { width: image.width(), height: image.height(), depth_or_array_layers: 1 },
-    //         mip_level_count: 1,
-    //         sample_count: 1,
-    //         dimension: wgpu::TextureDimension::D2,
-    //         format: wgpu::TextureFormat::Rgba8UnormSrgb,
-    //         usage: wgpu::TextureUsages::TEXTURE_BINDING,
-    //         view_formats: &[],
-    //     }, wgpu::wgt::TextureDataOrder::LayerMajor, image.as_bytes());
-
-    //     let data = TextureData {
-    //         texture,
-    //         present_transparency: if texture_data.has_translucent {
-    //             ChunkTransparencyMode::Translucent
-    //         } else if texture_data.has_transparent {
-    //             ChunkTransparencyMode::Cutout
-    //         } else {
-    //             ChunkTransparencyMode::Opaque
-    //         },
-    //     };
-    //     self.textures.insert(location, data.clone());
-
-    //     data
-    // }
+    fn clear_all_chunks(&mut self) {
+        self.chunks.clear();
+        #[expect(clippy::iter_over_hash_type, reason = "me no care")]
+        for &handle in self.chunk_materials.values() {
+            self.materials.write().get_material_mut(handle).unwrap().chunk_list = Arc::default();
+        }
+    }
 
     fn get_chunk_material(&mut self, transparency: ChunkTransparencyMode) -> MaterialHandle<ChunkMaterial> {
         let key = ChunkMaterialKey { transparency };
@@ -152,7 +127,7 @@ impl State {
     }
 }
 
-pub fn chunk_thread(seed: u64, mcdata: Arc<MinecraftData>, device: wgpu::Device, queue: wgpu::Queue, materials: Arc<RwLock<engine::MaterialStore>>) {
+pub fn chunk_thread(seed: u64, receiver: Receiver<ToChunkThreadMessage>, mcdata: Arc<MinecraftData>, device: wgpu::Device, queue: wgpu::Queue, materials: Arc<RwLock<engine::MaterialStore>>) {
     let texture = device.create_texture(&wgpu::wgt::TextureDescriptor {
         label: Some("Blocks texture"),
         size: wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 256 },
@@ -181,8 +156,10 @@ pub fn chunk_thread(seed: u64, mcdata: Arc<MinecraftData>, device: wgpu::Device,
         mesh_queue: vec![],
     };
 
-    for distance in 0..15isize {
-        tracing::info!("{:2}/15", distance);
+    let mut distance = 0isize;
+    #[expect(clippy::infinite_loop, reason = "intended")]
+    loop {
+        tracing::info!(distance);
         for y in -4isize..4isize {
             for dx in -distance..=distance {
                 state.gen_chunk(ISizeVec3::new(dx, y, -distance));
@@ -193,6 +170,18 @@ pub fn chunk_thread(seed: u64, mcdata: Arc<MinecraftData>, device: wgpu::Device,
                 state.gen_chunk(ISizeVec3::new(distance, y, dz));
             }
             state.store.update_textures();
+        }
+        distance += 1;
+
+        while let Ok(msg) = receiver.try_recv() {
+            match msg {
+                ToChunkThreadMessage::RegenWithSeed(new_seed) => {
+                    state.generator = crate::proc_gen::Generator::new(new_seed);
+                    state.mesh_queue.clear();
+                    state.store.clear_all_chunks();
+                    distance = 0;
+                },
+            }
         }
     }
 }

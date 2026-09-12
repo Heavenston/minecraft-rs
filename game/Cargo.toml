@@ -30,6 +30,7 @@ dirwalk = "1.1.1"
 xxhash-rust = { version = "0.8.18", features = ["std", "xxh3"] }
 parking_lot = { version = "0.12.5", features = ["arc_lock"] }
 serde_repr = "0.1.21"
+crossbeam-channel = "0.5.17"
 
 [lints]
 workspace = true
