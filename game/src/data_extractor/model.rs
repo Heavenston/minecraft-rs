@@ -1,10 +1,10 @@
 #![allow(dead_code, reason = "follows schema, even if not everything is used")]
 
-use glam::{Affine3, Quat, Vec3};
+use glam::{Affine3, Quat, Vec2, Vec3};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::{resource_location::ResourceLocation, utils::{Axis, CardinalDirection}};
+use crate::{resource_location::ResourceLocation, utils::{Axis, CardinalDirection, GridAngle}};
 
 #[derive(Debug, Deserialize)]
 pub struct Model {
@@ -123,17 +123,63 @@ impl ElementRotation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceUv {
+    pub from: Vec2,
+    pub to: Vec2,
+}
+
+impl FaceUv {
+    pub const FULL_FACE: Self = Self {
+        from: Vec2::new(0., 0.),
+        to: Vec2::new(16., 16.),
+    };
+
+    pub const fn swap_x(self) -> Self {
+        Self {
+            from: Vec2::new(self.to.x, self.from.y),
+            to: Vec2::new(self.from.x, self.to.y),
+        }
+    }
+
+    pub const fn swap_y(self) -> Self {
+        Self {
+            from: Vec2::new(self.from.x, self.to.y),
+            to: Vec2::new(self.to.x, self.from.y),
+        }
+    }
+
+    pub const fn rotate(self, angle: GridAngle) -> Self {
+        match angle {
+            GridAngle::Zero => self,
+            GridAngle::Ninety => self.swap_y(),
+            GridAngle::OneEighty => self.swap_x().swap_y(),
+            GridAngle::TwoSeventy => self.swap_x(),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FaceUv {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        let [x1, y1, x2, y2] = <[f32; 4]>::deserialize(deserializer)?;
+        Ok(Self {
+            from: Vec2::new(x1,y1),
+            to: Vec2::new(x2,y2),
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Face {
     /// None means UVs must be generated from the element's position.
-    pub uv: Option<[f32; 4]>,
+    pub uv: Option<FaceUv>,
 
     pub texture: String,
     pub cullface: Option<CardinalDirection>,
 
     #[serde(default)]
-    pub rotation: u16,
-
+    pub rotation: GridAngle,
     #[serde(default = "default_tintindex")]
     pub tintindex: i32,
 }

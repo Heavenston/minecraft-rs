@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use serde::Deserialize;
 
-use crate::resource_location::ResourceLocation;
+use crate::{resource_location::ResourceLocation, utils::{Axis, CardinalDirection, GridAngle}};
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
@@ -23,16 +23,59 @@ pub enum ModelChoice {
     Multiple(Vec<Model>),
 }
 
+impl ModelChoice {
+    pub fn as_slice(&self) -> &[Model] {
+        match self {
+            Self::Single(model) => std::slice::from_ref(model),
+            Self::Multiple(models) => models,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+pub struct ModelRotation {
+    #[serde(default)]
+    pub x: GridAngle,
+    #[serde(default)]
+    pub y: GridAngle,
+    #[serde(default)]
+    pub z: GridAngle,
+}
+
+impl ModelRotation {
+    pub const ZERO: Self = Self {
+        x: GridAngle::Zero,
+        y: GridAngle::Zero,
+        z: GridAngle::Zero,
+    };
+
+    pub fn rotate_with_uv(self, mut direction: CardinalDirection) -> (CardinalDirection, GridAngle) {
+        let mut uv_rotation = GridAngle::Zero;
+        if direction.axis() == Axis::X {
+            uv_rotation += self.x;
+        }
+        direction = direction.rotate(Axis::X, self.x);
+
+        if direction.axis() == Axis::Y {
+            uv_rotation += self.y;
+        }
+        direction = direction.rotate(Axis::Y, self.y);
+
+        if direction.axis() == Axis::Z {
+            uv_rotation += self.z;
+        }
+        direction = direction.rotate(Axis::Z, self.z);
+
+        (direction, uv_rotation)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Model {
     #[serde(rename = "model")]
     pub location: ResourceLocation,
-    #[serde(default)]
-    pub x: u16,
-    #[serde(default)]
-    pub y: u16,
-    #[serde(default)]
-    pub z: u16,
+    #[serde(default, flatten)]
+    pub rotation: ModelRotation,
     #[serde(default)]
     pub uvlock: bool,
     #[serde(default = "default_weight")]

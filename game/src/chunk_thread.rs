@@ -87,7 +87,7 @@ impl MeshingState {
             self.chunks.get(&new_pos).ok_or(())
         }) else { return false };
 
-        let mesh = self.mesher.mesh_chunk(chunk, neighbors);
+        let mesh = self.mesher.mesh_chunk(chunk_pos, chunk, neighbors);
         for submesh in mesh.quad_submeshes {
             let buffer = self.device.create_buffer(&wgpu::wgt::BufferDescriptor {
                 label: Some(&format!("chunk,{chunk_pos},{:?}", submesh.direction)),

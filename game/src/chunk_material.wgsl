@@ -68,8 +68,21 @@ struct VertexOutput {
     @location(0) face_data: u32,
     @builtin(vertex_index) vertex_index: u32,
 ) -> VertexOutput {
-    let uv = get_cube_uv(vertex_index);
+    var uv = get_cube_uv(vertex_index);
     let pos = get_cube_vertex(uv, imm.direction) + extract_offset(face_data) + imm.position;
+
+    let uv_flipped = (face_data >> 28) & 0x1;
+    let uv_rotation = (face_data >> 29) & 0x3;
+    switch uv_rotation {
+    case 1u: { uv = vec2f(1. - uv.y, uv.x); }
+    case 2u: { uv = vec2f(1. - uv.x, 1. - uv.y); }
+    case 3u: { uv = vec2f(uv.y, 1. - uv.x); }
+    default: { }
+    }
+
+    if uv_flipped != 0u {
+        uv.x = 1. - uv.x;
+    }
 
     var output: VertexOutput;
     output.position = world.view_projection_matrix * vec4f(pos, 1.0);

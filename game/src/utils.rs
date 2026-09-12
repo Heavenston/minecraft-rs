@@ -1,4 +1,4 @@
-use glam::{ISizeVec3, USizeVec3, Vec3, Vec3Swizzles};
+use glam::{DVec2, DVec3, ISizeVec3, USizeVec3, Vec2, Vec3, Vec3Swizzles};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vec3Range(pub USizeVec3, pub USizeVec3);
@@ -44,7 +44,115 @@ impl Iterator for Vec3RangeIter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum, serde::Deserialize)]
+/// Defines clockwise rotation by increments of 90 degrees.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, serde_repr::Deserialize_repr)]
+#[repr(u16)]
+pub enum GridAngle {
+    #[default]
+    Zero = 0,
+    Ninety = 90,
+    OneEighty = 180,
+    TwoSeventy = 270,
+}
+
+impl GridAngle {
+    pub const VALUES: [Self; 4] = [
+        Self::Zero, Self::Ninety, Self::OneEighty, Self::TwoSeventy,
+    ];
+
+    pub const fn to_radians_f32(self) -> f32 {
+        match self {
+            Self::Zero => 0.,
+            Self::Ninety => std::f32::consts::FRAC_PI_2,
+            Self::OneEighty => std::f32::consts::PI,
+            Self::TwoSeventy => const { std::f32::consts::PI + std::f32::consts::FRAC_PI_2 },
+        }
+    }
+
+    pub const fn to_radians_f64(self) -> f64 {
+        match self {
+            Self::Zero => 0.,
+            Self::Ninety => std::f64::consts::FRAC_PI_2,
+            Self::OneEighty => std::f64::consts::PI,
+            Self::TwoSeventy => const { std::f64::consts::PI + std::f64::consts::FRAC_PI_2 },
+        }
+    }
+
+    /// Equivalent to `Vec2::from_angle(self.to_radians_f32())`.
+    pub const fn to_vec2(self) -> Vec2 {
+        match self {
+            Self::Zero => Vec2::X,
+            Self::Ninety => Vec2::Y,
+            Self::OneEighty => Vec2::NEG_X,
+            Self::TwoSeventy => Vec2::NEG_Y,
+        }
+    }
+
+    /// Equivalent to `DVec2::from_angle(self.to_radians_f64())`.
+    pub const fn to_dvec2(self) -> DVec2 {
+        match self {
+            Self::Zero => DVec2::X,
+            Self::Ninety => DVec2::Y,
+            Self::OneEighty => DVec2::NEG_X,
+            Self::TwoSeventy => DVec2::NEG_Y,
+        }
+    }
+}
+
+impl std::fmt::Display for GridAngle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (*self as u16).fmt(f)
+    }
+}
+
+const impl std::ops::Neg for GridAngle {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        match self {
+            GridAngle::Zero => Self::Zero,
+            GridAngle::Ninety => Self::TwoSeventy,
+            GridAngle::OneEighty => Self::OneEighty,
+            GridAngle::TwoSeventy => Self::Ninety,
+        }
+    }
+}
+
+const impl std::ops::Add for GridAngle {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (GridAngle::Zero, rhs) => rhs,
+            (lhs, GridAngle::Zero) => lhs,
+            (GridAngle::Ninety, GridAngle::Ninety) | (GridAngle::TwoSeventy, GridAngle::TwoSeventy) => Self::OneEighty,
+            (GridAngle::Ninety, GridAngle::OneEighty) | (GridAngle::OneEighty, GridAngle::Ninety) => Self::TwoSeventy,
+            (GridAngle::Ninety, GridAngle::TwoSeventy) | (GridAngle::OneEighty, GridAngle::OneEighty) | (GridAngle::TwoSeventy, GridAngle::Ninety) => Self::Zero,
+            (GridAngle::OneEighty, GridAngle::TwoSeventy) | (GridAngle::TwoSeventy, GridAngle::OneEighty) => Self::Ninety,
+        }
+    }
+}
+
+const impl std::ops::AddAssign for GridAngle {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+const impl std::ops::Sub for GridAngle {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self + (-rhs)
+    }
+}
+
+const impl std::ops::SubAssign for GridAngle {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self += -rhs;
+    }
+}
+
+#[derive(Debug, Clone, Copy, enum_map::Enum, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[enumflags2::bitflags]
 #[repr(u8)]
@@ -54,6 +162,10 @@ pub enum Axis {
 }
 
 impl Axis {
+    pub const VALUES: [Self; 3] = [
+        Self::X, Self::Y, Self::Z,
+    ];
+
     pub const fn pos(self) -> CardinalDirection {
         match self {
             Self::X => CardinalDirection::PosX,
@@ -80,6 +192,41 @@ impl Axis {
             Self::Y => Vec3::Y,
             Self::Z => Vec3::Z,
         }
+    }
+
+    pub const fn as_dvec3(self) -> DVec3 {
+        match self {
+            Self::X => DVec3::X,
+            Self::Y => DVec3::Y,
+            Self::Z => DVec3::Z,
+        }
+    }
+}
+
+impl std::fmt::Display for Axis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::X => "x",
+            Self::Y => "y",
+            Self::Z => "z",
+        }.fmt(f)
+    }
+}
+
+const impl std::cmp::PartialEq for Axis {
+    fn eq(&self, other: &Self) -> bool {
+        match self {
+            Axis::X => matches!(other, Axis::X),
+            Axis::Y => matches!(other, Axis::Y),
+            Axis::Z => matches!(other, Axis::Z),
+        }
+    }
+}
+const impl std::cmp::Eq for Axis { }
+
+impl std::hash::Hash for Axis {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
     }
 }
 
@@ -170,6 +317,47 @@ impl CardinalDirection {
         }
     }
 
+    pub const fn rotate_90_degrees_cw(self, axis: Axis) -> Self {
+        #[expect(clippy::match_same_arms, reason = "more clear with each arm separate")]
+        match (self, axis) {
+            (Self::PosX, Axis::X) => Self::PosX,
+            (Self::NegX, Axis::X) => Self::NegX,
+            (Self::PosY, Axis::Y) => Self::PosY,
+            (Self::NegY, Axis::Y) => Self::NegY,
+            (Self::PosZ, Axis::Z) => Self::PosZ,
+            (Self::NegZ, Axis::Z) => Self::NegZ,
+
+            (Self::PosX, Axis::Y) => Self::NegZ,
+            (Self::PosX, Axis::Z) => Self::PosY,
+            (Self::NegX, Axis::Y) => Self::PosZ,
+            (Self::NegX, Axis::Z) => Self::NegY,
+            (Self::PosY, Axis::X) => Self::PosZ,
+            (Self::PosY, Axis::Z) => Self::NegX,
+            (Self::NegY, Axis::X) => Self::NegZ,
+            (Self::NegY, Axis::Z) => Self::PosX,
+            (Self::PosZ, Axis::X) => Self::NegY,
+            (Self::PosZ, Axis::Y) => Self::PosX,
+            (Self::NegZ, Axis::X) => Self::PosY,
+            (Self::NegZ, Axis::Y) => Self::NegX,
+        }
+    }
+
+    pub const fn rotate_90_degrees_ccw(self, axis: Axis) -> Self {
+        self.rotate_90_degrees_cw(axis).rotate_90_degrees_cw(axis).rotate_90_degrees_cw(axis)
+    }
+
+    pub const fn rotate(self, axis: Axis, angle: GridAngle) -> Self {
+        match (self, axis, angle) {
+            (_, _, GridAngle::Zero) |
+            (Self::PosX | Self::NegX, Axis::X, _) |
+            (Self::PosY | Self::NegY, Axis::Y, _) |
+            (Self::PosZ | Self::NegZ, Axis::Z, _) => self,
+            (_, _, GridAngle::OneEighty) => self.opposit(),
+            (_, _, GridAngle::Ninety) => self.rotate_90_degrees_cw(axis),
+            (_, _, GridAngle::TwoSeventy) => self.rotate_90_degrees_ccw(axis),
+        }
+    }
+
     pub const fn as_isizevec3(self) -> ISizeVec3 {
         match self {
             Self::PosX => ISizeVec3::X,
@@ -178,6 +366,28 @@ impl CardinalDirection {
             Self::NegY => ISizeVec3::NEG_Y,
             Self::PosZ => ISizeVec3::Z,
             Self::NegZ => ISizeVec3::NEG_Z,
+        }
+    }
+
+    pub const fn as_vec3(self) -> Vec3 {
+        match self {
+            Self::PosX => Vec3::X,
+            Self::NegX => Vec3::NEG_X,
+            Self::PosY => Vec3::Y,
+            Self::NegY => Vec3::NEG_Y,
+            Self::PosZ => Vec3::Z,
+            Self::NegZ => Vec3::NEG_Z,
+        }
+    }
+
+    pub const fn as_dvec3(self) -> DVec3 {
+        match self {
+            Self::PosX => DVec3::X,
+            Self::NegX => DVec3::NEG_X,
+            Self::PosY => DVec3::Y,
+            Self::NegY => DVec3::NEG_Y,
+            Self::PosZ => DVec3::Z,
+            Self::NegZ => DVec3::NEG_Z,
         }
     }
 
@@ -212,6 +422,19 @@ const impl std::ops::Neg for CardinalDirection {
 
     fn neg(self) -> Self::Output {
         self.opposit()
+    }
+}
+
+impl std::fmt::Display for CardinalDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PosX => "+x",
+            Self::NegX => "-x",
+            Self::PosY => "+y",
+            Self::NegY => "-y",
+            Self::PosZ => "+z",
+            Self::NegZ => "-z",
+        }.fmt(f)
     }
 }
 
@@ -273,5 +496,62 @@ const impl Eq for CardinalDirection {}
 impl std::hash::Hash for CardinalDirection {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
+    }
+}
+
+#[test]
+fn test_grid_angle_add() {
+    for a in GridAngle::VALUES {
+        for b in GridAngle::VALUES {
+            assert_eq!((a + b) as u16, (a as u16 + b as u16) % 360, "{a} + {b}");
+        }
+    }
+}
+
+#[test]
+fn test_grid_angle_sub() {
+    for a in GridAngle::VALUES {
+        for b in GridAngle::VALUES {
+            assert_eq!(i32::from((a - b) as u16), (i32::from(a as u16) - i32::from(b as u16)).rem_euclid(360), "{a} - {b}");
+        }
+    }
+}
+
+#[test]
+fn test_cardinal_direction_rotate_90() {
+    for dir in CardinalDirection::VALUES {
+        for axis in Axis::VALUES {
+            if dir.axis() == axis {
+                assert_eq!(dir.rotate_90_degrees_cw(axis), dir, "{dir} arount {axis}");
+            }
+            else {
+                assert_eq!(dir.rotate_90_degrees_cw(axis).rotate_90_degrees_cw(axis), dir.opposit(), "{dir} around {axis}");
+            }
+
+            assert_eq!(dir.rotate_90_degrees_cw(axis).rotate_90_degrees_ccw(axis), dir, "{dir} around {axis}");
+            assert_eq!(dir.rotate_90_degrees_ccw(axis).rotate_90_degrees_cw(axis), dir, "{dir} around {axis}");
+        }
+    }
+}
+
+#[test]
+fn test_cardinal_direction_rotation() {
+    for angle in GridAngle::VALUES {
+        for dir in CardinalDirection::VALUES {
+            for axis in Axis::VALUES {
+                let expected = dir.as_dvec3().rotate_axis(axis.as_dvec3(), angle.to_radians_f64());
+                let expected = (expected * 1e6f64).round() * 1e-6f64;
+                assert_eq!(dir.rotate(axis, angle).as_dvec3(), expected, "{dir} around {axis} for {angle}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_grid_angle_to_vec2() {
+    for angle in GridAngle::VALUES {
+        let expected = Vec2::from_angle(angle.to_radians_f32());
+        let expected = (expected * 1e6f32).round() * 1e-6f32;
+        assert_eq!(angle.to_vec2(), expected, "{angle}");
     }
 }

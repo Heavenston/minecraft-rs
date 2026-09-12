@@ -1,13 +1,13 @@
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, num::Wrapping, sync::Arc};
 
 use enum_map::EnumMap;
 use enumflags2::BitFlags;
-use glam::{USizeVec3, Vec2, Vec3};
+use glam::{ISizeVec3, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
 use static_assertions as ca;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelChoice}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, Vec3Range}};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, GridAngle, Vec3Range}};
 
 ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
@@ -20,12 +20,29 @@ const MAX_TEXTURE_SIZE: usize = MAX_TEXTURE_COUNT as usize;
 
 type FaceInstanceData = u32;
 
-fn create_face_instance_data(offset: USizeVec3, tint_index: u8, texture_index: u32) -> FaceInstanceData {
+ca::const_assert!(
+    (
+        CHUNK_OFFSET_BITS +
+        8 + /* Tint index bits */
+        TEXTURE_INDEX_BITS +
+        1 /* uv flipped bit */ +
+        2 /* uv rotation bits */
+    ) <= FaceInstanceData::BITS
+);
+
+fn create_face_instance_data(offset: USizeVec3, tint_index: u8, texture_index: u32, uv_flipped: bool, uv_rotation: GridAngle) -> FaceInstanceData {
     debug_assert_eq!(offset.as_uvec3().as_usizevec3(), offset);
     debug_assert_eq!(tint_index & 0xF, tint_index);
     debug_assert_eq!(texture_index & (MAX_TEXTURE_COUNT - 1), texture_index);
     let offset = offset.as_uvec3();
-    (((((texture_index << 8 | u32::from(tint_index)) << CHUNK_SIZE.x.ilog2()) | offset.x) << CHUNK_SIZE.y.ilog2()) | offset.y) << CHUNK_SIZE.z.ilog2() | offset.z
+    let uv_flipped: u32 = u32::from(uv_flipped);
+    let uv_rotation_i: u32 = match uv_rotation {
+        GridAngle::Zero => 0b00,
+        GridAngle::Ninety => 0b01,
+        GridAngle::OneEighty => 0b10,
+        GridAngle::TwoSeventy => 0b11,
+    };
+    ((((((((((uv_rotation_i << 1) | uv_flipped) << TEXTURE_INDEX_BITS) | texture_index) << 8) | u32::from(tint_index)) << CHUNK_SIZE.x.ilog2()) | offset.x) << CHUNK_SIZE.y.ilog2()) | offset.y) << CHUNK_SIZE.z.ilog2() | offset.z
 }
 
 const fn create_interior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
@@ -133,11 +150,20 @@ struct ResolvedElements<'a> {
     textures: HashMap<String, ResolvedTexture>,
 }
 
+struct ResolvedModelChoice<'a> {
+    elements: ResolvedElements<'a>,
+    model_rotation: ModelRotation,
+    uvlock: bool,
+    weight: u32,
+}
+
 #[derive(Debug, Clone)]
 struct FullBlockFace {
     texture: ResourceLocation,
     force_translucent: bool,
     tint_index: u8,
+    uv_flipped: bool,
+    uv_rotation: GridAngle,
 }
 
 #[derive(Debug, Clone)]
@@ -148,7 +174,7 @@ struct BlockModel {
 
 struct BlockModelResolver {
     mcdata: Arc<MinecraftData>,
-    cache: HashMap<BlockData, BlockModel>,
+    cache: HashMap<BlockData, Arc<[BlockModel]>>,
 }
 
 impl BlockModelResolver {
@@ -203,29 +229,36 @@ impl BlockModelResolver {
         }
     }
 
-    fn resolve_block_elements(&self, block_data: &BlockData) -> ResolvedElements<'_> {
+    fn resolve_block_elements(&self, block_data: &BlockData) -> Box<[ResolvedModelChoice<'_>]> {
         let blockstate = self.mcdata.blockstate(block_data.id);
 
         let model_choice = match blockstate {
             BlockState::Variants { variants } => variants.get(&block_data.state).expect("valid block states"),
             BlockState::Multipart { .. } => panic!("Unsuported multipart blocks"),
         };
-        let blockstate_model = match model_choice {
-            ModelChoice::Single(model) => model,
-            ModelChoice::Multiple(models) => models.first().expect("at leats one model"),
-        };
-        assert_eq!(blockstate_model.x, 0, "Model rotation not suported");
-        assert_eq!(blockstate_model.y, 0, "Model rotation not suported");
-        assert_eq!(blockstate_model.z, 0, "Model rotation not suported");
-        self.resolve_model_elements(HashMap::new(), blockstate_model.location)
+        model_choice
+            .as_slice()
+            .iter()
+            .map(|blockstate_model| {
+                ResolvedModelChoice {
+                    elements: self.resolve_model_elements(HashMap::new(), blockstate_model.location),
+                    model_rotation: blockstate_model.rotation,
+                    uvlock: blockstate_model.uvlock,
+                    weight: blockstate_model.weight,
+                }
+            })
+            .collect()
     }
 
-    fn resolve_block_model(&mut self, block_data: &BlockData) -> &BlockModel {
-        if let Some(model) = self.cache.get(block_data) {
-            return model;
-        }
-
-        let ResolvedElements { model, elements, textures } = self.resolve_block_elements(block_data);
+    fn resolved_elements_to_block_model(
+        &self,
+        ResolvedModelChoice {
+            elements: ResolvedElements {
+                model, elements, textures,
+            },
+            model_rotation, uvlock, weight,
+        }: ResolvedModelChoice<'_>
+    ) -> BlockModel {
         let mut full_block_faces = EnumMap::<CardinalDirection, Vec<FullBlockFace>>::default();
         for element in elements {
             if element.rotation.is_some() {
@@ -238,13 +271,33 @@ impl BlockModelResolver {
             for (&direction, face) in &element.faces {
                 let Some(&texture) = textures.get(face.texture.trim_start_matches('#'))
                 else { tracing::warn!(?model, texture = face.texture, ?textures, "Could not get face texture ref"); continue };
+
+                let uv = face.uv.unwrap_or_else(|| {
+                    model::FaceUv { from: from - direction.axis(), to: to - direction.axis() }
+                });
+                let (direction, uv_rotation) = model_rotation.rotate_with_uv(direction);
+                let uv_rotation = if uvlock { GridAngle::Zero } else { uv_rotation } + face.rotation;
                 let axis = direction.axis();
-                if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) {
+
+                let uv_full = if uv == model::FaceUv::FULL_FACE {
+                    Some(false)
+                } else if uv.swap_x() == model::FaceUv::FULL_FACE {
+                    Some(true)
+                } else {
+                    None
+                };
+                
+                if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) && let Some(uv_flipped) = uv_full {
                     full_block_faces[direction].push(FullBlockFace {
                         texture: texture.location,
                         force_translucent: texture.force_translucent,
                         tint_index: (face.tintindex + 1i32).try_into().unwrap(),
+                        uv_flipped,
+                        uv_rotation,
                     });
+                }
+                else {
+                    tracing::warn!(?face, ?direction, ?uv, "Unsuported non-full face");
                 }
             }
         }
@@ -252,17 +305,44 @@ impl BlockModelResolver {
             .filter(|(_, faces)| faces.iter().any(|face| !face.force_translucent && self.mcdata.texture(face.texture).is_opaque()))
             .map(|(dir,_)| dir)
             .fold(BitFlags::empty(), std::ops::BitOr::bitor);
-        self.cache.entry(block_data.clone()).insert_entry(BlockModel {
+
+        if weight != 1 {
+            tracing::warn!("Unsuported non =1 weight");
+        }
+
+        BlockModel {
             culling_directions,
             full_block_faces: full_block_faces.map(|_, vec| vec.into_boxed_slice()),
-        }).into_mut()
+        }
+    }
+
+    fn resolve_block_model(&mut self, block_data: &BlockData) -> &Arc<[BlockModel]> {
+        if let Some(model) = self.cache.get(block_data) {
+            return model;
+        }
+
+        let models = self.resolve_block_elements(block_data)
+            .into_iter()
+            .map(|elements| self.resolved_elements_to_block_model(elements))
+            .collect();
+        self.cache.entry(block_data.clone()).insert_entry(models).into_mut()
     }
 }
 
 struct ChunkMeshingCtx<'chunk, 'neighbor, 'resolver> {
+    chunk_pos: ISizeVec3,
     chunk: &'chunk Chunk,
     neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
     model_resolver: &'resolver mut BlockModelResolver,
+}
+
+/// Should be similar to how minecraft does it.
+/// Though they do not use this value the same way.
+fn get_coordinate_seed(pos: ISizeVec3) -> u64 {
+    let pos = pos.as_i64vec3();
+    let l = (Wrapping(pos.x) * Wrapping(3_129_871_i64)) ^ (Wrapping(pos.z) * Wrapping(116_129_781_i64)) ^ Wrapping(pos.y);
+    let l = l * l * Wrapping(42_317_861_i64) + l * Wrapping(11i64);
+    (Wrapping(l.0.cast_unsigned()) >> 16).0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
@@ -282,7 +362,7 @@ impl ChunkMeshBuilder<'_> {
 
         let texture_idx = self.textures.insert_full(face.texture).0;
         assert!(texture_idx < MAX_TEXTURE_SIZE);
-        self.quad_submeshes[key].instances.push(create_face_instance_data(pos, face.tint_index, texture_idx.try_into().unwrap()));
+        self.quad_submeshes[key].instances.push(create_face_instance_data(pos, face.tint_index, texture_idx.try_into().unwrap(), face.uv_flipped, face.uv_rotation));
     }
 
     fn finish(self) -> ChunkMesh {
@@ -315,17 +395,39 @@ fn exterior_neighbor(pos: USizeVec3, direction: CardinalDirection) -> USizeVec3 
     neighbor
 }
 
+trait SliceExt<T> {
+    fn get_modulo(&self, idx: u64) -> &T;
+}
+
+impl<T> SliceExt<T> for [T] {
+    fn get_modulo(&self, idx: u64) -> &T {
+        &self[usize::try_from(idx % u64::try_from(self.len()).unwrap()).unwrap()]
+    }
+}
+
 fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
-    let block_models: Box<[BlockModel]> = ctx.chunk.palette().iter()
-        .map(|block_data| ctx.model_resolver.resolve_block_model(block_data).clone())
+    let chunk_offset = ctx.chunk_pos * CHUNK_SIZE.as_isizevec3();
+
+    let block_models: Box<[Arc<[BlockModel]>]> = ctx.chunk.palette().iter()
+        .map(|block_data| Arc::clone(ctx.model_resolver.resolve_block_model(block_data)))
         .collect();
+
+    let model_for_pos = |pos: USizeVec3| -> &BlockModel {
+        let models = &block_models[ctx.chunk.get(pos)];
+        if let [model] = &**models {
+            model
+        }
+        else {
+            let global_pos = chunk_offset + pos.as_isizevec3();
+            models.get_modulo(get_coordinate_seed(global_pos))
+        }
+    };
 
     for direction in CardinalDirection::VALUES {
         for pos in INTERIOR_RANGES[direction] {
-            let palette_idx = ctx.chunk.get(pos);
-            let faces = &block_models[palette_idx].full_block_faces[direction];
+            let faces = &model_for_pos(pos).full_block_faces[direction];
             if faces.is_empty() { continue; }
-            if block_models[ctx.chunk.get(pos + direction)].culling_directions.contains(direction.opposit()) { continue }
+            if model_for_pos(pos + direction).culling_directions.contains(direction.opposit()) { continue }
             for face in faces {
                 builder.push_face(direction, pos, face);
             }
@@ -334,11 +436,15 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
 
     for direction in CardinalDirection::VALUES {
         for pos in EXTERIOR_RANGES[direction] {
-            let palette_idx = ctx.chunk.get(pos);
-            let faces = &block_models[palette_idx].full_block_faces[direction];
+            let faces = &model_for_pos(pos).full_block_faces[direction];
             if faces.is_empty() { continue; }
             let neighbor_block_idx = exterior_neighbor(pos, direction);
-            let neighbor_model = ctx.model_resolver.resolve_block_model(ctx.neighbors[direction].get_data(neighbor_block_idx));
+            let neighbor_models = ctx.model_resolver.resolve_block_model(ctx.neighbors[direction].get_data(neighbor_block_idx));
+            let neighbor_model = if let [neighbor_model] = &**neighbor_models {
+                neighbor_model
+            } else {
+                neighbor_models.get_modulo(get_coordinate_seed(chunk_offset + pos.as_isizevec3() + direction))
+            };
             if neighbor_model.culling_directions.contains(direction.opposit()) { continue }
             for face in faces {
                 builder.push_face(direction, pos, face);
@@ -367,13 +473,14 @@ impl ChunkMesher {
         self.textures.iter().copied()
     }
 
-    pub fn mesh_chunk(&mut self, chunk: &Chunk, neighbors: EnumMap<CardinalDirection, &Chunk>) -> ChunkMesh {
+    pub fn mesh_chunk(&mut self, chunk_pos: ISizeVec3, chunk: &Chunk, neighbors: EnumMap<CardinalDirection, &Chunk>) -> ChunkMesh {
         let mut builder = ChunkMeshBuilder {
             mcdata: Arc::clone(&self.resolver.mcdata),
             quad_submeshes: EnumMap::default(),
             textures: &mut self.textures,
         };
         let mut ctx = ChunkMeshingCtx {
+            chunk_pos,
             chunk,
             neighbors,
             model_resolver: &mut self.resolver,
