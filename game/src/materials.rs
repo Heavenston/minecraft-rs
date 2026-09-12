@@ -55,14 +55,16 @@ fn test_aabb_against_frustum(mvp: &Mat4, min: Vec3, max: Vec3) -> bool {
         Vec4::new(min.x, max.y, max.z, 1.0), // x Y Z
         Vec4::new(max.x, max.y, max.z, 1.0), // X Y Z
     ];
+    let corners = corners.map(|corner| mvp * corner);
 
-    corners.iter()
-        .map(|corner| mvp * corner)
-        .any(|corner| {
-            (-corner.w..=corner.w).contains(&corner.x) &&
-            (-corner.w..=corner.w).contains(&corner.y) &&
-            (0f32..=corner.w).contains(&corner.z)
-        })
+    !(
+        // left and right
+        (corners.iter().all(|corner| corner.x < -corner.w) || corners.iter().all(|corner| corner.x > corner.w)) &&
+        // bottom and top
+        (corners.iter().all(|corner| corner.y < -corner.w) || corners.iter().all(|corner| corner.y > corner.w)) &&
+        // near and far
+        (corners.iter().all(|corner| corner.z < 0.) || corners.iter().all(|corner| corner.z > corner.w))
+    )
 }
 
 fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
