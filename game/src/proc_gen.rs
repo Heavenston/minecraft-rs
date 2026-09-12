@@ -56,8 +56,8 @@ impl Generator {
 
     pub fn generate_chunk(&self, chunk_pos: ISizeVec3) -> Chunk {
         let mut chunk = Chunk::new();
-        let top_block = BlockData { id: location!("minecraft:stone"), state: String::new(), };
-        let bottom_block = BlockData { id: location!("minecraft:stone"), state: String::new(), };
+        let top_block = BlockData { id: location!("minecraft:grass_block"), state: "snowy=false".to_string(), };
+        let bottom_block = BlockData { id: location!("minecraft:dirt"), state: String::new(), };
 
         let chunk_offset = chunk_pos * CHUNK_SIZE.as_isizevec3();
         for dx in 0..CHUNK_SIZE.x {
