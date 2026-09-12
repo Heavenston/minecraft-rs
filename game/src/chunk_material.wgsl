@@ -40,7 +40,7 @@ struct WorldUniform {
 
 @group(0) @binding(0) var<uniform> world: WorldUniform;
 @group(1) @binding(0) var texture_sampler: sampler;
-@group(1) @binding(1) var texture: texture_2d<f32>;
+@group(1) @binding(1) var texture: texture_2d_array<f32>;
 
 struct Immediates {
     position: vec3f,
@@ -60,8 +60,8 @@ fn extract_offset(data: u32) -> vec3f {
 struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) texcoord: vec2f,
-    @interpolate(flat)
-    @location(1) tint_index: u32,
+    @interpolate(flat) @location(1) tint_index: u32,
+    @interpolate(flat) @location(2) texture_index: u32,
 };
 
 @vertex fn vs(
@@ -75,6 +75,7 @@ struct VertexOutput {
     output.position = world.view_projection_matrix * vec4f(pos, 1.0);
     output.texcoord = uv;
     output.tint_index = (face_data >> 12) & 0x0f;
+    output.texture_index = (face_data >> 20) & 0x0f;
     return output;
 }
 
@@ -84,7 +85,7 @@ const lights: array<f32, 6> = array(0.6, 0.6, 1.0, 0.5, 0.8, 0.8);
 const plains_grass_tint: vec4f = vec4f(0.5686274509803921, 0.7411764705882353, 0.34901960784313724, 1.);
 
 @fragment fn fs(input: VertexOutput) -> @location(0) vec4f {
-    var tex = textureSample(texture, texture_sampler, input.texcoord);
+    var tex = textureSample(texture, texture_sampler, input.texcoord, input.texture_index);
     let light = lights[imm.direction];
     tex = vec4f(tex.rgb * light, tex.a);
     if input.tint_index != 0 {

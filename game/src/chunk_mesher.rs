@@ -4,23 +4,28 @@ use std::{collections::HashMap, sync::Arc};
 use enum_map::EnumMap;
 use enumflags2::BitFlags;
 use glam::{USizeVec3, Vec2, Vec3};
+use ordermap::OrderSet;
 use static_assertions as ca;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{MinecraftData, blockstate::{BlockState, ModelChoice}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, Vec3Range}};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelChoice}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, Vec3Range}};
 
 ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.z.is_power_of_two());
 const CHUNK_OFFSET_BITS: u32 = CHUNK_SIZE.x.ilog2() + CHUNK_SIZE.y.ilog2() + CHUNK_SIZE.z.ilog2();
 ca::const_assert!(CHUNK_OFFSET_BITS == 12);
+const TEXTURE_INDEX_BITS: u32 = 8;
+const MAX_TEXTURE_COUNT: u32 = 2u32.pow(TEXTURE_INDEX_BITS);
+const MAX_TEXTURE_SIZE: usize = MAX_TEXTURE_COUNT as usize;
 
 type FaceInstanceData = u32;
 
-fn create_face_instance_data(offset: USizeVec3, tint_index: u8) -> FaceInstanceData {
+fn create_face_instance_data(offset: USizeVec3, tint_index: u8, texture_index: u32) -> FaceInstanceData {
     debug_assert_eq!(offset.as_uvec3().as_usizevec3(), offset);
     debug_assert_eq!(tint_index & 0xF, tint_index);
+    debug_assert_eq!(texture_index & (MAX_TEXTURE_COUNT - 1), texture_index);
     let offset = offset.as_uvec3();
-    ((((u32::from(tint_index) << CHUNK_SIZE.x.ilog2()) | offset.x) << CHUNK_SIZE.y.ilog2()) | offset.y) << CHUNK_SIZE.z.ilog2() | offset.z
+    (((((texture_index << 8 | u32::from(tint_index)) << CHUNK_SIZE.x.ilog2()) | offset.x) << CHUNK_SIZE.y.ilog2()) | offset.y) << CHUNK_SIZE.z.ilog2() | offset.z
 }
 
 const fn create_interior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
@@ -54,11 +59,30 @@ const fn create_exterior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
 }
 static EXTERIOR_RANGES: EnumMap<CardinalDirection, Vec3Range> = create_exterior_ranges();
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
+pub enum ChunkTransparencyMode {
+    Opaque,
+    Cutout,
+    Translucent,
+}
+
+impl ChunkTransparencyMode {
+    fn from_data(data: &data_extractor::TextureInfo, force_translucent: bool) -> Self {
+        if force_translucent || data.has_translucent {
+            Self::Translucent
+        }
+        else if data.has_transparent {
+            Self::Cutout
+        } else {
+            Self::Opaque
+        }
+    }
+}
+
 /// Sub mesh for a chunk that only contains full block faces.
 pub struct QuadSubMesh {
     pub direction: CardinalDirection,
-    pub texture: ResourceLocation,
-    pub force_translucent: bool,
+    pub transparency: ChunkTransparencyMode,
     pub instances: Box<[FaceInstanceData]>,
 }
 
@@ -74,9 +98,8 @@ pub struct SubMesh {
     pub vertices: Vec<FullVertex>,
 }
 
+#[derive(Default)]
 struct IncompleteQuadSubMesh {
-    texture: ResourceLocation,
-    force_translucent: bool,
     instances: Vec<FaceInstanceData>,
 }
 
@@ -236,41 +259,39 @@ impl BlockModelResolver {
     }
 }
 
-struct ChunkMeshingCtx<'mc, 'chunk, 'neighbor, 'resolver> {
-    mcdata: &'mc MinecraftData,
+struct ChunkMeshingCtx<'chunk, 'neighbor, 'resolver> {
     chunk: &'chunk Chunk,
     neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
     model_resolver: &'resolver mut BlockModelResolver,
 }
 
-#[derive(Default)]
-struct ChunkMeshBuilder {
-    quad_submeshes: EnumMap<CardinalDirection, Vec<IncompleteQuadSubMesh>>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
+struct DirAndTransparency(CardinalDirection, ChunkTransparencyMode);
+
+struct ChunkMeshBuilder<'a> {
+    mcdata: Arc<MinecraftData>,
+    textures: &'a mut OrderSet<ResourceLocation>,
+    quad_submeshes: EnumMap<DirAndTransparency, IncompleteQuadSubMesh>,
 }
 
-impl ChunkMeshBuilder {
+impl ChunkMeshBuilder<'_> {
     fn push_face(&mut self, dir: CardinalDirection, pos: USizeVec3, face: &FullBlockFace) {
-        if let Some(submesh) = self.quad_submeshes[dir].iter_mut().find(|p| p.texture == face.texture && p.force_translucent == face.force_translucent) {
-            submesh.instances.push(create_face_instance_data(pos, face.tint_index));
-        } else {
-            self.quad_submeshes[dir].push(IncompleteQuadSubMesh {
-                texture: face.texture,
-                force_translucent: face.force_translucent,
-                instances: vec![
-                    create_face_instance_data(pos, face.tint_index),
-                ],
-            });
-        }
+        let texture_data = self.mcdata.texture(face.texture);
+        let transparency = ChunkTransparencyMode::from_data(texture_data, face.force_translucent);
+        let key = DirAndTransparency(dir, transparency);
+
+        let texture_idx = self.textures.insert_full(face.texture).0;
+        assert!(texture_idx < MAX_TEXTURE_SIZE);
+        self.quad_submeshes[key].instances.push(create_face_instance_data(pos, face.tint_index, texture_idx.try_into().unwrap()));
     }
 
     fn finish(self) -> ChunkMesh {
         let quad_submeshes = self.quad_submeshes.into_iter()
-            .flat_map(|(face, meshes)| meshes.into_iter().map(move |submesh| (face, submesh)))
-            .map(|(direction, IncompleteQuadSubMesh { texture, force_translucent, instances })| {
+            .filter(|(_, sub_mesh)| !sub_mesh.instances.is_empty())
+            .map(|(DirAndTransparency(direction, transparency), IncompleteQuadSubMesh { instances })| {
                 QuadSubMesh {
                     direction,
-                    texture,
-                    force_translucent,
+                    transparency,
                     instances: instances.into_boxed_slice(),
                 }
             })
@@ -327,29 +348,36 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
 }
 
 pub struct ChunkMesher {
-    mcdata: Arc<MinecraftData>,
     resolver: BlockModelResolver,
+    textures: OrderSet<ResourceLocation>,
 }
 
 impl ChunkMesher {
     pub fn new(mcdata: Arc<MinecraftData>) -> Self {
         Self {
-            mcdata: Arc::clone(&mcdata),
             resolver: BlockModelResolver {
                 mcdata,
                 cache: HashMap::default(),
             },
+            textures: OrderSet::new(),
         }
     }
 
+    pub fn textures(&self) -> impl ExactSizeIterator<Item = ResourceLocation> {
+        self.textures.iter().copied()
+    }
+
     pub fn mesh_chunk(&mut self, chunk: &Chunk, neighbors: EnumMap<CardinalDirection, &Chunk>) -> ChunkMesh {
+        let mut builder = ChunkMeshBuilder {
+            mcdata: Arc::clone(&self.resolver.mcdata),
+            quad_submeshes: EnumMap::default(),
+            textures: &mut self.textures,
+        };
         let mut ctx = ChunkMeshingCtx {
-            mcdata: &self.mcdata,
             chunk,
             neighbors,
             model_resolver: &mut self.resolver,
         };
-        let mut builder = ChunkMeshBuilder::default();
         mesh_chunk(&mut ctx, &mut builder);
         builder.finish()
     }

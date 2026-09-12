@@ -44,61 +44,6 @@ impl Iterator for Vec3RangeIter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ISizeVec3Range(pub ISizeVec3, pub ISizeVec3);
-
-impl IntoIterator for ISizeVec3Range {
-    type Item = ISizeVec3;
-    type IntoIter = ISizeVec3RangeIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        ISizeVec3RangeIter {
-            range: self,
-            current: self.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ISizeVec3RangeIter {
-    range: ISizeVec3Range,
-    current: ISizeVec3,
-}
-
-impl Iterator for ISizeVec3RangeIter {
-    type Item = ISizeVec3;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current.x < self.range.1.x {
-            let val = self.current;
-            self.current.x += 1;
-            return Some(val);
-        }
-        self.current.x = self.range.0.x;
-        self.current.y += 1;
-        if self.current.y < self.range.1.y {
-            return self.next();
-        }
-        self.current.y = self.range.0.y;
-        self.current.z += 1;
-        if self.current.z < self.range.1.z {
-            return self.next();
-        }
-        None
-    }
-}
-
-#[test]
-fn test_vec3_iter() {
-    use itertools::Itertools as _;
-
-    assert_eq!(
-        Vec3Range(USizeVec3::new(0, 4, 3), USizeVec3::new(5, 5, 5)).into_iter().map(|p| p.to_array()).collect_vec().as_slice(), &[
-        [0, 4, 3], [1, 4, 3], [2, 4, 3], [3, 4, 3], [4, 4, 3],
-        [0, 4, 4], [1, 4, 4], [2, 4, 4], [3, 4, 4], [4, 4, 4],
-    ][..]);
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[enumflags2::bitflags]

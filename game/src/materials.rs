@@ -4,6 +4,7 @@ use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::reso
 use glam::{Mat4, Vec3, Vec4};
 use render_graph::ResourceHandle;
 
+use crate::chunk_mesher::ChunkTransparencyMode;
 use crate::utils::CardinalDirection;
 use crate::chunk::CHUNK_SIZE;
 
@@ -18,13 +19,6 @@ render_graph::graph_resource!(pub struct RenderPipelineLayout(pub wgpu::Pipeline
 render_graph::graph_resource!(pub struct OpaqueRenderStep(pub ()));
 render_graph::graph_resource!(pub struct CutoutRenderStep(pub ()));
 render_graph::graph_resource!(pub struct TranslucentRenderStep(pub ()));
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ChunkTransparencyMode {
-    Opaque,
-    Cutout,
-    Translucent,
-}
 
 pub struct ChunkRenderConfig {
     pub texture: wgpu::Texture,
@@ -97,7 +91,7 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
                             multisampled: false,
                         },
                         count: None,

@@ -104,6 +104,7 @@ impl MinecraftData {
             blockstate_count = blockstates.len(),
             model_count = models.len(),
             texture_count = textures.len(),
+            block_texture_count = textures.keys().filter(|key| key.path().starts_with("block/")).count(),
             namespaces = ?blockstates.keys().chain(models.keys()).chain(textures.keys()).copied().map(ResourceLocation::namespace).unique().collect_vec(),
             "Exaction finished",
         );

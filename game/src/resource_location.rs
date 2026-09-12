@@ -20,6 +20,10 @@ pub struct ResourceLocation {
 }
 
 impl ResourceLocation {
+    pub const fn inner(self) -> Ustr {
+        self.inner
+    }
+
     pub const fn check_namespace(str: &str) -> bool {
         if str == ".." { return false }
         if str.is_empty() { return false }
