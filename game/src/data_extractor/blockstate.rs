@@ -51,17 +51,17 @@ impl ModelRotation {
 
     pub fn rotate_with_uv(self, mut direction: CardinalDirection) -> (CardinalDirection, GridAngle) {
         let mut uv_rotation = GridAngle::Zero;
-        if direction.axis() == Axis::X {
+        if direction.axis == Axis::X {
             uv_rotation += self.x;
         }
         direction = direction.rotate(Axis::X, self.x);
 
-        if direction.axis() == Axis::Y {
+        if direction.axis == Axis::Y {
             uv_rotation += self.y;
         }
         direction = direction.rotate(Axis::Y, self.y);
 
-        if direction.axis() == Axis::Z {
+        if direction.axis == Axis::Z {
             uv_rotation += self.z;
         }
         direction = direction.rotate(Axis::Z, self.z);

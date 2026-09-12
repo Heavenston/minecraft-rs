@@ -259,10 +259,10 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::RenderGraphWrapp
             render_pass.set_bind_group(1, bind_group, &[]);
             for chunk in &*chunk_list.chunks {
                 let max_pos = chunk.position + CHUNK_SIZE.as_vec3();
-                let clip = if chunk.direction.is_positive() {
-                    camera_position[chunk.direction.axis()] < chunk.position[chunk.direction.axis()]
+                let clip = if chunk.direction.sign.is_positive() {
+                    camera_position[chunk.direction.axis] < chunk.position[chunk.direction.axis]
                 } else {
-                    camera_position[chunk.direction.axis()] > max_pos[chunk.direction.axis()]
+                    camera_position[chunk.direction.axis] > max_pos[chunk.direction.axis]
                 };
                 if clip { continue }
                 if !test_aabb_against_frustum(&view_projection, chunk.position, max_pos) { continue }

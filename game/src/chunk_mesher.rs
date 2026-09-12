@@ -2,12 +2,11 @@
 use std::{collections::HashMap, num::Wrapping, sync::Arc};
 
 use enum_map::EnumMap;
-use enumflags2::BitFlags;
 use glam::{ISizeVec2, ISizeVec3, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
 use static_assertions as ca;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, GridAngle, Vec2AxisExt as _, Vec3Range}};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, EnumSet, GridAngle, Vec3Range}};
 
 ca::const_assert!(CHUNK_SIZE.x.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
@@ -39,11 +38,11 @@ const fn create_interior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
     const fn range_for_direction(direction: CardinalDirection) -> Vec3Range {
         let mut interior_min = USizeVec3::ZERO;
         let mut interior_max = CHUNK_SIZE;
-        if direction.is_positive() {
-            interior_max[direction.axis()] -= 1;
+        if direction.sign.is_positive() {
+            interior_max[direction.axis] -= 1;
         }
         else {
-            interior_min[direction.axis()] += 1;
+            interior_min[direction.axis] += 1;
         }
         Vec3Range(interior_min, interior_max)
     }
@@ -54,17 +53,40 @@ const fn create_exterior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
     const fn range_for_direction(direction: CardinalDirection) -> Vec3Range {
         let mut interior_min = USizeVec3::ZERO;
         let mut interior_max = CHUNK_SIZE;
-        if direction.is_positive() {
-            interior_min[direction.axis()] = interior_max[direction.axis()] - 1;
+        if direction.sign.is_positive() {
+            interior_min[direction.axis] = interior_max[direction.axis] - 1;
         }
         else {
-            interior_max[direction.axis()] = interior_min[direction.axis()] + 1;
+            interior_max[direction.axis] = interior_min[direction.axis] + 1;
         }
         Vec3Range(interior_min, interior_max)
     }
     EnumMap::from_array(CardinalDirection::VALUES.map(range_for_direction))
 }
 static EXTERIOR_RANGES: EnumMap<CardinalDirection, Vec3Range> = create_exterior_ranges();
+
+#[test]
+fn test_interior_range() {
+    for (dir, &range) in &INTERIOR_RANGES {
+        for val in range {
+            assert_matches!(val.checked_add_signed(dir.as_isizevec3()), Some(_));
+        }
+    }
+}
+
+#[test]
+fn test_exterior_range() {
+    for (dir, &range) in &EXTERIOR_RANGES {
+        for val in range {
+            if dir.sign.is_positive() {
+                assert_eq!(val[dir.axis], CHUNK_SIZE[dir.axis] - 1);
+            }
+            else {
+                assert_eq!(val[dir.axis], 0);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
 pub enum ChunkTransparencyMode {
@@ -113,7 +135,7 @@ struct IncompleteQuadSubMesh {
 #[expect(dead_code, reason = "todo")]
 struct IncompleteSubMeshInstance {
     model: usize,
-    culled: BitFlags<CardinalDirection>,
+    culled: EnumSet<CardinalDirection>,
 }
 
 #[expect(dead_code, reason = "todo")]
@@ -158,7 +180,7 @@ struct FullBlockFace {
 
 #[derive(Debug, Clone)]
 struct BlockModel {
-    culling_directions: BitFlags<CardinalDirection>,
+    culling_directions: EnumSet<CardinalDirection>,
     full_block_faces: EnumMap<CardinalDirection, Box<[FullBlockFace]>>,
 }
 
@@ -263,11 +285,11 @@ impl BlockModelResolver {
                 else { tracing::warn!(?model, texture = face.texture, ?textures, "Could not get face texture ref"); continue };
 
                 let uv = face.uv.unwrap_or_else(|| {
-                    model::FaceUv { from: from - direction.axis(), to: to - direction.axis() }
+                    model::FaceUv { from: from - direction.axis, to: to - direction.axis }
                 });
                 let (direction, uv_rotation) = model_rotation.rotate_with_uv(direction);
                 let uv_rotation = if uvlock { GridAngle::Zero } else { uv_rotation } + face.rotation;
-                let axis = direction.axis();
+                let axis = direction.axis;
 
                 let uv_full = if uv == model::FaceUv::FULL_FACE {
                     Some(false)
@@ -294,7 +316,7 @@ impl BlockModelResolver {
         let culling_directions = full_block_faces.iter()
             .filter(|(_, faces)| faces.iter().any(|face| !face.force_translucent && self.mcdata.texture(face.texture).is_opaque()))
             .map(|(dir,_)| dir)
-            .fold(BitFlags::empty(), std::ops::BitOr::bitor);
+            .collect::<EnumSet<CardinalDirection>>();
 
         if weight != 1 {
             tracing::warn!("Unsuported non =1 weight");
@@ -437,11 +459,11 @@ impl ChunkMeshBuilder<'_> {
 
 fn exterior_neighbor(pos: USizeVec3, direction: CardinalDirection) -> USizeVec3 {
     let mut neighbor = pos;
-    if direction.is_positive() {
-        neighbor[direction.axis()] = 0;
+    if direction.sign.is_positive() {
+        neighbor[direction.axis] = 0;
     }
     else {
-        neighbor[direction.axis()] = CHUNK_SIZE[direction.axis()]-1;
+        neighbor[direction.axis] = CHUNK_SIZE[direction.axis]-1;
     }
     neighbor
 }
@@ -479,7 +501,7 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
         for pos in INTERIOR_RANGES[direction] {
             let faces = &model_for_pos(pos).full_block_faces[direction];
             if faces.is_empty() { continue; }
-            if model_for_pos(pos + direction).culling_directions.contains(direction.opposit()) { continue }
+            if model_for_pos(pos.checked_add_signed(direction.as_isizevec3()).expect("INTERIOR_RANGE should only return positions for which this works")).culling_directions.contains(direction.opposit()) { continue }
             for face in faces {
                 let ao = ctx.accumulate_ao(direction, pos);
                 builder.push_face(direction, pos, face, ao);

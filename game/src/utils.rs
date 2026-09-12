@@ -1,4 +1,7 @@
-use glam::{DVec2, DVec3, ISizeVec3, USizeVec3, Vec2, Vec2Swizzles, Vec3, Vec3Swizzles};
+use glam::{DVec2, DVec3, ISizeVec3, USizeVec3, Vec2, Vec3};
+
+pub mod enum_set;
+pub use enum_set::{ EnumSet };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vec3Range(pub USizeVec3, pub USizeVec3);
@@ -170,11 +173,8 @@ const impl std::ops::SubAssign for GridAngle {
     }
 }
 
-#[derive(Debug, Clone, Copy, enum_map::Enum, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[enumflags2::bitflags]
-#[repr(u8)]
-#[expect(clippy::use_self, reason = "bitflags macro generated")]
 pub enum Axis {
     X, Y, Z,
 }
@@ -185,11 +185,7 @@ impl Axis {
     ];
 
     pub const fn pos(self) -> CardinalDirection {
-        match self {
-            Self::X => CardinalDirection::PosX,
-            Self::Y => CardinalDirection::PosY,
-            Self::Z => CardinalDirection::PosZ,
-        }
+        CardinalDirection { sign: Sign::Positive, axis: self }
     }
 
     pub const fn neg(self) -> CardinalDirection {
@@ -201,6 +197,14 @@ impl Axis {
             Self::X => USizeVec3::X,
             Self::Y => USizeVec3::Y,
             Self::Z => USizeVec3::Z,
+        }
+    }
+
+    pub const fn as_isizevec3(self) -> ISizeVec3 {
+        match self {
+            Self::X => ISizeVec3::X,
+            Self::Y => ISizeVec3::Y,
+            Self::Z => ISizeVec3::Z,
         }
     }
 
@@ -221,6 +225,10 @@ impl Axis {
     }
 }
 
+impl enum_set::Enum for Axis {
+    type Integer = u8;
+}
+
 impl std::fmt::Display for Axis {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -229,28 +237,6 @@ impl std::fmt::Display for Axis {
             Self::Z => "z",
         }.fmt(f)
     }
-}
-
-const impl std::cmp::PartialEq for Axis {
-    fn eq(&self, other: &Self) -> bool {
-        match self {
-            Axis::X => matches!(other, Axis::X),
-            Axis::Y => matches!(other, Axis::Y),
-            Axis::Z => matches!(other, Axis::Z),
-        }
-    }
-}
-const impl std::cmp::Eq for Axis { }
-
-impl std::hash::Hash for Axis {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        core::mem::discriminant(self).hash(state);
-    }
-}
-
-pub trait Vec2AxisExt: Vec2Swizzles {
-    type Elem;
-    fn with_axis(self, axis: Axis, value: Self::Elem) -> Self::Vec3;
 }
 
 macro_rules! impl_index_axis {
@@ -290,17 +276,6 @@ macro_rules! impl_index_axis {
             }
         }
 
-        impl Vec2AxisExt for $ty2d {
-            type Elem = $ty;
-            fn with_axis(self, axis: Axis, value: $ty) -> $name {
-                match axis {
-                    Axis::X => <$name>::new(value, self.x, self.y),
-                    Axis::Y => <$name>::new(self.x, value, self.y),
-                    Axis::Z => <$name>::new(self.x, self.y, value),
-                }
-            }
-        }
-
         impl_index_axis!($($($rest)*)?);
     };
 }
@@ -311,55 +286,96 @@ impl_index_axis!(
     glam::USizeVec3, glam::USizeVec2, usize; glam::ISizeVec3, glam::ISizeVec2, isize;
 );
 
-#[derive(serde::Deserialize, Debug, Clone, Copy, enum_map::Enum)]
-#[enumflags2::bitflags]
-#[repr(u8)]
-#[expect(clippy::use_self, reason = "bitflags macro generated")]
-pub enum CardinalDirection {
-    #[serde(rename = "east")]
-    PosX,
-    #[serde(rename = "west")]
-    NegX,
-    #[serde(rename = "up")]
-    PosY,
-    #[serde(rename = "down")]
-    NegY,
-    #[serde(rename = "south")]
-    PosZ,
-    #[serde(rename = "north")]
-    NegZ,
+#[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
+pub enum Sign {
+    Positive,
+    Negative,
 }
 
-impl CardinalDirection {
-    pub const VALUES: [Self; 6] = [
-        Self::PosX,
-        Self::NegX,
-        Self::PosY,
-        Self::NegY,
-        Self::PosZ,
-        Self::NegZ,
-    ];
+impl Sign {
+    pub const VALUES: [Self; 2] = [Self::Positive, Self::Negative];
 
-    pub const fn opposit(self) -> Self {
+    pub const fn as_isize(self) -> isize {
         match self {
-            Self::PosX => Self::NegX,
-            Self::NegX => Self::PosX,
-            Self::PosY => Self::NegY,
-            Self::NegY => Self::PosY,
-            Self::PosZ => Self::NegZ,
-            Self::NegZ => Self::PosZ,
+            Self::Positive =>  1,
+            Self::Negative => -1,
         }
     }
 
-    pub const fn rotate_90_degrees_cw(self, axis: Axis) -> Self {
+    pub const fn as_f32(self) -> f32 {
+        match self {
+            Self::Positive =>  1.,
+            Self::Negative => -1.,
+        }
+    }
+
+    pub const fn as_f64(self) -> f64 {
+        match self {
+            Self::Positive =>  1.,
+            Self::Negative => -1.,
+        }
+    }
+
+    pub const fn is_positive(self) -> bool {
+        matches!(self, Self::Positive)
+    }
+
+    pub const fn is_negative(self) -> bool {
+        matches!(self, Self::Negative)
+    }
+}
+
+const impl std::ops::Neg for Sign {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        match self {
+            Self::Positive => Self::Negative,
+            Self::Negative => Self::Positive,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
+pub struct CardinalDirection {
+    pub sign: Sign,
+    pub axis: Axis,
+}
+
+#[expect(non_upper_case_globals, reason = "This replaces the existing usage for when this was an enum")]
+impl CardinalDirection {
+    pub const VALUES: [Self; 6] = std::array::from_fn::<_, { Sign::VALUES.len() * Axis::VALUES.len() }, _>(const |i| {
+        Self {
+            sign: Sign::VALUES[i % Sign::VALUES.len()],
+            axis: Axis::VALUES[i / Sign::VALUES.len()],
+        }
+    });
+
+    #[doc(alias = "East")]
+    pub const PosX: Self = Self { sign: Sign::Positive, axis: Axis::X };
+    #[doc(alias = "West")]
+    pub const NegX: Self = Self { sign: Sign::Negative, axis: Axis::X };
+    #[doc(alias = "Up")]
+    pub const PosY: Self = Self { sign: Sign::Positive, axis: Axis::Y };
+    #[doc(alias = "Down")]
+    pub const NegY: Self = Self { sign: Sign::Negative, axis: Axis::Y };
+    #[doc(alias = "South")]
+    pub const PosZ: Self = Self { sign: Sign::Positive, axis: Axis::Z };
+    #[doc(alias = "North")]
+    pub const NegZ: Self = Self { sign: Sign::Negative, axis: Axis::Z };
+
+    pub const fn opposit(self) -> Self {
+        Self {
+            sign: -self.sign,
+            axis: self.axis,
+        }
+    }
+
+    pub const fn rotate_90_degrees_cw(self, rotate_axis: Axis) -> Self {
         #[expect(clippy::match_same_arms, reason = "more clear with each arm separate")]
-        match (self, axis) {
-            (Self::PosX, Axis::X) => Self::PosX,
-            (Self::NegX, Axis::X) => Self::NegX,
-            (Self::PosY, Axis::Y) => Self::PosY,
-            (Self::NegY, Axis::Y) => Self::NegY,
-            (Self::PosZ, Axis::Z) => Self::PosZ,
-            (Self::NegZ, Axis::Z) => Self::NegZ,
+        match (self, rotate_axis) {
+            (Self { axis: Axis::X, .. }, Axis::X) |
+            (Self { axis: Axis::Y, .. }, Axis::Y) |
+            (Self { axis: Axis::Z, .. }, Axis::Z) => self,
 
             (Self::PosX, Axis::Y) => Self::NegZ,
             (Self::PosX, Axis::Z) => Self::PosY,
@@ -393,61 +409,21 @@ impl CardinalDirection {
     }
 
     pub const fn as_isizevec3(self) -> ISizeVec3 {
-        match self {
-            Self::PosX => ISizeVec3::X,
-            Self::NegX => ISizeVec3::NEG_X,
-            Self::PosY => ISizeVec3::Y,
-            Self::NegY => ISizeVec3::NEG_Y,
-            Self::PosZ => ISizeVec3::Z,
-            Self::NegZ => ISizeVec3::NEG_Z,
-        }
+        let ISizeVec3 { x, y, z } = self.axis.as_isizevec3();
+        let sign = self.sign.as_isize();
+        ISizeVec3::new(x * sign, y * sign, z * sign)
     }
 
     pub const fn as_vec3(self) -> Vec3 {
-        match self {
-            Self::PosX => Vec3::X,
-            Self::NegX => Vec3::NEG_X,
-            Self::PosY => Vec3::Y,
-            Self::NegY => Vec3::NEG_Y,
-            Self::PosZ => Vec3::Z,
-            Self::NegZ => Vec3::NEG_Z,
-        }
+        let Vec3 { x, y, z } = self.axis.as_vec3();
+        let sign = self.sign.as_f32();
+        Vec3::new(x * sign, y * sign, z * sign)
     }
 
     pub const fn as_dvec3(self) -> DVec3 {
-        match self {
-            Self::PosX => DVec3::X,
-            Self::NegX => DVec3::NEG_X,
-            Self::PosY => DVec3::Y,
-            Self::NegY => DVec3::NEG_Y,
-            Self::PosZ => DVec3::Z,
-            Self::NegZ => DVec3::NEG_Z,
-        }
-    }
-
-    pub const fn axis(self) -> Axis {
-        match self {
-            Self::PosX | Self::NegX => Axis::X,
-            Self::PosY | Self::NegY => Axis::Y,
-            Self::PosZ | Self::NegZ => Axis::Z,
-        }
-    }
-
-    pub const fn abs(self) -> Self {
-        self.axis().pos()
-    }
-
-    pub const fn is_positive(self) -> bool { self.abs() == self }
-    pub const fn is_negative(self) -> bool { !self.is_positive() }
-}
-
-const impl From<Axis> for CardinalDirection {
-    fn from(val: Axis) -> Self {
-        match val {
-            Axis::X => Self::PosX,
-            Axis::Y => Self::PosY,
-            Axis::Z => Self::PosZ,
-        }
+        let DVec3 { x, y, z } = self.axis.as_dvec3();
+        let sign = self.sign.as_f64();
+        DVec3::new(x * sign, y * sign, z * sign)
     }
 }
 
@@ -461,7 +437,7 @@ const impl std::ops::Neg for CardinalDirection {
 
 impl std::fmt::Display for CardinalDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        match *self {
             Self::PosX => "+x",
             Self::NegX => "-x",
             Self::PosY => "+y",
@@ -489,18 +465,6 @@ const impl std::str::FromStr for CardinalDirection {
     }
 }
 
-const impl std::ops::Add<CardinalDirection> for USizeVec3 {
-    type Output = Self;
-    fn add(self, rhs: CardinalDirection) -> Self::Output {
-        if cfg!(debug_assertions) {
-            self.checked_add_signed(rhs.as_isizevec3()).expect("arithetic overflow")
-        }
-        else {
-            self.wrapping_add_signed(rhs.as_isizevec3())
-        }
-    }
-}
-
 const impl std::ops::Add<CardinalDirection> for ISizeVec3 {
     type Output = Self;
     fn add(self, rhs: CardinalDirection) -> Self::Output {
@@ -513,24 +477,47 @@ const impl std::ops::Add<CardinalDirection> for ISizeVec3 {
     }
 }
 
-const impl PartialEq for CardinalDirection {
-    fn eq(&self, other: &Self) -> bool {
-        match self {
-            Self::PosX => matches!(other, Self::PosX),
-            Self::NegX => matches!(other, Self::NegX),
-            Self::PosY => matches!(other, Self::PosY),
-            Self::NegY => matches!(other, Self::NegY),
-            Self::PosZ => matches!(other, Self::PosZ),
-            Self::NegZ => matches!(other, Self::NegZ),
+impl enum_set::Enum for CardinalDirection {
+    type Integer = u8;
+}
+
+impl<'de> serde::Deserialize<'de> for CardinalDirection {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = CardinalDirection;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(formatter, "a cardinal direction")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where E: serde::de::Error,
+            {
+                match v {
+                    "east"  => Ok(CardinalDirection::PosX),
+                    "west"  => Ok(CardinalDirection::NegX),
+                    "up"    => Ok(CardinalDirection::PosY),
+                    "down"  => Ok(CardinalDirection::NegY),
+                    "south" => Ok(CardinalDirection::PosZ),
+                    "north" => Ok(CardinalDirection::NegZ),
+                    _ => Err(E::invalid_value(serde::de::Unexpected::Str(v), &"one of: 'east', 'west', 'up', 'down', 'south' or 'north'"))
+                }
+            }
         }
+        deserializer.deserialize_str(Visitor)
     }
 }
-const impl Eq for CardinalDirection {}
 
-impl std::hash::Hash for CardinalDirection {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        core::mem::discriminant(self).hash(state);
-    }
+#[test]
+fn test_cardinal_direction_indices() {
+    assert_eq!(enum_map::Enum::into_usize(CardinalDirection::PosX), 0);
+    assert_eq!(enum_map::Enum::into_usize(CardinalDirection::NegX), 1);
+    assert_eq!(enum_map::Enum::into_usize(CardinalDirection::PosY), 2);
+    assert_eq!(enum_map::Enum::into_usize(CardinalDirection::NegY), 3);
+    assert_eq!(enum_map::Enum::into_usize(CardinalDirection::PosZ), 4);
+    assert_eq!(enum_map::Enum::into_usize(CardinalDirection::NegZ), 5);
 }
 
 #[test]
@@ -555,7 +542,7 @@ fn test_grid_angle_sub() {
 fn test_cardinal_direction_rotate_90() {
     for dir in CardinalDirection::VALUES {
         for axis in Axis::VALUES {
-            if dir.axis() == axis {
+            if dir.axis == axis {
                 assert_eq!(dir.rotate_90_degrees_cw(axis), dir, "{dir} arount {axis}");
             }
             else {
