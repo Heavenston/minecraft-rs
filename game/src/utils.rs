@@ -60,6 +60,24 @@ impl GridAngle {
         Self::Zero, Self::Ninety, Self::OneEighty, Self::TwoSeventy,
     ];
 
+    pub const fn into_bits(self) -> u16 {
+        match self {
+            Self::Zero => 0,
+            Self::Ninety => 1,
+            Self::OneEighty => 2,
+            Self::TwoSeventy => 3,
+        }
+    }
+
+    pub const fn from_bits(value: u16) -> Self {
+        match value {
+            0 => Self::Zero,
+            1 => Self::Ninety,
+            2 => Self::OneEighty,
+            _ => Self::TwoSeventy,
+        }
+    }
+
     pub const fn to_radians_f32(self) -> f32 {
         match self {
             Self::Zero => 0.,

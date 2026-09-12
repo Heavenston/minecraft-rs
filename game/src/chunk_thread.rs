@@ -127,7 +127,7 @@ impl State {
     }
 }
 
-pub fn chunk_thread(seed: u64, receiver: Receiver<ToChunkThreadMessage>, mcdata: Arc<MinecraftData>, device: wgpu::Device, queue: wgpu::Queue, materials: Arc<RwLock<engine::MaterialStore>>) {
+pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata: Arc<MinecraftData>, device: wgpu::Device, queue: wgpu::Queue, materials: Arc<RwLock<engine::MaterialStore>>) {
     let texture = device.create_texture(&wgpu::wgt::TextureDescriptor {
         label: Some("Blocks texture"),
         size: wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 256 },

@@ -70,7 +70,7 @@ impl engine::App for App {
             let queue = ctx.renderer.queue().clone();
             let materials = Arc::clone(ctx.materials_arc);
             std::thread::spawn(move || {
-                chunk_thread::chunk_thread(0, to_chunk_thread_receiver, mcdata, device, queue, materials);
+                chunk_thread::chunk_thread(0, &to_chunk_thread_receiver, mcdata, device, queue, materials);
             });
         }
         self.to_chunk_thread = Some(to_chunk_thread);

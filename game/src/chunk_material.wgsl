@@ -51,9 +51,9 @@ var<immediate> imm: Immediates;
 
 fn extract_offset(data: u32) -> vec3f {
     var output: vec3f;
-    output.x = f32((data >> 8) & 0x0F);
+    output.x = f32((data >> 0) & 0x0F);
     output.y = f32((data >> 4) & 0x0F);
-    output.z = f32((data >> 0) & 0x0F);
+    output.z = f32((data >> 8) & 0x0F);
     return output;
 }
 
@@ -71,8 +71,8 @@ struct VertexOutput {
     var uv = get_cube_uv(vertex_index);
     let pos = get_cube_vertex(uv, imm.direction) + extract_offset(face_data) + imm.position;
 
-    let uv_flipped = (face_data >> 28) & 0x1;
-    let uv_rotation = (face_data >> 29) & 0x3;
+    let uv_flipped = (face_data >> 24) & 0x1;
+    let uv_rotation = (face_data >> 25) & 0x3;
     switch uv_rotation {
     case 1u: { uv = vec2f(1. - uv.y, uv.x); }
     case 2u: { uv = vec2f(1. - uv.x, 1. - uv.y); }
@@ -88,7 +88,7 @@ struct VertexOutput {
     output.position = world.view_projection_matrix * vec4f(pos, 1.0);
     output.texcoord = uv;
     output.tint_index = (face_data >> 12) & 0x0f;
-    output.texture_index = (face_data >> 20) & 0x0f;
+    output.texture_index = (face_data >> 16) & 0xff;
     return output;
 }
 

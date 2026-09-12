@@ -14,35 +14,26 @@ ca::const_assert!(CHUNK_SIZE.y.is_power_of_two());
 ca::const_assert!(CHUNK_SIZE.z.is_power_of_two());
 const CHUNK_OFFSET_BITS: u32 = CHUNK_SIZE.x.ilog2() + CHUNK_SIZE.y.ilog2() + CHUNK_SIZE.z.ilog2();
 ca::const_assert!(CHUNK_OFFSET_BITS == 12);
-const TEXTURE_INDEX_BITS: u32 = 8;
-const MAX_TEXTURE_COUNT: u32 = 2u32.pow(TEXTURE_INDEX_BITS);
-const MAX_TEXTURE_SIZE: usize = MAX_TEXTURE_COUNT as usize;
 
-type FaceInstanceData = u32;
+#[bitfield_struct::bitfield(u32, order = Lsb)]
+#[derive(bytemuck::NoUninit)]
+pub struct FaceInstanceData {
+    #[bits(4)]
+    pub offset_x: usize,
+    #[bits(4)]
+    pub offset_y: usize,
+    #[bits(4)]
+    pub offset_z: usize,
+    #[bits(4)]
+    pub tint_index: u32,
+    #[bits(8)]
+    pub texture_index: usize,
+    #[bits(2)]
+    pub uv_rotation: GridAngle,
+    pub uv_flipped: bool,
 
-ca::const_assert!(
-    (
-        CHUNK_OFFSET_BITS +
-        8 + /* Tint index bits */
-        TEXTURE_INDEX_BITS +
-        1 /* uv flipped bit */ +
-        2 /* uv rotation bits */
-    ) <= FaceInstanceData::BITS
-);
-
-fn create_face_instance_data(offset: USizeVec3, tint_index: u8, texture_index: u32, uv_flipped: bool, uv_rotation: GridAngle) -> FaceInstanceData {
-    debug_assert_eq!(offset.as_uvec3().as_usizevec3(), offset);
-    debug_assert_eq!(tint_index & 0xF, tint_index);
-    debug_assert_eq!(texture_index & (MAX_TEXTURE_COUNT - 1), texture_index);
-    let offset = offset.as_uvec3();
-    let uv_flipped: u32 = u32::from(uv_flipped);
-    let uv_rotation_i: u32 = match uv_rotation {
-        GridAngle::Zero => 0b00,
-        GridAngle::Ninety => 0b01,
-        GridAngle::OneEighty => 0b10,
-        GridAngle::TwoSeventy => 0b11,
-    };
-    ((((((((((uv_rotation_i << 1) | uv_flipped) << TEXTURE_INDEX_BITS) | texture_index) << 8) | u32::from(tint_index)) << CHUNK_SIZE.x.ilog2()) | offset.x) << CHUNK_SIZE.y.ilog2()) | offset.y) << CHUNK_SIZE.z.ilog2() | offset.z
+    #[bits(5)]
+    pub _padding: usize,
 }
 
 const fn create_interior_ranges() -> EnumMap<CardinalDirection, Vec3Range> {
@@ -161,7 +152,7 @@ struct ResolvedModelChoice<'a> {
 struct FullBlockFace {
     texture: ResourceLocation,
     force_translucent: bool,
-    tint_index: u8,
+    tint_index: u32,
     uv_flipped: bool,
     uv_rotation: GridAngle,
 }
@@ -361,8 +352,13 @@ impl ChunkMeshBuilder<'_> {
         let key = DirAndTransparency(dir, transparency);
 
         let texture_idx = self.textures.insert_full(face.texture).0;
-        assert!(texture_idx < MAX_TEXTURE_SIZE);
-        self.quad_submeshes[key].instances.push(create_face_instance_data(pos, face.tint_index, texture_idx.try_into().unwrap(), face.uv_flipped, face.uv_rotation));
+        self.quad_submeshes[key].instances.push(FaceInstanceData::new()
+            .with_offset_x(pos.x).with_offset_y(pos.y).with_offset_z(pos.z)
+            .with_tint_index(face.tint_index)
+            .with_texture_index(texture_idx)
+            .with_uv_flipped(face.uv_flipped)
+            .with_uv_rotation(face.uv_rotation)
+        );
     }
 
     fn finish(self) -> ChunkMesh {
