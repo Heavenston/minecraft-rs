@@ -3,20 +3,20 @@
 
 use glam::{DVec2, DVec3, ISizeVec3, USizeVec2, USizeVec3, Vec3Swizzles as _};
 
-use noise::{HybridMulti, NoiseFn as _, Simplex};
+use noise::{Fbm, MultiFractal as _, NoiseFn as _, Simplex};
 use rand::{Rng as _, RngExt as _, SeedableRng as _, rngs::SmallRng};
 use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, resource_location::location};
 
-const MAX_HEIGHT: f64 = 16.;
-const MIN_HEIGHT: f64 = -16.;
+const MAX_HEIGHT: f64 = 64.;
+const MIN_HEIGHT: f64 = -64.;
 
 pub struct Generator {
     #[expect(dead_code, reason = "not yet used")]
     rng: SmallRng,
     backbone_offset: DVec3,
-    backbone_noise: HybridMulti<Simplex>,
+    backbone_noise: Fbm<Simplex>,
     heightmap_offset: DVec2,
-    heightmap_noise: HybridMulti<Simplex>,
+    heightmap_noise: Fbm<Simplex>,
 }
 
 impl Generator {
@@ -24,28 +24,31 @@ impl Generator {
         let mut rng = SmallRng::seed_from_u64(seed);
         Self {
             backbone_offset: rng.random(),
-            backbone_noise: HybridMulti::new(rng.next_u32())
-                .set_sources(std::iter::repeat_with(|| Simplex::new(rng.next_u32())).take(32).collect()),
+            backbone_noise: Fbm::new(rng.next_u32())
+                .set_octaves(8),
             heightmap_offset: rng.random(),
-            heightmap_noise: HybridMulti::new(rng.next_u32())
-                .set_sources(std::iter::repeat_with(|| Simplex::new(rng.next_u32())).take(32).collect()),
+            heightmap_noise: Fbm::new(rng.next_u32())
+                .set_octaves(6),
             rng,
         }
     }
 
     fn height_at(&self, pos: DVec2) -> f64 {
-        let pos = pos * 0.003 + self.heightmap_offset;
+        let pos = pos * 0.001 + self.heightmap_offset;
         let height = self.heightmap_noise.get(pos.to_array());
         f64::mul_add(f64::midpoint(height, 1.), MAX_HEIGHT - MIN_HEIGHT, MIN_HEIGHT)
     }
 
     fn backbone_at(&self, pos: DVec3) -> f64 {
-        let pos = pos * 0.015 + self.backbone_offset;
-        self.backbone_noise.get(pos.to_array()) / 4.
+        let pos = pos * 0.005 + self.backbone_offset;
+        self.backbone_noise.get(pos.to_array())
     }
 
     fn generate_block(&self, pos: DVec3, height: f64) -> bool {
         let diff = pos.y - height;
+        if diff.abs() > 17. {
+            return diff < 0.;
+        }
         let final_value = (diff / 16.) + self.backbone_at(pos);
 
         final_value < 0.
