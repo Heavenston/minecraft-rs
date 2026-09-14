@@ -246,17 +246,17 @@ impl std::fmt::Display for Axis {
 
 #[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
 pub enum Sign {
-    Negative,
     Positive,
+    Negative,
 }
 
 impl Sign {
-    pub const VALUES: [Self; 2] = [Self::Negative, Self::Positive];
+    pub const VALUES: [Self; 2] = [Self::Positive, Self::Negative];
 
     pub const fn as_i8(self) -> i8 {
         match self {
-            Self::Negative => -1,
             Self::Positive =>  1,
+            Self::Negative => -1,
         }
     }
 
@@ -285,8 +285,8 @@ const impl std::ops::Neg for Sign {
     type Output = Self;
     fn neg(self) -> Self::Output {
         match self {
-            Self::Negative => Self::Positive,
             Self::Positive => Self::Negative,
+            Self::Negative => Self::Positive,
         }
     }
 }

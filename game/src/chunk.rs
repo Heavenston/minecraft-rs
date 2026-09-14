@@ -1,4 +1,6 @@
 
+use std::sync::LazyLock;
+
 use glam::USizeVec3;
 use itertools::Itertools as _;
 use ordermap::{OrderSet, orderset};
@@ -46,6 +48,18 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    #[expect(unused, reason = "unused util")]
+    pub fn empty() -> &'static Self {
+        static VALUE: LazyLock<Chunk> = LazyLock::new(|| Chunk {
+            blocks: ChunkData::Filled,
+            pallette: ChunkPalette { blocks: OrderSet::from_iter([BlockData {
+                id: location!("minecraft:air"),
+                state: String::new(),
+            }]) },
+        });
+        &VALUE
+    }
+
     pub fn new() -> Self {
         Self::new_filled(BlockData {
             id: location!("minecraft:air"),

@@ -5,7 +5,7 @@ use enum_map::EnumMap;
 use glam::{ISizeVec2, ISizeVec3, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, EnumSet, GridAngle, Vec3Range, enum_set::{bit_array_to_integer, integer_to_bit_array}}};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, EnumSet, GridAngle, TwentySixDirection, Vec3Range, enum_set::{bit_array_to_integer, integer_to_bit_array}}};
 
 #[bitfield_struct::bitfield(u8, order = Lsb)]
 #[derive(bytemuck::NoUninit)]
@@ -344,7 +344,7 @@ impl BlockModelResolver {
 struct ChunkMeshingCtx<'chunk, 'neighbor, 'resolver> {
     chunk_pos: ISizeVec3,
     chunk: &'chunk Chunk,
-    neighbors: EnumMap<CardinalDirection, &'neighbor Chunk>,
+    neighbors: EnumMap<TwentySixDirection, &'neighbor Chunk>,
     model_resolver: &'resolver mut BlockModelResolver,
 }
 
@@ -355,13 +355,12 @@ impl ChunkMeshingCtx<'_, '_, '_> {
             self.model_resolver.resolve_block_model(self.chunk.get_data(delta.as_usizevec3()))[0]
                 .culling_directions.is_all()
         }
-        else if let Some(&dir) = CardinalDirection::VALUES.iter().find(|dir| dir.as_isizevec3() == chunk_delta) {
+        else if let Some(&dir) = TwentySixDirection::VALUES.iter().find(|dir| dir.as_isizevec3() == chunk_delta) {
             self.model_resolver.resolve_block_model(self.neighbors[dir].get_data(delta.rem_euclid(CHUNK_SIZE.as_isizevec3()).as_usizevec3()))[0]
                 .culling_directions.is_all()
         }
         else {
-            // TODO
-            false
+            unreachable!()
         }
     }
 
@@ -522,7 +521,7 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
             let faces = &model_for_pos(pos).full_block_faces[direction];
             if faces.is_empty() { continue; }
             let neighbor_block_idx = exterior_neighbor(pos, direction);
-            let neighbor_models = ctx.model_resolver.resolve_block_model(ctx.neighbors[direction].get_data(neighbor_block_idx));
+            let neighbor_models = ctx.model_resolver.resolve_block_model(ctx.neighbors[direction.into()].get_data(neighbor_block_idx));
             let neighbor_model = if let [neighbor_model] = &**neighbor_models {
                 neighbor_model
             } else {
@@ -557,7 +556,7 @@ impl ChunkMesher {
         self.textures.iter().copied()
     }
 
-    pub fn mesh_chunk(&mut self, chunk_pos: ISizeVec3, chunk: &Chunk, neighbors: EnumMap<CardinalDirection, &Chunk>) -> ChunkMesh {
+    pub fn mesh_chunk(&mut self, chunk_pos: ISizeVec3, chunk: &Chunk, neighbors: EnumMap<TwentySixDirection, &Chunk>) -> ChunkMesh {
         let mut builder = ChunkMeshBuilder {
             mcdata: Arc::clone(&self.resolver.mcdata),
             quad_submeshes: EnumMap::default(),

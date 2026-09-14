@@ -12,7 +12,7 @@ use ordermap::OrderMap;
 use parking_lot::RwLock;
 use render_graph::RenderGraph;
 
-use crate::{ToChunkThreadMessage, chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::{ChunkMesher, ChunkTransparencyMode}, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::CardinalDirection};
+use crate::{ToChunkThreadMessage, chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::{ChunkMesher, ChunkTransparencyMode}, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, TwentySixDirection}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ChunkMaterialKey {
@@ -57,7 +57,7 @@ impl MeshingState {
 
     fn mesh_chunk(&mut self, chunk_pos: ISizeVec3) -> bool {
         let chunk = &self.chunks[&chunk_pos];
-        let Ok(neighbors) = EnumMap::<CardinalDirection, _>::try_from_fn(|direction| {
+        let Ok(neighbors) = EnumMap::<TwentySixDirection, _>::try_from_fn(|direction| {
             let new_pos = chunk_pos + direction;
             self.chunks.get(&new_pos).ok_or(())
         }) else { return false };
@@ -160,7 +160,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
     #[expect(clippy::infinite_loop, reason = "intended")]
     loop {
         tracing::info!(distance);
-        for y in -4isize..4isize {
+        for y in -5isize..5isize {
             for dx in -distance..=distance {
                 state.gen_chunk(ISizeVec3::new(dx, y, -distance));
                 state.gen_chunk(ISizeVec3::new(dx, y, distance));
@@ -173,7 +173,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
         }
         distance += 1;
 
-        while let Some(msg) = if distance < 10 { receiver.try_recv().ok() } else { receiver.recv().ok() } {
+        while let Some(msg) = if distance < 20 { receiver.try_recv().ok() } else { receiver.recv().ok() } {
             match msg {
                 ToChunkThreadMessage::RegenWithSeed(new_seed) => {
                     state.generator = crate::proc_gen::Generator::new(new_seed);
