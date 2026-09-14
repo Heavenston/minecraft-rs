@@ -11,7 +11,7 @@
 
 #![allow(clippy::single_call_fn, reason = "in development")]
 
-use std::{sync::Arc, time::{Duration, Instant}};
+use std::{f32::consts::{PI, TAU}, sync::Arc, time::Instant};
 
 use anyhow::Result;
 use crossbeam_channel::Sender;
@@ -40,16 +40,13 @@ struct App {
     vsync: bool,
     enable_wireframe: bool,
     pause_clipping: bool,
-    paused_movement: bool,
+
+    camera_autorotate: bool,
+    camera_position: Vec3,
 
     mc_data: Arc<MinecraftData>,
     previous_update: Option<Instant>,
-    start: Instant,
-    pause_delta: Duration,
-    paused_at: Instant,
     to_chunk_thread: Option<Sender<ToChunkThreadMessage>>,
-
-    distance: f32,
 }
 
 impl App {
@@ -87,29 +84,24 @@ impl engine::App for App {
         ctx.world.clear_color = Vec4::new(0., 0., 0., 1.);
         self.set_enable_wireframe(ctx.renderer.render_graph(), self.enable_wireframe);
         self.set_enable_vsync(ctx.renderer.render_graph(), self.vsync);
-
-        self.distance = 80.;
         
         Ok(())
     }
 
     fn update(&mut self, ctx: &mut engine::Ctx<'_>) -> Result<()> {
-        let mut elapsed = self.start.elapsed().saturating_sub(self.pause_delta);
         let delta_t = self.previous_update.map_or(f32::INFINITY, |i| i.elapsed().as_secs_f32());
         self.previous_update = Some(Instant::now());
-        if self.paused_movement {
-            elapsed = elapsed.saturating_sub(self.paused_at.elapsed());
-        }
-        let time = elapsed.as_secs_f32();
 
         let window_size = ctx.renderer.window().outer_size();
         #[expect(clippy::cast_precision_loss, reason = "")]
         let aspect_ratio = window_size.width as f32 / window_size.height as f32;
 
-        let distance = self.distance;
-        let height = (self.distance / 80.) * 25.;
+        if self.camera_autorotate {
+            self.camera_position = self.camera_position.rotate_y(delta_t * TAU * (1. / 14.));
+        }
+
         {
-            let target_transform = glam::camera::rh::view::look_at_mat4(Vec3::new((time / 2.).cos() * distance, height, (time / 2.).sin() * distance) + Vec3::ONE/2., Vec3::ONE/2., Vec3::Y).inverse_or_zero();
+            let target_transform = glam::camera::rh::view::look_at_mat4(self.camera_position + Vec3::ONE / 2., Vec3::ONE / 2., Vec3::Y).inverse_or_zero();
             ctx.world.camera_transform = target_transform + (ctx.world.camera_transform - target_transform) * f32::exp2(-delta_t / 0.05);
         }
         ctx.world.camera_projection = glam::camera::rh::proj::directx::perspective(50f32.to_radians(), aspect_ratio, 0.01, 1_000.);
@@ -137,26 +129,43 @@ impl engine::App for App {
             tracing::info!(seed, "Changind seed");
             self.to_chunk_thread.as_ref().unwrap().send(ToChunkThreadMessage::RegenWithSeed(seed)).unwrap();
         }
-        if ctx.inputs_state.just_pressed(engine::KeyCode::ArrowUp) {
-            self.distance -= 3.;
+        let speed_mult = if ctx.inputs_state.pressed(engine::KeyCode::ShiftLeft) {
+            2.
+        } else {
+            1.
+        };
+        let rotate_speed = PI * (1. / 3.) * speed_mult;
+        if ctx.inputs_state.pressed(engine::KeyCode::ArrowUp) {
+            self.camera_position = self.camera_position.rotate_towards(Vec3::Y, delta_t * rotate_speed);
         }
-        if ctx.inputs_state.just_pressed(engine::KeyCode::ArrowDown) {
-            self.distance += 3.;
+        if ctx.inputs_state.pressed(engine::KeyCode::ArrowDown) {
+            self.camera_position = self.camera_position.rotate_towards(Vec3::NEG_Y, delta_t * rotate_speed);
         }
-        self.distance = f32::clamp(self.distance, 5., 200.);
-        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyP) {
-            if self.paused_movement {
-                self.paused_movement = false;
-                self.pause_delta += self.paused_at.elapsed();
-            }
-            else {
-                self.paused_movement = true;
-                self.paused_at = Instant::now();
-            }
+        if ctx.inputs_state.pressed(engine::KeyCode::ArrowLeft) {
+            self.camera_position = self.camera_position.rotate_y(delta_t *-rotate_speed);
+        }
+        if ctx.inputs_state.pressed(engine::KeyCode::ArrowRight) {
+            self.camera_position = self.camera_position.rotate_y(delta_t * rotate_speed);
+        }
+
+        let mut dist_diff = 0.;
+        if ctx.inputs_state.pressed(engine::KeyCode::KeyO) {
+            dist_diff += 1.;
+        }
+        if ctx.inputs_state.pressed(engine::KeyCode::KeyL) {
+            dist_diff -= 1.;
+        }
+        if dist_diff != 0. {
+            let (camera_pos_norm, camera_distance) = self.camera_position.normalize_and_length();
+            self.camera_position = camera_pos_norm * (dist_diff * delta_t * 50.).mul_add(speed_mult, camera_distance);
+        }
+
+        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyR) {
+            self.camera_autorotate = !self.camera_autorotate;
         }
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyF) {
             let facing = ctx.world.camera_transform.transform_vector3(Vec3::NEG_Z).xz().round();
-            tracing::info!(%facing);
+            tracing::info!(%facing, camera_position = %self.camera_position, camera_dist = self.camera_position.length());
         }
 
         Ok(())
@@ -172,15 +181,12 @@ async fn main() -> Result<()> {
         vsync: true,
         enable_wireframe: false,
         pause_clipping: false,
-        paused_movement: false,
 
-        distance: 0.,
+        camera_autorotate: false,
+        camera_position: Vec3::new(80., 25., 80.),
 
         mc_data,
         previous_update: None,
-        start: Instant::now(),
-        pause_delta: Duration::ZERO,
-        paused_at: Instant::now(),
         to_chunk_thread: None,
     })?;
 
