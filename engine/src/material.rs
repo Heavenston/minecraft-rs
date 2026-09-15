@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use render_graph::RenderGraph;
 
+use crate::material_store::{GlobalMaterialList, GlobalMaterialTuple};
+
 pub struct RenderGraphWrapper<'a> {
     render_graph: &'a mut RenderGraph,
     added_nodes: Vec<render_graph::UntypedNodeHandle>,
@@ -54,17 +56,18 @@ impl<'a> RenderGraphWrapper<'a> {
     }
 }
 
-pub trait Material: std::any::Any + Send + Sync {
-    fn register_global(render_graph: &mut RenderGraphWrapper<'_>)
-        where Self: Sized,
-    {
+pub trait GlobalMaterial: std::any::Any + Send + Sync {
+    fn register(render_graph: &mut RenderGraphWrapper<'_>) -> Self
+        where Self: Sized;
+    fn update(&mut self, render_graph: &mut RenderGraph) {
         let _ = render_graph;
     }
+}
 
-    fn update_global(render_graph: &mut RenderGraph)
-        where Self: Sized,
-    {
-        let _ = render_graph;
+pub trait Material: std::any::Any + Send + Sync {
+    fn global_materials() -> impl GlobalMaterialList
+        where Self: Sized {
+        GlobalMaterialTuple::<()>::new()
     }
 
     fn register(&mut self, render_graph: &mut RenderGraphWrapper<'_>);

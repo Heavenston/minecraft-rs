@@ -4,8 +4,8 @@ mod material;
 mod material_store;
 
 pub use world::{ WorldUniform, Std140WorldUniform, World };
-pub use material::{ Material, RenderGraphWrapper };
-pub use material_store::{ MaterialStore, MaterialHandle };
+pub use material::{ Material, GlobalMaterial, RenderGraphWrapper };
+pub use material_store::{ MaterialStore, GlobalMaterialList, MaterialHandle, GlobalMaterialTuple };
 pub use harness::{ Renderer, renderer, InputsState, KeyCode };
 use render_graph_nodes::RenderPassConfig;
 pub use wgpu;

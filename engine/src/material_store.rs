@@ -4,8 +4,47 @@ use genmap::{ GenMap, Handle };
 use itertools::chain;
 use render_graph::RenderGraph;
 
-use crate::material::{Material, RenderGraphWrapper};
+use crate::material::{GlobalMaterial, Material, RenderGraphWrapper};
 use static_assertions as sa;
+
+pub struct GlobalMaterialTuple<T>(PhantomData<fn(T) -> T>);
+impl<T> GlobalMaterialTuple<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+impl<T> Default for GlobalMaterialTuple<T> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+impl<T> Copy for GlobalMaterialTuple<T> { }
+impl<T> Clone for GlobalMaterialTuple<T> {
+    fn clone(&self) -> Self { *self }
+}
+
+trait SealedGlobalMaterialList: Copy {
+    fn increment(self, store: &mut MaterialStore);
+    fn decrement(self, store: &mut MaterialStore);
+}
+macro_rules! impl_global_material_list {
+    ($($T:ident),*) => {
+        impl<$($T: GlobalMaterial),*> SealedGlobalMaterialList for GlobalMaterialTuple<($($T,)*)> {
+            fn increment(self, _store: &mut MaterialStore) {
+                $(_store.increment_global_material::<$T>();)*
+            }
+
+            fn decrement(self, _store: &mut MaterialStore) {
+                $(_store.decrement_global_material::<$T>();)*
+            }
+        }
+    };
+}
+variadics_please::all_tuples!(impl_global_material_list, 0, 15, T);
+
+#[expect(private_bounds, reason = "Sealed trait")]
+pub trait GlobalMaterialList: SealedGlobalMaterialList { }
+impl<T: SealedGlobalMaterialList> GlobalMaterialList for T { }
 
 struct StoredMaterial {
     material: Box<dyn Material>,
@@ -48,18 +87,24 @@ impl<M: Material> Clone for MaterialHandle<M> {
     fn clone(&self) -> Self { *self }
 }
 
-struct MaterialTypeData {
+enum GlobalMaterialState {
+    ToRegister(Box<dyn Send + Sync + Fn(&mut RenderGraphWrapper<'_>) -> Box<dyn GlobalMaterial>>),
+    Registered {
+        registered_nodes: Vec<render_graph::UntypedNodeHandle>,
+        value: Box<dyn GlobalMaterial>,
+    },
+}
+
+struct GlobalMaterialData {
     refcount: usize,
-    register: Box<dyn Send + Sync + Fn(&mut RenderGraphWrapper<'_>)>,
-    registered_nodes: Option<Vec<render_graph::UntypedNodeHandle>>,
-    update: Box<dyn Send + Sync + Fn(&mut RenderGraph)>,
+    state: GlobalMaterialState,
 }
 
 #[derive(Default)]
 pub struct MaterialStore {
     material_type_register_queue: HashSet<TypeId>,
     material_type_unregister_queue: HashSet<TypeId>,
-    material_types_datas: HashMap<TypeId, MaterialTypeData>,
+    material_types_datas: HashMap<TypeId, GlobalMaterialData>,
 
     node_unregister_queue: Vec<render_graph::UntypedNodeHandle>,
     materials: GenMap<StoredMaterial>,
@@ -67,27 +112,25 @@ pub struct MaterialStore {
 sa::assert_impl_all!(MaterialStore: Send, Sync);
 
 impl MaterialStore {
-    fn increment_material_type<M: Material>(&mut self) {
+    fn increment_global_material<M: GlobalMaterial>(&mut self) {
         let type_id = TypeId::of::<M>();
         let data = match self.material_types_datas.entry(type_id) {
             hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
             hash_map::Entry::Vacant(vacant) => {
-                vacant.insert(MaterialTypeData {
+                vacant.insert(GlobalMaterialData {
                     refcount: 0,
-                    register: Box::new(|render_graph| M::register_global(render_graph)),
-                    registered_nodes: None,
-                    update: Box::new(|render_graph| M::update_global(render_graph)),
+                    state: GlobalMaterialState::ToRegister(Box::new(|render_graph| Box::new(M::register(render_graph))))
                 })
             },
         };
         data.refcount += 1;
         self.material_type_unregister_queue.remove(&type_id);
-        if data.registered_nodes.is_none() {
+        if matches!(data.state, GlobalMaterialState::ToRegister(_)) {
             self.material_type_register_queue.insert(type_id);
         }
     }
 
-    fn decrement_material_type<M: Material>(&mut self) {
+    fn decrement_global_material<M: GlobalMaterial>(&mut self) {
         let type_id = TypeId::of::<M>();
         let mut entry = match self.material_types_datas.entry(type_id) {
             hash_map::Entry::Occupied(occupied) => occupied,
@@ -96,7 +139,7 @@ impl MaterialStore {
         entry.get_mut().refcount -= 1;
         if entry.get().refcount == 0 {
             self.material_type_register_queue.remove(&type_id);
-            if entry.get().registered_nodes.is_none() {
+            if matches!(entry.get().state, GlobalMaterialState::ToRegister(_)) {
                 debug_assert!(!self.material_type_unregister_queue.contains(&type_id));
                 entry.remove();
             }
@@ -107,7 +150,7 @@ impl MaterialStore {
     }
 
     pub fn add_material<M: Material>(&mut self, material: M) -> MaterialHandle<M> {
-        self.increment_material_type::<M>();
+        M::global_materials().increment(self);
         let handle = self.materials.insert(StoredMaterial::new(material));
         MaterialHandle {
             _material: PhantomData,
@@ -120,7 +163,7 @@ impl MaterialStore {
         self.node_unregister_queue.extend(stored.registered_nodes.into_iter().flatten());
 
         assert_eq!(stored.material.as_ref().type_id(), TypeId::of::<M>());
-        self.decrement_material_type::<M>();
+        M::global_materials().decrement(self);
         
         Some(*(stored.material as Box<dyn Any>).downcast().expect("Correct type associated with handle"))
     }
@@ -135,7 +178,10 @@ impl MaterialStore {
 
     pub(crate) fn update_render_graph(&mut self, render_graph: &mut RenderGraph) {
         let material_types_nodes = self.material_type_unregister_queue.drain()
-            .flat_map(|material_type_id| self.material_types_datas.remove(&material_type_id).and_then(|m| m.registered_nodes).expect("unregister material exists and has registered nodes"));
+            .flat_map(|material_type_id| self.material_types_datas.remove(&material_type_id).map(|m| match m.state {
+                GlobalMaterialState::ToRegister(_) => unreachable!("global materials to be unregistered should be registered"),
+                GlobalMaterialState::Registered { registered_nodes, .. } => registered_nodes,
+            }).expect("global materials to be unregistered should exist"));
         let material_nodes = self.node_unregister_queue.drain(..);
         for node in chain!(material_types_nodes, material_nodes) {
             render_graph.remove_node_untyped(node);
@@ -144,15 +190,23 @@ impl MaterialStore {
         #[expect(clippy::iter_over_hash_type, reason = "Order (should) not matter")]
         for type_id in self.material_type_register_queue.drain() {
             let data = self.material_types_datas.get_mut(&type_id).expect("materials types scheduled to registering exists");
-            debug_assert!(data.registered_nodes.is_none());
+            let register = match &data.state {
+                GlobalMaterialState::ToRegister(register) => register,
+                GlobalMaterialState::Registered { .. } => unreachable!("global materials to register should not be already registered"),
+            };
             let mut wrapper = RenderGraphWrapper::new(render_graph);
-            (data.register)(&mut wrapper);
-            data.registered_nodes = Some(wrapper.finish());
+            let value = register(&mut wrapper);
+            data.state = GlobalMaterialState::Registered {
+                registered_nodes: wrapper.finish(),
+                value,
+            };
         }
 
         #[expect(clippy::iter_over_hash_type, reason = "Order (should) not matter")]
         for data in self.material_types_datas.values_mut() {
-            (data.update)(render_graph);
+            if let GlobalMaterialState::Registered { value, .. } = &mut data.state {
+                value.update(render_graph);
+            }
         }
 
         for stored_material in self.materials.values_mut().iter_mut() {

@@ -21,6 +21,7 @@ parking_lot = { version = "0.12.5", features = ["arc_lock"] }
 thiserror = "2.0.20"
 crevice = { workspace = true }
 static_assertions = "1.1.0"
+variadics_please = "2.0.0"
 
 [lints]
 workspace = true
