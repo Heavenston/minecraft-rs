@@ -88,7 +88,7 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
@@ -147,6 +147,7 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::RenderGraphWrapp
         ) -> (@bind_group) {
             let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
                 label: None,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
                 ..Default::default()
             });
             OutputValue(device.create_bind_group(&wgpu::BindGroupDescriptor {

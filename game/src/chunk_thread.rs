@@ -6,13 +6,15 @@ use anyhow::{Context as _, Result};
 use crossbeam_channel::Receiver;
 use engine::{MaterialHandle, wgpu::{self, util::DeviceExt as _}};
 use enum_map::EnumMap;
-use glam::{ISizeVec3, USizeVec3, Vec3, Vec4};
+use glam::{ISizeVec3, U8Vec4, USizeVec3, Vec3, Vec4, Vec4Swizzles as _};
 use image::{EncodableLayout as _, Pixel as _};
 use ordermap::OrderMap;
 use parking_lot::RwLock;
 use render_graph::RenderGraph;
 
 use crate::{ToChunkThreadMessage, chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::{ChunkMesher, ChunkTransparencyMode}, data_extractor::MinecraftData, materials::{ChunkMaterial, ChunkRenderData}, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, TwentySixDirection}};
+
+const MIPMAP_LEVELS: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ChunkMaterialKey {
@@ -107,6 +109,31 @@ impl MeshingState {
                 height: 16,
                 depth_or_array_layers: 1,
             });
+            let mut premimage = texture_data.image.clone();
+            for p in premimage.pixels_mut() {
+                let v = U8Vec4::from_array(p.0);
+                let result = ((v.xyz().as_u16vec3() * u16::from(v.w)) / 255u16).as_u8vec3();
+                p.0[0..3].copy_from_slice(&result.to_array());
+            }
+            let premimage = premimage;
+            for level in 1..MIPMAP_LEVELS {
+                let nimage = image::imageops::resize(&premimage, texture_data.image.width()/2u32.pow(level), texture_data.image.height()/2u32.pow(level), image::imageops::FilterType::Triangle);
+                println!("[{level}] {}x{}", nimage.width(), nimage.height());
+                self.queue.write_texture(wgpu::TexelCopyTextureInfoBase {
+                    texture: &self.texture,
+                    mip_level: level,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: i.try_into().unwrap() },
+                    aspect: wgpu::TextureAspect::All,
+                }, nimage.as_bytes(), wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(nimage.width() * 4),
+                    rows_per_image: None,
+                }, wgpu::Extent3d {
+                    width: nimage.width(),
+                    height: nimage.height(),
+                    depth_or_array_layers: 1,
+                });
+            }
         }
     }
 }
@@ -131,7 +158,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
     let texture = device.create_texture(&wgpu::wgt::TextureDescriptor {
         label: Some("Blocks texture"),
         size: wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 256 },
-        mip_level_count: 1,
+        mip_level_count: MIPMAP_LEVELS,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,

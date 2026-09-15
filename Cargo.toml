@@ -87,3 +87,4 @@ missing_errors_doc = "allow"
 large_enum_variant = "allow" # If it is important this will be discovered anyway. Most times this does not matter.
 significant_drop_tightening = "allow" # False positives on what consists of "usage"
 default_trait_access = "allow"
+reversed_empty_ranges = "allow" # Usually not a but and expected (maybe driven by a constant)
