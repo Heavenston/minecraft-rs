@@ -5,15 +5,13 @@ use enum_map::EnumMap;
 use glam::{ISizeVec2, ISizeVec3, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
 
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model::{self, Texture}}, resource_location::ResourceLocation, utils::{CardinalDirection, EnumSet, GridAngle, TwentySixDirection, Vec3Range, enum_set::{bit_array_to_integer, integer_to_bit_array}}};
+use crate::{
+    chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model}, resource_location::ResourceLocation, utils::{
+        AABB2, AABB3, Axis, AxisVec3Ext as _, CardinalDirection, EnumSet, Gather as _, GridAngle, TwentySixDirection, Vec3Range
+    },
+};
 
-#[bitfield_struct::bitfield(u8, order = Lsb)]
-#[derive(bytemuck::NoUninit)]
-struct FaceAmbientOcclusion {
-    #[bits(8, from = integer_to_bit_array::<_, u8>, into = bit_array_to_integer::<_, u8>)]
-    faces: [bool; 8],
-}
-
+/// This bit field is read from shaders so changes here should be reflected
 #[bitfield_struct::bitfield(u32, order = Lsb)]
 #[derive(bytemuck::NoUninit)]
 pub struct FaceInstanceData {
@@ -115,16 +113,31 @@ pub struct QuadSubMesh {
     pub instances: Box<[FaceInstanceData]>,
 }
 
-#[expect(dead_code, reason = "todo")]
-pub struct FullVertex {
-    pub pos: Vec3,
-    pub uv: Vec2,
-    pub texture: u32,
+#[bitfield_struct::bitfield(u32, order = Lsb)]
+#[derive(bytemuck::NoUninit)]
+pub struct SubMeshVertexBits {
+    #[bits(2)]
+    pub tint_index: u32,
+    #[bits(7)]
+    pub texture_index: usize,
+    #[bits(3)]
+    pub face_tint: usize,
+    #[bits(20)]
+    pub _padding: usize,
 }
 
-#[expect(dead_code, reason = "todo")]
+#[repr(C)]
+#[derive(bytemuck::NoUninit, Debug, Clone, Copy)]
+pub struct SubMeshVertex {
+    pub pos: Vec3,
+    pub uv: Vec2,
+    // Because of alignment we have a full 32bits remaining
+    pub bits: SubMeshVertexBits,
+}
+
 pub struct SubMesh {
-    pub vertices: Vec<FullVertex>,
+    pub transparency: ChunkTransparencyMode,
+    pub vertices: Box<[SubMeshVertex]>,
 }
 
 #[derive(Default)]
@@ -132,21 +145,13 @@ struct IncompleteQuadSubMesh {
     instances: Vec<FaceInstanceData>,
 }
 
-#[expect(dead_code, reason = "todo")]
-struct IncompleteSubMeshInstance {
-    model: usize,
-    culled: EnumSet<CardinalDirection>,
-}
-
-#[expect(dead_code, reason = "todo")]
+#[derive(Default)]
 struct IncompleteSubMesh {
-    models: Vec<usize>,
-    instances: Vec<IncompleteSubMeshInstance>,
+    pub vertices: Vec<SubMeshVertex>,
 }
 
 pub struct ChunkMesh {
     pub quad_submeshes: Box<[QuadSubMesh]>,
-    #[expect(dead_code, reason = "todo")]
     pub submeshes: Box<[SubMesh]>,
 }
 
@@ -157,6 +162,7 @@ struct ResolvedTexture {
 }
 
 struct ResolvedElements<'a> {
+    enable_ambient_occlusion: bool,
     model: ResourceLocation,
     elements: &'a [model::Element],
     textures: HashMap<String, ResolvedTexture>,
@@ -170,18 +176,53 @@ struct ResolvedModelChoice<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct FullBlockFace {
-    texture: ResourceLocation,
+struct FaceTextureData {
+    location: ResourceLocation,
     force_translucent: bool,
     tint_index: u32,
+}
+
+#[derive(Debug, Clone)]
+struct FullBlockFace {
+    direction: CardinalDirection,
     uv_flipped: bool,
     uv_rotation: GridAngle,
+    texture: FaceTextureData,
+}
+
+#[derive(Debug, Clone)]
+struct BlockFaceVertex {
+    pos: Vec3,
+    uv: Vec2,
+}
+
+#[derive(Debug, Clone)]
+struct BlockFace {
+    shade_direction: Option<CardinalDirection>,
+    /// Vertices counter clockwise starting from the bottom left.
+    vertices: [BlockFaceVertex; 4],
+    texture: FaceTextureData,
+}
+
+#[derive(Debug, Clone)]
+struct ModelFaceList {
+    full_faces: Box<[FullBlockFace]>,
+    faces: Box<[BlockFace]>,
+}
+
+impl ModelFaceList {
+    fn is_empty(&self) -> bool {
+        self.full_faces.is_empty() && self.faces.is_empty()
+    }
 }
 
 #[derive(Debug, Clone)]
 struct BlockModel {
+    enable_ambient_occlusion: bool,
     culling_directions: EnumSet<CardinalDirection>,
-    full_block_faces: EnumMap<CardinalDirection, Box<[FullBlockFace]>>,
+    /// Maps the direction each face is *culled* to the list of faces.
+    cullable_faces: EnumMap<CardinalDirection, ModelFaceList>,
+    faces: ModelFaceList,
 }
 
 struct BlockModelResolver {
@@ -190,25 +231,25 @@ struct BlockModelResolver {
 }
 
 impl BlockModelResolver {
-    fn resolve_model_elements(&self, mut textures: HashMap<String, ResolvedTexture>, model_location: ResourceLocation) -> ResolvedElements<'_> {
+    fn resolve_model_elements_rec(&self, mut textures: HashMap<String, ResolvedTexture>, ambientocclusion: Option<bool>, model_location: ResourceLocation) -> ResolvedElements<'_> {
         let model = self.mcdata.model(model_location);
 
         #[expect(clippy::iter_over_hash_type, reason = "ordering should not matter -> not 'self' references")]
         for (name, location) in &model.textures {
             match location {
-                &Texture::Location(location) => {
+                &model::Texture::Location(location) => {
                     textures.insert(name.clone(), ResolvedTexture {
                         force_translucent: false,
                         location,
                     });
                 },
-                &Texture::Detailed { location, force_translucent } => {
+                &model::Texture::Detailed { location, force_translucent } => {
                     textures.insert(name.clone(), ResolvedTexture {
                         force_translucent,
                         location,
                     });
                 },
-                Texture::Reference(reference) => {
+                model::Texture::Reference(reference) => {
                     if let Some(&val) = textures.get(reference.trim_start_matches('#')) {
                         textures.insert(name.clone(), val);
                     }
@@ -219,26 +260,33 @@ impl BlockModelResolver {
             }
         }
 
+        let ambientocclusion = ambientocclusion.or(model.ambientocclusion);
         match (&model.elements, &model.parent) {
             // If the element array is provided, this overides the parent
             (Some(elements), _) => {
                 ResolvedElements {
+                    enable_ambient_occlusion: ambientocclusion.unwrap_or(true),
                     model: model_location,
                     elements,
                     textures,
                 }
             },
             (None, &Some(parent)) => {
-                self.resolve_model_elements(textures, parent)
+                self.resolve_model_elements_rec(textures, ambientocclusion, parent)
             },
             (None, None) => {
                 ResolvedElements {
+                    enable_ambient_occlusion: ambientocclusion.unwrap_or(true),
                     model: model_location,
                     elements: &[],
                     textures,
                 }
             }
         }
+    }
+
+    fn resolve_model_elements(&self, model_location: ResourceLocation) -> ResolvedElements<'_> {
+        self.resolve_model_elements_rec(HashMap::new(), None, model_location)
     }
 
     fn resolve_block_elements(&self, block_data: &BlockData) -> Box<[ResolvedModelChoice<'_>]> {
@@ -253,7 +301,7 @@ impl BlockModelResolver {
             .iter()
             .map(|blockstate_model| {
                 ResolvedModelChoice {
-                    elements: self.resolve_model_elements(HashMap::new(), blockstate_model.location),
+                    elements: self.resolve_model_elements(blockstate_model.location),
                     model_rotation: blockstate_model.rotation,
                     uvlock: blockstate_model.uvlock,
                     weight: blockstate_model.weight,
@@ -263,68 +311,125 @@ impl BlockModelResolver {
     }
 
     fn resolved_elements_to_block_model(
-        &self,
         ResolvedModelChoice {
             elements: ResolvedElements {
-                model, elements, textures,
+                enable_ambient_occlusion,
+                model: model_location, elements, textures,
             },
             model_rotation, uvlock, weight,
         }: ResolvedModelChoice<'_>
     ) -> BlockModel {
-        let mut full_block_faces = EnumMap::<CardinalDirection, Vec<FullBlockFace>>::default();
-        for element in elements {
-            if element.rotation.is_some() {
-                tracing::warn!(?model, "Unsuported block model element rotation");
-            }
-            let from = Vec3::from_array(element.from);
-            let to = Vec3::from_array(element.to);
-
-            #[expect(clippy::iter_over_hash_type, reason = "iteration order does not matter")]
-            for (&direction, face) in &element.faces {
-                let Some(&texture) = textures.get(face.texture.trim_start_matches('#'))
-                else { tracing::warn!(?model, texture = face.texture, ?textures, "Could not get face texture ref"); continue };
-
-                let uv = face.uv.unwrap_or_else(|| {
-                    model::FaceUv { from: from - direction.axis, to: to - direction.axis }
-                });
-                let (direction, uv_rotation) = model_rotation.rotate_with_uv(direction);
-                let uv_rotation = if uvlock { GridAngle::Zero } else { uv_rotation } + face.rotation;
-                let axis = direction.axis;
-
-                let uv_full = if uv == model::FaceUv::FULL_FACE {
-                    Some(false)
-                } else if uv.swap_x() == model::FaceUv::FULL_FACE {
-                    Some(true)
-                } else {
-                    None
-                };
-                
-                if (from - axis) == Vec2::new(0., 0.) && (to - axis) == Vec2::new(16., 16.) && let Some(uv_flipped) = uv_full {
-                    full_block_faces[direction].push(FullBlockFace {
-                        texture: texture.location,
-                        force_translucent: texture.force_translucent,
-                        tint_index: (face.tintindex + 1i32).try_into().unwrap(),
-                        uv_flipped,
-                        uv_rotation,
-                    });
-                }
-                else {
-                    tracing::warn!(?face, ?direction, ?uv, "Unsuported non-full face");
-                }
-            }
-        }
-        let culling_directions = full_block_faces.iter()
-            .filter(|(_, faces)| faces.iter().any(|face| !face.force_translucent && self.mcdata.texture(face.texture).is_opaque()))
-            .map(|(dir,_)| dir)
-            .collect::<EnumSet<CardinalDirection>>();
-
         if weight != 1 {
             tracing::warn!("Unsuported non =1 weight");
         }
 
+        #[derive(Default)]
+        struct IncompleteFaceList {
+            full_faces: Vec<FullBlockFace>,
+            faces: Vec<BlockFace>,
+        }
+        impl From<IncompleteFaceList> for ModelFaceList {
+            fn from(val: IncompleteFaceList) -> Self {
+                Self {
+                    full_faces: val.full_faces.into(),
+                    faces: val.faces.into(),
+                }
+            }
+        }
+
+        let mut cullable_faces = EnumMap::<CardinalDirection, IncompleteFaceList>::default();
+        let mut faces = IncompleteFaceList::default();
+        let mut culling_directions = EnumSet::<CardinalDirection>::empty();
+        for &model::Element { from: element_from, to: element_to, rotation: ref element_rotation, shade, shade_direction_override, light_emission, faces: ref model_faces } in elements {
+            if element_rotation.is_some() {
+                tracing::warn!(?model_location, "Unsuported block model element rotation");
+            }
+            if light_emission != 0 {
+                tracing::warn!(?model_location, light_emission, "Unsuported block model light emission");
+            }
+
+            let element_aabb = AABB3 {
+                min: Vec3::from_array(element_from),
+                max: Vec3::from_array(element_to),
+            };
+
+            #[expect(clippy::iter_over_hash_type, reason = "iteration order does not matter")]
+            for (&direction, &model::Face {
+                ref texture,
+                uv,
+                cullface,
+                rotation: texture_rotation,
+                tintindex,
+            }) in model_faces {
+                let Some(&texture) = textures.get(texture.trim_start_matches('#'))
+                else { tracing::warn!(?model_location, texture, ?textures, "Could not get face texture ref"); continue };
+
+                let uv = uv.unwrap_or_else(|| {
+                    let [from, to] = element_aabb.face_vertices(direction)
+                        .gather([0,2])
+                        .map(|v| {
+                            let (xs, xp) = if direction == CardinalDirection::NegZ || direction == CardinalDirection::PosX { (-1., 16.) } else { (1., 0.) };
+                            let (ys, yp) = if direction != CardinalDirection::PosY { (-1., 16.) } else { (1., 0.) };
+                            v.project(direction.axis) * Vec2::new(xs, ys) + Vec2::new(xp, yp)
+                        });
+                    model::FaceUv { from, to, }
+                });
+                let (direction, uv_rotation) = model_rotation.rotate_with_uv(direction);
+                let cullface = cullface.map(|cullface| model_rotation.rotate_direction(cullface));
+                let uv_rotation = if uvlock { GridAngle::Zero } else { uv_rotation } + texture_rotation;
+                let axis = direction.axis;
+
+                let can_be_full_face =
+                    (element_aabb.min - axis) == Vec2::new(0., 0.) && (element_aabb.max - axis) == Vec2::new(16., 16.) &&
+                    shade && shade_direction_override.is_none() &&
+                    uv.from.min(uv.to) == Vec2::new(0.,0.) && uv.from.max(uv.to) == Vec2::new(16.,16.) &&
+                    element_rotation.is_none()
+                ;
+                
+                let face_texture_data = FaceTextureData {
+                    location: texture.location,
+                    force_translucent: texture.force_translucent,
+                    tint_index: (tintindex + 1i32).try_into().unwrap(),
+                };
+
+                let list = cullface.map_or(&mut faces, |cullface| &mut cullable_faces[cullface]);
+                if can_be_full_face {
+                    culling_directions.insert(direction);
+                    list.full_faces.push(FullBlockFace {
+                        direction,
+                        uv_flipped: uv.from.x > uv.to.x,
+                        uv_rotation,
+                        texture: face_texture_data,
+                    });
+                }
+                else {
+                    if enable_ambient_occlusion {
+                        tracing::warn!(?model_location, "Unsuported ambient occlusion on non-full face");
+                    }
+
+                    let rotation = element_rotation.as_ref().map(model::ElementRotation::to_affine).unwrap_or_default();
+                    let vertices_positions = element_aabb.face_vertices(direction);
+                    let vertices_uvs = AABB2 { min: uv.from, max: uv.to }.vertices();
+
+                    list.faces.push(BlockFace {
+                        shade_direction: shade.then(|| shade_direction_override.unwrap_or(direction)),
+                        vertices: std::array::from_fn(|i| {
+                            BlockFaceVertex {
+                                pos: rotation.transform_point3(vertices_positions[i]),
+                                uv: vertices_uvs[i],
+                            }
+                        }),
+                        texture: face_texture_data,
+                    });
+                }
+            }
+        }
+
         BlockModel {
+            enable_ambient_occlusion,
             culling_directions,
-            full_block_faces: full_block_faces.map(|_, vec| vec.into_boxed_slice()),
+            cullable_faces: cullable_faces.map(|_,list| list.into()),
+            faces: faces.into(),
         }
     }
 
@@ -335,7 +440,7 @@ impl BlockModelResolver {
 
         let models = self.resolve_block_elements(block_data)
             .into_iter()
-            .map(|elements| self.resolved_elements_to_block_model(elements))
+            .map(|elements| Self::resolved_elements_to_block_model(elements))
             .collect();
         self.cache.entry(block_data.clone()).insert_entry(models).into_mut()
     }
@@ -420,24 +525,28 @@ fn get_coordinate_seed(pos: ISizeVec3) -> u64 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
-struct DirAndTransparency(CardinalDirection, ChunkTransparencyMode);
+struct QuadSubmeshKey(CardinalDirection, ChunkTransparencyMode);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, enum_map::Enum)]
+struct SubmeshKey(ChunkTransparencyMode);
 
 struct ChunkMeshBuilder<'a> {
     mcdata: Arc<MinecraftData>,
     textures: &'a mut OrderSet<ResourceLocation>,
-    quad_submeshes: EnumMap<DirAndTransparency, IncompleteQuadSubMesh>,
+    quad_submeshes: EnumMap<QuadSubmeshKey, IncompleteQuadSubMesh>,
+    submeshes: EnumMap<SubmeshKey, IncompleteSubMesh>,
 }
 
 impl ChunkMeshBuilder<'_> {
-    fn push_face(&mut self, dir: CardinalDirection, pos: USizeVec3, face: &FullBlockFace, ambient_occlusion: usize) {
-        let texture_data = self.mcdata.texture(face.texture);
-        let transparency = ChunkTransparencyMode::from_data(texture_data, face.force_translucent);
-        let key = DirAndTransparency(dir, transparency);
+    fn push_full_face(&mut self, pos: USizeVec3, face: &FullBlockFace, ambient_occlusion: usize) {
+        let texture_data = self.mcdata.texture(face.texture.location);
+        let transparency = ChunkTransparencyMode::from_data(texture_data, face.texture.force_translucent);
+        let key = QuadSubmeshKey(face.direction, transparency);
 
-        let texture_idx = self.textures.insert_full(face.texture).0;
+        let texture_idx = self.textures.insert_full(face.texture.location).0;
         self.quad_submeshes[key].instances.push(FaceInstanceData::new()
             .with_offset_x(pos.x).with_offset_y(pos.y).with_offset_z(pos.z)
-            .with_tint_index(face.tint_index)
+            .with_tint_index(face.texture.tint_index)
             .with_texture_index(texture_idx)
             .with_uv_flipped(face.uv_flipped)
             .with_uv_rotation(face.uv_rotation)
@@ -445,10 +554,35 @@ impl ChunkMeshBuilder<'_> {
         );
     }
 
+    fn push_face(&mut self, pos: USizeVec3, face: &BlockFace, ambient_occlusion: usize) {
+        // TODO (a warn is printed during model resolving).
+        // No implemented because ambient occlusion with vertices instead of
+        // instanced faces involves interpolation i do not want to deal with
+        // right now, and i am not sure there is any block model that uses
+        // ambient occlusion on non-full faces.
+        let _ = ambient_occlusion;
+
+        let texture_data = self.mcdata.texture(face.texture.location);
+        let transparency = ChunkTransparencyMode::from_data(texture_data, face.texture.force_translucent);
+        let key = SubmeshKey(transparency);
+
+        let texture_idx = self.textures.insert_full(face.texture.location).0;
+        let vertices = face.vertices.each_ref().map(|vertex| SubMeshVertex {
+            pos: (vertex.pos / 16.) + pos.as_vec3(),
+            uv: vertex.uv / 16.,
+            bits: SubMeshVertexBits::new()
+                .with_tint_index(face.texture.tint_index)
+                .with_texture_index(texture_idx)
+                .with_face_tint(face.shade_direction.map_or(7, enum_map::Enum::into_usize))
+            ,
+        });
+        self.submeshes[key].vertices.extend([0,1,3,3,1,2].map(|i| vertices[i]));
+    }
+
     fn finish(self) -> ChunkMesh {
         let quad_submeshes = self.quad_submeshes.into_iter()
             .filter(|(_, sub_mesh)| !sub_mesh.instances.is_empty())
-            .map(|(DirAndTransparency(direction, transparency), IncompleteQuadSubMesh { instances })| {
+            .map(|(QuadSubmeshKey(direction, transparency), IncompleteQuadSubMesh { instances })| {
                 QuadSubMesh {
                     direction,
                     transparency,
@@ -456,10 +590,19 @@ impl ChunkMeshBuilder<'_> {
                 }
             })
             .collect();
+        let submeshes = self.submeshes.into_iter()
+            .filter(|(_, submesh)| !submesh.vertices.is_empty())
+            .map(|(SubmeshKey(transparency), IncompleteSubMesh { vertices })| {
+                SubMesh {
+                    transparency,
+                    vertices: vertices.into_boxed_slice(),
+                }
+            })
+            .collect();
 
         ChunkMesh {
             quad_submeshes,
-            submeshes: Box::default(),
+            submeshes,
         }
     }
 }
@@ -486,7 +629,7 @@ impl<T> SliceExt<T> for [T] {
 }
 
 fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
-    let chunk_offset = ctx.chunk_pos * CHUNK_SIZE.as_isizevec3();
+    let chunk_global_block_offset = ctx.chunk_pos * CHUNK_SIZE.as_isizevec3();
 
     let block_models: Box<[Arc<[BlockModel]>]> = ctx.chunk.palette().iter()
         .map(|block_data| Arc::clone(ctx.model_resolver.resolve_block_model(block_data)))
@@ -498,40 +641,64 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
             model
         }
         else {
-            let global_pos = chunk_offset + pos.as_isizevec3();
+            let global_pos = chunk_global_block_offset + pos.as_isizevec3();
             models.get_modulo(get_coordinate_seed(global_pos))
         }
     };
 
-
     for direction in CardinalDirection::VALUES {
         for pos in INTERIOR_RANGES[direction] {
-            let faces = &model_for_pos(pos).full_block_faces[direction];
+            let model = model_for_pos(pos);
+            let faces = &model.cullable_faces[direction];
             if faces.is_empty() { continue; }
-            if model_for_pos(pos.checked_add_signed(direction.as_isizevec3()).expect("INTERIOR_RANGE should only return positions for which this works")).culling_directions.contains(direction.opposit()) { continue }
-            for face in faces {
-                let ao = ctx.accumulate_ambient_occlusion(direction, pos);
-                builder.push_face(direction, pos, face, ao);
+
+            if model_for_pos(pos.wrapping_add_signed(direction.as_isizevec3()) /* INTERIOR_RANGE should only return positions for which this does not wrap */).culling_directions.contains(direction.opposit()) { continue }
+
+            let ao = if model.enable_ambient_occlusion { ctx.accumulate_ambient_occlusion(direction, pos) } else { 0 };
+            for face in &faces.full_faces {
+                builder.push_full_face(pos, face, ao);
+            }
+            for face in &faces.faces {
+                builder.push_face(pos, face, ao);
             }
         }
     }
 
     for direction in CardinalDirection::VALUES {
         for pos in EXTERIOR_RANGES[direction] {
-            let faces = &model_for_pos(pos).full_block_faces[direction];
+            let model = model_for_pos(pos);
+            let faces = &model.cullable_faces[direction];
             if faces.is_empty() { continue; }
+
             let neighbor_block_idx = exterior_neighbor(pos, direction);
             let neighbor_models = ctx.model_resolver.resolve_block_model(ctx.neighbors[direction.into()].get_data(neighbor_block_idx));
             let neighbor_model = if let [neighbor_model] = &**neighbor_models {
                 neighbor_model
             } else {
-                neighbor_models.get_modulo(get_coordinate_seed(chunk_offset + pos.as_isizevec3() + direction))
+                neighbor_models.get_modulo(get_coordinate_seed(chunk_global_block_offset + pos.as_isizevec3() + direction))
             };
             if neighbor_model.culling_directions.contains(direction.opposit()) { continue }
-            for face in faces {
-                let ao = ctx.accumulate_ambient_occlusion(direction, pos);
-                builder.push_face(direction, pos, face, ao);
+
+            let ao = if model.enable_ambient_occlusion { ctx.accumulate_ambient_occlusion(direction, pos) } else { 0 };
+            for face in &faces.full_faces {
+                builder.push_full_face(pos, face, ao);
             }
+            for face in &faces.faces {
+                builder.push_face(pos, face, ao);
+            }
+        }
+    }
+
+    for pos in Vec3Range(USizeVec3::ZERO, CHUNK_SIZE) {
+        let model = model_for_pos(pos);
+        let faces = &model.faces;
+        if faces.is_empty() { continue; }
+
+        for face in &faces.full_faces {
+            builder.push_full_face(pos, face, 0);
+        }
+        for face in &faces.faces {
+            builder.push_face(pos, face, 0);
         }
     }
 }
@@ -559,8 +726,9 @@ impl ChunkMesher {
     pub fn mesh_chunk(&mut self, chunk_pos: ISizeVec3, chunk: &Chunk, neighbors: EnumMap<TwentySixDirection, &Chunk>) -> ChunkMesh {
         let mut builder = ChunkMeshBuilder {
             mcdata: Arc::clone(&self.resolver.mcdata),
-            quad_submeshes: EnumMap::default(),
             textures: &mut self.textures,
+            quad_submeshes: EnumMap::default(),
+            submeshes: EnumMap::default(),
         };
         let mut ctx = ChunkMeshingCtx {
             chunk_pos,

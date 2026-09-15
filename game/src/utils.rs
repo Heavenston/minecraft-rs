@@ -1,5 +1,5 @@
-#![expect(dead_code, reason = "Utils with functions maybe not used")]
-#![expect(unused_imports, reason = "Utils with functions maybe not used")]
+#![allow(dead_code, reason = "Utils with functions maybe not used")]
+#![allow(unused_imports, reason = "Utils with functions maybe not used")]
 
 use glam::{DVec2, DVec3, I8Vec2, I8Vec3, ISizeVec2, ISizeVec3, USizeVec3, Vec2, Vec3};
 
@@ -7,6 +7,10 @@ pub mod enum_set;
 pub use enum_set::{ EnumSet };
 mod glam_ext;
 pub use glam_ext::*;
+mod aabb;
+pub use aabb::*;
+mod gather;
+pub use gather::Gather;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vec3Range(pub USizeVec3, pub USizeVec3);

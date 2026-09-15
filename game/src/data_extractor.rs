@@ -65,10 +65,6 @@ impl TextureInfo {
             has_translucent,
         })
     }
-
-    pub fn is_opaque(&self) -> bool {
-        !self.has_transparent && !self.has_translucent
-    }
 }
 
 pub struct MinecraftData {

@@ -149,6 +149,13 @@ impl FaceUv {
         }
     }
 
+    pub const fn swap_axis(self) -> Self {
+        Self {
+            from: Vec2::new(self.from.y, self.from.x),
+            to: Vec2::new(self.to.y, self.to.x),
+        }
+    }
+
     pub const fn rotate(self, angle: GridAngle) -> Self {
         match angle {
             GridAngle::Zero => self,

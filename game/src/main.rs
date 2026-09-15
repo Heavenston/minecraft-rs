@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+#![feature(specialization)]
 #![feature(impl_restriction)]
 #![feature(const_closures)]
 #![feature(const_trait_impl)]
@@ -10,6 +11,7 @@
 #![feature(const_index)]
 
 #![allow(clippy::single_call_fn, reason = "in development")]
+#![allow(incomplete_features, reason = "specialization")]
 
 use std::{f32::consts::{PI, TAU}, sync::Arc, time::Instant};
 

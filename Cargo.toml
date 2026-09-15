@@ -89,3 +89,4 @@ significant_drop_tightening = "allow" # False positives on what consists of "usa
 default_trait_access = "allow"
 reversed_empty_ranges = "allow" # Usually not a but and expected (maybe driven by a constant)
 type_complexity = "allow" # If a type is only used once who cares
+if_not_else = "allow" # Sometimes more clear

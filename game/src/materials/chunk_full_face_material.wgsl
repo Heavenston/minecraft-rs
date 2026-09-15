@@ -75,8 +75,8 @@ struct VertexOutput {
     @location(1) uv: vec2f,
     @interpolate(flat) @location(2) tint_index: u32,
     @interpolate(flat) @location(3) texture_index: u32,
-    @interpolate(flat) @location(5) ambient_data: u32,
-    @location(6) nearest_face: vec4f,
+    @interpolate(flat) @location(4) ambient_data: u32,
+    @location(5) nearest_face: vec4f,
 };
 
 @vertex fn vs(

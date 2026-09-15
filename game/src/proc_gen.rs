@@ -58,7 +58,9 @@ impl Generator {
         let mut chunk = Chunk::new();
         let top_block = BlockData { id: location!("minecraft:grass_block"), state: "snowy=false".to_string(), };
         let bottom_block = BlockData { id: location!("minecraft:dirt"), state: String::new(), };
-        let log_block = BlockData { id: location!("minecraft:oak_log"), state: "axis=y".to_string(), };
+        // let log_block = BlockData { id: location!("minecraft:oak_log"), state: "axis=y".to_string(), };
+        // let log_block = BlockData { id: location!("minecraft:anvil"), state: "facing=east".to_string(), };
+        let log_block = BlockData { id: location!("minecraft:cauldron"), state: String::new(), };
         // let top_block = BlockData { id: location!("kgs-debug-blocks:debug2"), state: String::new(), };
         // let bottom_block = BlockData { id: location!("kgs-debug-blocks:debug2"), state: String::new(), };
         // let log_block = BlockData { id: location!("kgs-debug-blocks:debug2"), state: String::new(), };
