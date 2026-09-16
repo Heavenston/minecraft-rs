@@ -58,7 +58,7 @@ const occlusion_levels: array<f32, 4> = array(1.0, 0.8, 0.6, 0.4);
     if input.tint_index != 0 {
         tex *= plains_grass_tint;
     }
-    if ENABLE_CUTOUT && tex.a < 10e-5 {
+    if ENABLE_CUTOUT && tex.a < 0.5 {
         discard;
     }
     return tex;

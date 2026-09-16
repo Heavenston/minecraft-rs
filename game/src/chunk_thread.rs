@@ -22,7 +22,7 @@ use crate::{
     utils::{CardinalDirection, TwentySixDirection}
 };
 
-const MIPMAP_LEVELS: u32 = 1;
+const MIPMAP_LEVELS: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ChunkFullFaceMaterialKey {
@@ -166,8 +166,7 @@ impl MeshingState {
             }
             let premimage = premimage;
             for level in 1..MIPMAP_LEVELS {
-                let nimage = image::imageops::resize(&premimage, texture_data.image.width()/2u32.pow(level), texture_data.image.height()/2u32.pow(level), image::imageops::FilterType::Triangle);
-                println!("[{level}] {}x{}", nimage.width(), nimage.height());
+                let nimage = image::imageops::resize(&premimage, texture_data.image.width()/2u32.pow(level), texture_data.image.height()/2u32.pow(level), image::imageops::FilterType::Gaussian);
                 self.queue.write_texture(wgpu::TexelCopyTextureInfoBase {
                     texture: &self.texture,
                     mip_level: level,
