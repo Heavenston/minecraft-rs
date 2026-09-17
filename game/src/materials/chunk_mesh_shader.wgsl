@@ -47,6 +47,7 @@ fn get_cube_normal(dir: u32) -> vec3f {
 struct WorldUniform {
     view_projection_matrix: mat4x4f,
     time: f32,
+    camera_position: vec3f,
 };
 
 struct BlockModelFaceData {
@@ -153,22 +154,35 @@ struct MeshOutput {
 var<workgroup> mesh_output: MeshOutput;
 
 fn run_mesh_shader(block_pos: vec3i, dir: u32) {
-    let block_info = block_info_at(block_pos);
-    if !block_info_has_any_face(block_info) {
-        return;
+    let block_posf = vec3f(f32(block_pos.x), f32(block_pos.y), f32(block_pos.z));
+    let global_block_posf = block_posf + imm.chunk_offset;
+    var cull: bool = false;
+    switch (dir) {
+        // +X
+        case 0u: { cull = world.camera_position.x <= (global_block_posf.x + 1.); }
+        // -X
+        case 1u: { cull = world.camera_position.x >= (global_block_posf.x - 1.); }
+        // +Y
+        case 2u: { cull = world.camera_position.y <= (global_block_posf.y + 1.); }
+        // -Y
+        case 3u: { cull = world.camera_position.y >= (global_block_posf.y - 1.); }
+        // +Z
+        case 4u: { cull = world.camera_position.z <= (global_block_posf.z + 1.); }
+        // -Z
+        default: { cull = world.camera_position.z >= (global_block_posf.z - 1.); }
     }
 
-    if !block_info_has_face(block_info, dir) {
+    let block_info = block_info_at(block_pos);
+    if cull || !block_info_has_face(block_info, dir) {
         mesh_output.primitives[dir*2u + 0u].cull = true;
         mesh_output.primitives[dir*2u + 1u].cull = true;
         return;
     }
 
-    let block_posf = vec3f(f32(block_pos.x), f32(block_pos.y), f32(block_pos.z));
     for (var vi = 0u; vi < 4u; vi++) {
         let vertex = &mesh_output.vertices[dir*4 + vi];
         (*vertex).texcoord = get_cube_uv(vi);
-        (*vertex).position = world.view_projection_matrix * vec4f(get_cube_vertex((*vertex).texcoord, dir) + block_posf + imm.chunk_offset, 1.);
+        (*vertex).position = world.view_projection_matrix * vec4f(get_cube_vertex((*vertex).texcoord, dir) + global_block_posf, 1.);
     }
 
     mesh_output.primitives[dir*2u + 0u].indices = vec3u(dir*4) + vec3u(0,1,2);
@@ -191,11 +205,19 @@ fn ms(
     @builtin(local_invocation_id) invocation_id: vec3u,
     @builtin(workgroup_id) workgroup_id: vec3u,
 ) {
+    let block_pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
+    if !block_info_has_any_face(block_info_at(block_pos)) {
+        if invocation_id.x == 0 {
+            mesh_output.vertex_count = 0;
+            mesh_output.primitive_count = 0;
+        }
+        return;
+    }
+
     if invocation_id.x == 0 {
         mesh_output.vertex_count = 24;
         mesh_output.primitive_count = 12;
     }
-    let block_pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
     run_mesh_shader(block_pos, invocation_id.x);
 }
 

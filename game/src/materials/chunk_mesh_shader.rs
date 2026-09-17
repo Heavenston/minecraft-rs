@@ -247,7 +247,10 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
                 mesh: wgpu::MeshState {
                     module: shader_module,
                     entry_point: None,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[],
+                        zero_initialize_workgroup_memory: false,
+                    },
                 },
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,

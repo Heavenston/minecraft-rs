@@ -32,8 +32,8 @@ macro_rules! impl_aabb {
                 ]
             }
 
-            /// Implementation of face_aabb for 3d aabbs, but put here to have
-            /// access to $vec in the macro
+            /// Implementation of `face_aabb` for 3d aabbs, but put here to have
+            /// access to $vec in the macro.
             const fn face_aabb(aabb: $aabb3d, face: CardinalDirection) -> $aabb {
                 match face {
                     CardinalDirection::PosX => $aabb {
