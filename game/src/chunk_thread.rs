@@ -88,6 +88,8 @@ impl MeshingState {
     }
 
     fn get_chunk_mesh_shader_material(&mut self, transparency: ChunkTransparencyMode) -> MaterialHandle<ChunkMeshShaderMaterial> {
+        assert!(self.device.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER));
+
         let key = ChunkMaterialKey { transparency };
         if let Some(&material) = self.chunk_mesh_shader_materials.get(&key) {
             return material;

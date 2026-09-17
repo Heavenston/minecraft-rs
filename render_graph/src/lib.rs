@@ -744,13 +744,6 @@ impl RenderGraph {
             });
         }
         debug_assert!(self.resources.with(target_resource.0).unwrap().get().value.dyn_is_some());
-        self.resources.enumerated_mut()
-            .filter(|&(resource_sparse,_,_)| target_resource.0.sparse_index() != resource_sparse)
-            .filter(|&(resource_sparse,_,_)| !self.inputs.contains(&UncheckedResourceHandle(resource_sparse)))
-            .filter(| (_,_,resource)| !resource.config.permanent)
-            .for_each(|(_,_,resource)| resource.value.dyn_clear())
-        ;
-        debug_assert!(self.resources.with(target_resource.0).unwrap().get().value.dyn_is_some());
         compiled.apply_compute_result(self, &result);
         
         self.compiled = Some(compiled);
@@ -780,6 +773,13 @@ impl RenderGraph {
             is_permanent: resource_data.config.permanent,
             inner: Some(&mut *resource_data.value),
         }
+    }
+
+    pub fn clear_unpermanent(&mut self) {
+        self.resources.enumerated_mut()
+            .filter(| (_,_,resource)| !resource.config.permanent)
+            .for_each(|(_,_,resource)| resource.value.dyn_clear())
+        ;
     }
 
     fn get_simplified_node_labels(&self) -> HashMap<UncheckedNodeHandle, String> {

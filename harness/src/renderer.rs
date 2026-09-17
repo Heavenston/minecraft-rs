@@ -148,6 +148,7 @@ impl Renderer {
         self.render_graph.prepare_run();
         self.window.request_redraw();
         let () = self.render_graph.compute::<res::FrameFinished>().take();
+        self.render_graph.clear_unpermanent();
         Ok(())
     }
 }

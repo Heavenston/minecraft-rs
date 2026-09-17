@@ -1,16 +1,15 @@
 #![expect(dead_code, reason = "wip")]
 
-use std::sync::Arc;
 use crevice::std140::AsStd140;
 use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
 use glam::{ISizeVec3, Vec3};
 use render_graph::ResourceHandle;
 use resource::resource_str;
-use wgpu::util::DeviceExt;
+use wgpu::util::DeviceExt as _;
 
 use super::{ test_aabb_against_frustum, EnableWireframes, CutoutRenderStep, OpaqueRenderStep, TranslucentRenderStep };
 use crate::chunk_mesher::{self, ChunkTransparencyMode};
-use crate::chunk::{CHUNK_SIZE, Chunk};
+use crate::chunk::CHUNK_SIZE;
 
 render_graph::graph_resource!(struct ShaderSourceCode(wgpu::naga::Module); permanent);
 render_graph::graph_resource!(struct ShaderModule(wgpu::ShaderModule); permanent);

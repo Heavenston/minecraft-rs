@@ -547,6 +547,7 @@ struct QuadSubmeshKey(CardinalDirection, ChunkTransparencyMode);
 struct SubmeshKey(ChunkTransparencyMode);
 
 struct ChunkMeshBuilder<'a> {
+    config: Config,
     mcdata: Arc<MinecraftData>,
     textures: &'a mut OrderSet<ResourceLocation>,
     quad_submeshes: EnumMap<QuadSubmeshKey, IncompleteQuadSubMesh>,
@@ -618,15 +619,19 @@ impl ChunkMeshBuilder<'_> {
                 }
             })
             .collect();
-        let mesh_shader = self.mesh_shader.into_iter()
-            .map(|(SubmeshKey(transparency), mesh_shader::IncompleteMesh { data, models })| {
-                mesh_shader::Mesh {
-                    transparency,
-                    data: data.into_boxed_slice(),
-                    models: models.into_boxed_slice(),
-                }
-            })
-            .collect();
+        let mesh_shader = if self.config.enable_mesh_shader {
+            self.mesh_shader.into_iter()
+                .map(|(SubmeshKey(transparency), mesh_shader::IncompleteMesh { data, models })| {
+                    mesh_shader::Mesh {
+                        transparency,
+                        data: data.into_boxed_slice(),
+                        models: models.into_boxed_slice(),
+                    }
+                })
+                .collect()
+        } else {
+            Box::default()
+        };
 
         ChunkMesh {
             quad_submeshes,
@@ -817,6 +822,7 @@ impl ChunkMesher {
             .collect();
 
         let mut builder = ChunkMeshBuilder {
+            config: self.config,
             mcdata: Arc::clone(&self.resolver.mcdata),
             textures: &mut self.textures,
             quad_submeshes: EnumMap::default(),
