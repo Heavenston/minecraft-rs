@@ -330,7 +330,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
                     position: chunk.position,
                 }.as_std140().as_bytes());
                 render_pass.set_bind_group(2, &chunk.bind_group, &[]);
-                render_pass.draw_mesh_tasks(16,16,16);
+                render_pass.draw_mesh_tasks(8,8,16);
             }
             render_pass.pop_debug_group();
 

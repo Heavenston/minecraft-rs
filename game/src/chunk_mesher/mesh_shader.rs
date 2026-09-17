@@ -37,7 +37,9 @@ pub struct Block {
     pub model_idx: usize,
     #[bits(6)]
     pub face_mask: EnumSet<CardinalDirection>,
-    #[bits(10)]
+    #[bits(6)]
+    pub group_face_mask: EnumSet<CardinalDirection>,
+    #[bits(4)]
     pub _padding: usize,
 }
 

@@ -77,13 +77,12 @@ struct Immediates {
 
 var<immediate> imm: Immediates;
 
-fn block_info_at(pos: vec3i) -> u32 {
-    let idx = pos.x + pos.y * 16 + pos.z * 16 * 16;
-    return chunk_data[idx];
-}
-
 fn block_info_model(block_info: u32) -> u32 {
     return block_info & 0xFFFF;
+}
+
+fn block_info_has_any_group_face(block_info: u32) -> bool {
+    return (block_info & 0xFC00000u) != 0;
 }
 
 fn block_info_has_any_face(block_info: u32) -> bool {
@@ -146,23 +145,25 @@ struct PrimitiveInput {
 }
 
 struct MeshOutput {
-    @builtin(vertices) vertices: array<VertexOutput, 24>,
-    @builtin(primitives) primitives: array<PrimitiveOutput, 12>,
+    @builtin(vertices) vertices: array<VertexOutput, 96>,
+    @builtin(primitives) primitives: array<PrimitiveOutput, 48>,
     @builtin(vertex_count) vertex_count: u32,
     @builtin(primitive_count) primitive_count: u32,
 }
 var<workgroup> mesh_output: MeshOutput;
 
 @mesh(mesh_output)
-@workgroup_size(24,1,1)
+@workgroup_size(2,2,24)
 fn ms(
     @builtin(local_invocation_id) invocation_id: vec3u,
     @builtin(local_invocation_index) invocation_idx: u32,
     @builtin(workgroup_id) workgroup_id: vec3u,
 ) {
-    let block_pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
-    let block_info = block_info_at(block_pos);
-    if !block_info_has_any_face(block_info) {
+    let group_pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
+    let group_base_block_pos = group_pos * vec3i(2,2,1);
+    let group_base_idx = workgroup_id.x*4 + workgroup_id.y*32 + workgroup_id.z*256;
+
+    if !block_info_has_any_group_face(chunk_data[group_base_idx]) {
         if invocation_idx == 0 {
             mesh_output.vertex_count = 0;
             mesh_output.primitive_count = 0;
@@ -171,12 +172,26 @@ fn ms(
     }
 
     if invocation_idx == 0 {
-        mesh_output.vertex_count = 24;
-        mesh_output.primitive_count = 12;
+        mesh_output.vertex_count = 96;
+        mesh_output.primitive_count = 48;
     }
 
-    let dir = invocation_id.x >> 2;
-    let vertex_idx = invocation_id.x & 0x3;
+    let block_group_invocation_idx = invocation_id.x + invocation_id.y*2u;
+    let block_pos = group_base_block_pos + vec3i(i32(invocation_id.x), i32(invocation_id.y), 0);
+    let dir = invocation_id.z >> 2;
+    let vertex_idx = invocation_id.z & 0x3;
+
+    let prim_offset = block_group_invocation_idx*12u + dir*2u;
+    let vert_offset = block_group_invocation_idx*24u + dir*4u + vertex_idx;
+
+    let block_info = chunk_data[group_base_idx + invocation_id.x + invocation_id.y*2u];
+    if !block_info_has_any_face(block_info) {
+        if vertex_idx == 0 {
+            mesh_output.primitives[prim_offset+0u].cull = true;
+            mesh_output.primitives[prim_offset+1u].cull = true;
+        }
+        return;
+    }
 
     let block_posf = vec3f(f32(block_pos.x), f32(block_pos.y), f32(block_pos.z));
     let global_block_posf = block_posf + imm.chunk_offset;
@@ -198,24 +213,24 @@ fn ms(
 
     if cull || !block_info_has_face(block_info, dir) {
         if vertex_idx == 0 {
-            mesh_output.primitives[dir*2u + 0u].cull = true;
-            mesh_output.primitives[dir*2u + 1u].cull = true;
+            mesh_output.primitives[prim_offset+0u].cull = true;
+            mesh_output.primitives[prim_offset+1u].cull = true;
         }
         return;
     }
 
-    let vertex = &mesh_output.vertices[dir*4 + vertex_idx];
+    let vertex = &mesh_output.vertices[vert_offset];
     (*vertex).texcoord = get_cube_uv(vertex_idx);
     (*vertex).position = world.view_projection_matrix * vec4f(get_cube_vertex((*vertex).texcoord, dir) + global_block_posf, 1.);
 
     if vertex_idx == 0 {
-        mesh_output.primitives[dir*2u + 0u].indices = vec3u(dir*4) + vec3u(0,1,2);
-        mesh_output.primitives[dir*2u + 1u].indices = vec3u(dir*4) + vec3u(2,1,3);
+        mesh_output.primitives[prim_offset+0u].indices = vec3u(vert_offset) + vec3u(0,1,2);
+        mesh_output.primitives[prim_offset+1u].indices = vec3u(vert_offset) + vec3u(2,1,3);
 
         let model = block_info_model(block_info);
         let face: BlockModelFaceData = block_model_get_face_data(model, dir);
         for (var pi = 0u; pi < 2u; pi++) {
-            let prim = &mesh_output.primitives[dir*2u + pi];
+            let prim = &mesh_output.primitives[prim_offset+pi];
             (*prim).cull = false;
             (*prim).tint_index = face.tint_index;
             (*prim).texture_index = face.texture_index;
