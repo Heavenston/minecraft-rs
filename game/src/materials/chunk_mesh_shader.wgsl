@@ -153,7 +153,27 @@ struct MeshOutput {
 }
 var<workgroup> mesh_output: MeshOutput;
 
-fn run_mesh_shader(block_pos: vec3i, dir: u32) {
+@mesh(mesh_output)
+@workgroup_size(6)
+fn ms(
+    @builtin(local_invocation_id) invocation_id: vec3u,
+    @builtin(workgroup_id) workgroup_id: vec3u,
+) {
+    let block_pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
+    if !block_info_has_any_face(block_info_at(block_pos)) {
+        if invocation_id.x == 0 {
+            mesh_output.vertex_count = 0;
+            mesh_output.primitive_count = 0;
+        }
+        return;
+    }
+
+    if invocation_id.x == 0 {
+        mesh_output.vertex_count = 24;
+        mesh_output.primitive_count = 12;
+    }
+
+    let dir = invocation_id.x;
     let block_posf = vec3f(f32(block_pos.x), f32(block_pos.y), f32(block_pos.z));
     let global_block_posf = block_posf + imm.chunk_offset;
     var cull: bool = false;
@@ -197,28 +217,6 @@ fn run_mesh_shader(block_pos: vec3i, dir: u32) {
         (*prim).texture_index = face.texture_index;
         (*prim).face_tint = face.face_tint;
     }
-}
-
-@mesh(mesh_output)
-@workgroup_size(6)
-fn ms(
-    @builtin(local_invocation_id) invocation_id: vec3u,
-    @builtin(workgroup_id) workgroup_id: vec3u,
-) {
-    let block_pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
-    if !block_info_has_any_face(block_info_at(block_pos)) {
-        if invocation_id.x == 0 {
-            mesh_output.vertex_count = 0;
-            mesh_output.primitive_count = 0;
-        }
-        return;
-    }
-
-    if invocation_id.x == 0 {
-        mesh_output.vertex_count = 24;
-        mesh_output.primitive_count = 12;
-    }
-    run_mesh_shader(block_pos, invocation_id.x);
 }
 
 // Directional fake shading on blocks for each direction, same as minecraft
