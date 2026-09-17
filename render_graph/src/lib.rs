@@ -205,7 +205,7 @@ impl ResourceInfoProvider for ResourceManager<'_> {
             ResourceTypeInfo { handle }
         }).handle;
         ResourceHandle {
-            node: PhantomData,
+            resource: PhantomData,
             inner: handle,
         }
     }
@@ -405,7 +405,7 @@ impl From<UntypedNodeHandle> for UncheckedNodeHandle {
 }
 
 pub struct ResourceHandle<R> {
-    node: PhantomData<fn(R) -> R>,
+    resource: PhantomData<fn(R) -> R>,
     inner: genmap::Handle<ResourceData>,
 }
 
@@ -432,7 +432,7 @@ impl<N> Copy for ResourceHandle<N> { }
 
 impl<N> PartialEq for ResourceHandle<N> {
     fn eq(&self, other: &Self) -> bool {
-        self.node == other.node && self.inner == other.inner
+        self.resource == other.resource && self.inner == other.inner
     }
 }
 impl<N> Eq for ResourceHandle<N> { }
@@ -588,6 +588,13 @@ impl RenderGraph {
         }.resource_from_type::<R>()
     }
 
+    pub fn try_resource_from_type<R: GraphResourceId>(&self) -> Option<ResourceHandle<R::Resource>> {
+        Some(ResourceHandle {
+            resource: PhantomData,
+            inner: self.type_resources_info.get(&TypeId::of::<R>())?.handle,
+        })
+    }
+
     pub fn create_resource<S: Any>(&mut self, label: Cow<'static, str>, config: ResourceConfig) -> ResourceHandle<S> {
         let handle = self.resources.insert(ResourceData {
             label: Label::Other(label),
@@ -595,7 +602,7 @@ impl RenderGraph {
             config,
             value: Box::new(None::<S>),
         });
-        ResourceHandle { node: PhantomData, inner: handle }
+        ResourceHandle { resource: PhantomData, inner: handle }
     }
 
     pub fn define_input<R: GraphResourceId>(&mut self) {
@@ -631,6 +638,23 @@ impl RenderGraph {
         }
         if self.is_resource_permanent(handle) && let Some(mut compiled) = self.compiled.take() {
             compiled.mark_resource_dirty(self, handle.into());
+            self.compiled = Some(compiled);
+        }
+    }
+
+    pub fn mark_input_dirty<R: GraphResourceId>(&mut self) {
+        let handle = self.resource_from_type::<R>();
+        self.mark_resource_input_dirty(handle);
+    }
+
+    pub fn mark_resource_input_dirty(&mut self, handle: impl Into<UntypedResourceHandle>) {
+        let handle = handle.into();
+        assert!(self.resources.has(handle.0), "Invalid resource handle");
+        assert!(self.resources.with(handle.0).is_some_and(|p| p.get().config.permanent), "Can only mark permanent resources as dirty");
+        let handle: UncheckedResourceHandle = handle.into();
+        assert!(self.inputs.contains(&handle), "Resource handle not an input");
+        if let Some(mut compiled) = self.compiled.take() {
+            compiled.mark_resource_dirty(self, handle);
             self.compiled = Some(compiled);
         }
     }
