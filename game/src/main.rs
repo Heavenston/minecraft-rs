@@ -174,8 +174,37 @@ impl engine::App for App {
     }
 }
 
+#[cfg(not(feature = "deadlock_detection"))]
+fn start_deadlock_detection() { }
+#[cfg(feature = "deadlock_detection")]
+fn start_deadlock_detection() {
+    use std::thread;
+    use std::time::Duration;
+    use parking_lot::deadlock;
+
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            let deadlocks = deadlock::check_deadlock();
+            if deadlocks.is_empty() {
+                continue;
+            }
+
+            tracing::warn!("{} deadlocks detected", deadlocks.len());
+            for (i, threads) in deadlocks.iter().enumerate() {
+                eprintln!("Deadlock #{}", i);
+                for t in threads {
+                    eprintln!("Thread Id {:?}", t.thread_id());
+                    eprintln!("{:#?}", t.backtrace());
+                }
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    start_deadlock_detection();
     tracing_subscriber::fmt::init();
     let mc_data = Arc::new(data_extractor::MinecraftData::read()?);
 

@@ -4,6 +4,9 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 
+[features]
+deadlock_detection = ["parking_lot/deadlock_detection"]
+
 [dependencies]
 engine = { workspace = true }
 anyhow = { workspace = true }
