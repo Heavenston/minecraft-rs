@@ -712,7 +712,9 @@ impl RenderGraph {
     }
 
     #[track_caller]
+    #[tracing::instrument(level = "debug", skip_all, fields(target_resource_label = self.resources.get(target_resource.0).map(|resource_data| resource_data.label.as_str())))]
     fn compute_inner(&mut self, target_resource: UntypedResourceHandle) {
+        tracing::trace!("Start");
         assert!(self.resources.has(target_resource.0), "Invalid resource handle");
 
         // NOTE: We take the CompiledGraph out, in case of panic it is just droped
@@ -737,13 +739,18 @@ impl RenderGraph {
             .join(", ");
         assert!(missing_inputs.is_empty(), "Cannot run, missing inputs! {missing_inputs}");
 
-        for &node in &result.steps {
-            self.nodes.get_mut(AssumeAlive(node.0)).node.run(&mut ResourceManager {
+        tracing::trace!(step_count = result.steps.len());
+        for &node_handle in &result.steps {
+            let node_data = self.nodes.get_mut(AssumeAlive(node_handle.0));
+            let _span = tracing::debug_span!("running node", node_name = node_data.label().as_str()).entered();
+            tracing::trace!("running node");
+            node_data.node.run(&mut ResourceManager {
                 resources: &mut self.resources,
                 type_resources_info: &mut self.type_resources_info,
             });
         }
-        debug_assert!(self.resources.with(target_resource.0).unwrap().get().value.dyn_is_some());
+        debug_assert!(self.resources.with(target_resource.0).unwrap().get().value.dyn_is_some(), "Compiled steps failed to create expected resource");
+
         compiled.apply_compute_result(self, &result);
         
         self.compiled = Some(compiled);
