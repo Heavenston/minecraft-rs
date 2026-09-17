@@ -154,26 +154,30 @@ struct MeshOutput {
 var<workgroup> mesh_output: MeshOutput;
 
 @mesh(mesh_output)
-@workgroup_size(6)
+@workgroup_size(24,1,1)
 fn ms(
     @builtin(local_invocation_id) invocation_id: vec3u,
+    @builtin(local_invocation_index) invocation_idx: u32,
     @builtin(workgroup_id) workgroup_id: vec3u,
 ) {
     let block_pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
-    if !block_info_has_any_face(block_info_at(block_pos)) {
-        if invocation_id.x == 0 {
+    let block_info = block_info_at(block_pos);
+    if !block_info_has_any_face(block_info) {
+        if invocation_idx == 0 {
             mesh_output.vertex_count = 0;
             mesh_output.primitive_count = 0;
         }
         return;
     }
 
-    if invocation_id.x == 0 {
+    if invocation_idx == 0 {
         mesh_output.vertex_count = 24;
         mesh_output.primitive_count = 12;
     }
 
-    let dir = invocation_id.x;
+    let dir = invocation_id.x >> 2;
+    let vertex_idx = invocation_id.x & 0x3;
+
     let block_posf = vec3f(f32(block_pos.x), f32(block_pos.y), f32(block_pos.z));
     let global_block_posf = block_posf + imm.chunk_offset;
     var cull: bool = false;
@@ -192,30 +196,31 @@ fn ms(
         default: { cull = world.camera_position.z >= (global_block_posf.z - 1.); }
     }
 
-    let block_info = block_info_at(block_pos);
     if cull || !block_info_has_face(block_info, dir) {
-        mesh_output.primitives[dir*2u + 0u].cull = true;
-        mesh_output.primitives[dir*2u + 1u].cull = true;
+        if vertex_idx == 0 {
+            mesh_output.primitives[dir*2u + 0u].cull = true;
+            mesh_output.primitives[dir*2u + 1u].cull = true;
+        }
         return;
     }
 
-    for (var vi = 0u; vi < 4u; vi++) {
-        let vertex = &mesh_output.vertices[dir*4 + vi];
-        (*vertex).texcoord = get_cube_uv(vi);
-        (*vertex).position = world.view_projection_matrix * vec4f(get_cube_vertex((*vertex).texcoord, dir) + global_block_posf, 1.);
-    }
+    let vertex = &mesh_output.vertices[dir*4 + vertex_idx];
+    (*vertex).texcoord = get_cube_uv(vertex_idx);
+    (*vertex).position = world.view_projection_matrix * vec4f(get_cube_vertex((*vertex).texcoord, dir) + global_block_posf, 1.);
 
-    mesh_output.primitives[dir*2u + 0u].indices = vec3u(dir*4) + vec3u(0,1,2);
-    mesh_output.primitives[dir*2u + 1u].indices = vec3u(dir*4) + vec3u(2,1,3);
+    if vertex_idx == 0 {
+        mesh_output.primitives[dir*2u + 0u].indices = vec3u(dir*4) + vec3u(0,1,2);
+        mesh_output.primitives[dir*2u + 1u].indices = vec3u(dir*4) + vec3u(2,1,3);
 
-    let model = block_info_model(block_info);
-    let face: BlockModelFaceData = block_model_get_face_data(model, dir);
-    for (var pi = 0u; pi < 2u; pi++) {
-        let prim = &mesh_output.primitives[dir*2u + pi];
-        (*prim).cull = false;
-        (*prim).tint_index = face.tint_index;
-        (*prim).texture_index = face.texture_index;
-        (*prim).face_tint = face.face_tint;
+        let model = block_info_model(block_info);
+        let face: BlockModelFaceData = block_model_get_face_data(model, dir);
+        for (var pi = 0u; pi < 2u; pi++) {
+            let prim = &mesh_output.primitives[dir*2u + pi];
+            (*prim).cull = false;
+            (*prim).tint_index = face.tint_index;
+            (*prim).texture_index = face.texture_index;
+            (*prim).face_tint = face.face_tint;
+        }
     }
 }
 
