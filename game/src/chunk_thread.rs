@@ -17,7 +17,7 @@ use crate::{
     chunk::{CHUNK_SIZE, Chunk},
     chunk_mesher::{ChunkMesher, ChunkTransparencyMode},
     data_extractor::MinecraftData,
-    materials::{ self, chunk::ChunkMaterial, chunk_full_face::ChunkFullFaceMaterial },
+    materials::{ self, chunk::ChunkMaterial, chunk_full_face::ChunkFullFaceMaterial, chunk_mesh_shader::ChunkMeshShaderMaterial },
     resource_location::{ResourceLocation, ResourceLocationMap},
     utils::{CardinalDirection, TwentySixDirection}
 };
@@ -43,6 +43,7 @@ struct MeshingState {
     mcdata: Arc<MinecraftData>,
     materials: Arc<RwLock<engine::MaterialStore>>,
     chunk_full_face_materials: HashMap<ChunkFullFaceMaterialKey, MaterialHandle<ChunkFullFaceMaterial>>,
+    chunk_mesh_shader_materials: HashMap<ChunkMaterialKey, MaterialHandle<ChunkMeshShaderMaterial>>,
     chunk_materials: HashMap<ChunkMaterialKey, MaterialHandle<ChunkMaterial>>,
     chunks: HashMap<ISizeVec3, Chunk>,
 }
@@ -86,6 +87,21 @@ impl MeshingState {
         material
     }
 
+    fn get_chunk_mesh_shader_material(&mut self, transparency: ChunkTransparencyMode) -> MaterialHandle<ChunkMeshShaderMaterial> {
+        let key = ChunkMaterialKey { transparency };
+        if let Some(&material) = self.chunk_mesh_shader_materials.get(&key) {
+            return material;
+        }
+
+        let material = self.materials.write().add_material(ChunkMeshShaderMaterial::new(materials::chunk_mesh_shader::RenderConfig {
+            texture: self.texture.clone(),
+            transparency,
+        }));
+        self.chunk_mesh_shader_materials.insert(key, material);
+
+        material
+    }
+
     fn mesh_chunk(&mut self, chunk_pos: ISizeVec3) -> bool {
         let chunk = &self.chunks[&chunk_pos];
         let Ok(neighbors) = EnumMap::<TwentySixDirection, _>::try_from_fn(|direction| {
@@ -105,6 +121,7 @@ impl MeshingState {
             buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(instances_bytes);
             buffer.unmap();
             let material = self.get_chunk_full_face_material(submesh.transparency);
+            self.get_chunk_mesh_shader_material(submesh.transparency);
 
             let mut materials = self.materials.write();
             let material = materials.get_material_mut(material).unwrap();
@@ -224,6 +241,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
             mesher: ChunkMesher::new(Arc::clone(&mcdata)),
             mcdata,
             chunk_full_face_materials: Default::default(),
+            chunk_mesh_shader_materials: Default::default(),
             chunk_materials: Default::default(),
             materials,
             chunks: Default::default(),

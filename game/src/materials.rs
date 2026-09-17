@@ -2,6 +2,7 @@ use glam::{Mat4, Vec3, Vec4};
 
 pub mod chunk_full_face;
 pub mod chunk;
+pub mod chunk_mesh_shader;
 
 render_graph::graph_resource!(pub struct EnableWireframes(pub bool); permanent);
 

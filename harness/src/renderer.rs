@@ -80,12 +80,14 @@ impl Renderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::IMMEDIATES | adapter.features().intersection(optional_features),
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                required_features: wgpu::Features::IMMEDIATES
+                    | wgpu::Features::EXPERIMENTAL_MESH_SHADER
+                    | adapter.features().intersection(optional_features),
+                experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
                 required_limits: wgpu::Limits {
                     max_immediate_size: 128,
                     ..wgpu::Limits::default()
-                },
+                }.using_recommended_minimum_mesh_shader_values(),
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
             })
