@@ -59,13 +59,9 @@ struct BlockModel {
     // Starting with lowest significant bit
     //   tint_index    (2 bits)
     //   texture_index (7 bits)
-    //   face_tint     (2 bits)
+    //   face_tint     (3 bits)
     //  x2 for two faces per integer
     faces_data: array<u32, 3>,
-    // Starting with lowest significant bit
-    //   Per direction mask for which face is present (6 bits)
-    //   Per direction mask for which face this model culls (6 bits)
-    masks: u32,
 };
 
 @group(0) @binding(0) var<uniform> world: WorldUniform;
@@ -80,21 +76,17 @@ struct Immediates {
 
 var<immediate> imm: Immediates;
 
-fn model_at(pos: vec3i) -> u32 {
+fn block_info_at(pos: vec3i) -> u32 {
     let idx = pos.x + pos.y * 16 + pos.z * 16 * 16;
     return chunk_data[idx];
 }
 
-fn is_block_in_bounds(pos: vec3i) -> bool {
-    return all(pos >= vec3i(0)) && all(pos <= vec3i(16));
+fn block_info_model(block_info: u32) -> u32 {
+    return block_info & 0xFFFF;
 }
 
-fn block_model_has_face(model: u32, face_dir: u32) -> bool {
-    return (models[model].masks & (1u << face_dir)) != 0;
-}
-
-fn block_model_culls_face(model: u32, face_dir: u32) -> bool {
-    return (models[model].masks & (1u << (face_dir + 6))) != 0;
+fn block_info_has_face(block_info: u32, face_dir: u32) -> u32 {
+    return (block_info & (1u << (16 + face_dir))) != 0;
 }
 
 fn block_model_get_face_data(model: u32, face_dir: u32) -> BlockModelFaceData {
@@ -167,8 +159,10 @@ fn ms(
     let pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
     let dir = invocation_id.x;
     let dir_offset = directions[invocation_id.x];
-    let model = model_at(pos);
-    if !block_model_has_face(model, dir) || is_block_in_bounds(pos + dir_offset) && !block_model_culls_face(model, dir) {
+
+    let block_info = block_info_at(pos);
+    let model = block_info_model(block_info);
+    if !block_info_has_face(block_info, dir) {
         mesh_output.primitives[dir * 2 + 0].cull = true;
         mesh_output.primitives[dir * 2 + 1].cull = true;
         return;

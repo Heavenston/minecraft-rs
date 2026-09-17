@@ -121,7 +121,9 @@ impl MeshingState {
             buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(instances_bytes);
             buffer.unmap();
             let material = self.get_chunk_full_face_material(submesh.transparency);
-            self.get_chunk_mesh_shader_material(submesh.transparency);
+            if self.device.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER) {
+                self.get_chunk_mesh_shader_material(submesh.transparency);
+            }
 
             let mut materials = self.materials.write();
             let material = materials.get_material_mut(material).unwrap();
@@ -231,6 +233,14 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
         view_formats: &[],
     });
 
+    let enable_mesh_shader = device.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER);
+    if enable_mesh_shader {
+        tracing::info!("Using MESH SHADERS ✨️");
+    }
+    else {
+        tracing::info!("Not using mesh shaders...");
+    }
+
     let mut state = State {
         generator: crate::proc_gen::Generator::new(seed),
         store: MeshingState {
@@ -238,7 +248,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
             queue,
             texture,
             texture_layers: EnumMap::default(),
-            mesher: ChunkMesher::new(Arc::clone(&mcdata)),
+            mesher: ChunkMesher::new(crate::chunk_mesher::Config { enable_mesh_shader }, Arc::clone(&mcdata)),
             mcdata,
             chunk_full_face_materials: Default::default(),
             chunk_mesh_shader_materials: Default::default(),

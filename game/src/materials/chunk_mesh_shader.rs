@@ -3,17 +3,18 @@
 use std::sync::Arc;
 use crevice::std140::AsStd140;
 use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
-use glam::Vec3;
+use glam::{ISizeVec3, Vec3};
 use render_graph::ResourceHandle;
 use resource::resource_str;
 
 use super::{ test_aabb_against_frustum, EnableWireframes, CutoutRenderStep, OpaqueRenderStep, TranslucentRenderStep };
 use crate::chunk_mesher::ChunkTransparencyMode;
-use crate::chunk::CHUNK_SIZE;
+use crate::chunk::{CHUNK_SIZE, Chunk};
 
 render_graph::graph_resource!(struct ShaderSourceCode(wgpu::naga::Module); permanent);
 render_graph::graph_resource!(struct ShaderModule(wgpu::ShaderModule); permanent);
 render_graph::graph_resource!(struct BindGroupLayout(wgpu::BindGroupLayout); permanent);
+render_graph::graph_resource!(struct ChunkBindGroupLayout(wgpu::BindGroupLayout); permanent);
 render_graph::graph_resource!(struct RenderPipelineLayout(wgpu::PipelineLayout); permanent);
 
 pub struct RenderConfig {
@@ -40,16 +41,16 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
     render_graph::node_helper!(into render_graph;
         CreateShaderModule
         (device: ref render_res::Device, shader_code: ref ShaderSourceCode) -> (ShaderModule) {
-            OutputValue(device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Chunk material"),
+            OutputValue(unsafe { device.create_shader_module_trusted(wgpu::ShaderModuleDescriptor {
+                label: Some("Chunk mesh shader"),
                 source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(shader_code.clone())),
-            }))
+            }, wgpu::ShaderRuntimeChecks::unchecked()) })
         };
 
         CreateBindGroupLayout
         (device: ref render_res::Device) -> (BindGroupLayout) {
             OutputValue(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Chunk material"),
+                label: Some("Chunk mesh shader, global"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -71,14 +72,44 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
             }))
         };
 
+        CreateChunkBindGroupLayout
+        (device: ref render_res::Device) -> (ChunkBindGroupLayout) {
+            OutputValue(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Chunk mesh shader, per chunk"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::MESH,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::MESH,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            }))
+        };
+
         CreateRenderPipelineLayout (
             device: ref render_res::Device,
             world_bind_group_layout: ref engine_graph::WorldBindGroupLayout,
             bind_group_layout: ref BindGroupLayout,
+            chunk_bind_group_layout: ref ChunkBindGroupLayout,
         ) -> (RenderPipelineLayout) {
             OutputValue(device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Chunk material"),
-                bind_group_layouts: &[Some(world_bind_group_layout), Some(bind_group_layout)],
+                label: Some("Chunk mesh shader"),
+                bind_group_layouts: &[Some(world_bind_group_layout), Some(bind_group_layout), Some(chunk_bind_group_layout)],
                 immediate_size: Immediates::std140_size_static().try_into().unwrap(),
             }))
         };
@@ -132,6 +163,11 @@ impl engine::GlobalMaterial for GlobalMaterial {
     }
 }
 
+struct ToDoChunk {
+    data: wgpu::Buffer,
+    models: wgpu::Buffer,
+}
+
 fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_>) -> ResourceHandle<ChunkList> {
     use render_graph::ResourceConfig as Cfg;
     render_graph::node_helper!(into render_graph;
@@ -160,7 +196,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
                 ..Default::default()
             });
             OutputValue(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Chunk material"),
+                label: Some("Chunk mesh shader global"),
                 layout: bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -286,17 +322,17 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
 #[expect(clippy::module_name_repetitions, reason = "Needed here to not clash with Material trait")]
 pub struct ChunkMeshShaderMaterial {
     pub cfg: RenderConfig,
-    pub chunk_list: Arc<[PerChunkRenderData]>,
+    new_chunk_list: Vec<ToDoChunk>,
     chunk_list_resource: Option<ResourceHandle<ChunkList>>,
 }
 
 impl ChunkMeshShaderMaterial {
     pub fn new(cfg: RenderConfig) -> Self {
-        Self {
-            cfg,
-            chunk_list: Default::default(),
-            chunk_list_resource: None,
-        }
+        todo!()
+    }
+
+    pub fn add_chunk(&mut self, pos: ISizeVec3, chunk: &Chunk) {
+        todo!()
     }
 }
 
@@ -312,6 +348,6 @@ impl Material for ChunkMeshShaderMaterial {
     }
 
     fn update(&mut self, render_graph: &mut render_graph::RenderGraph) {
-        render_graph.set_resource_input(self.chunk_list_resource.unwrap(), ChunkList { chunks: Arc::clone(&self.chunk_list) });
+        todo!()
     }
 }

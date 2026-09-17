@@ -54,6 +54,17 @@ impl Iterator for Vec3RangeIter {
         }
         None
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for Vec3RangeIter {
+    fn len(&self) -> usize {
+        self.range.1.saturating_sub(self.current).element_product()
+    }
 }
 
 /// Defines clockwise rotation by increments of 90 degrees.

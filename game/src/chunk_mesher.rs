@@ -1,15 +1,17 @@
 
-use std::{collections::HashMap, num::Wrapping, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, num::Wrapping, rc::Rc, sync::Arc};
 
-use enum_map::EnumMap;
+use enum_map::{Enum, EnumMap};
 use glam::{ISizeVec2, ISizeVec3, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
 
 use crate::{
     chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model}, resource_location::ResourceLocation, utils::{
-        AABB2, AABB3, Axis, AxisVec3Ext as _, CardinalDirection, EnumSet, Gather as _, GridAngle, TwentySixDirection, Vec3Range
+        AABB2, AABB3, AxisVec3Ext as _, CardinalDirection, EnumSet, Gather as _, GridAngle, TwentySixDirection, Vec3Range
     },
 };
+
+pub mod mesh_shader;
 
 /// This bit field is read from shaders so changes here should be reflected
 #[bitfield_struct::bitfield(u32, order = Lsb)]
@@ -153,6 +155,7 @@ struct IncompleteSubMesh {
 pub struct ChunkMesh {
     pub quad_submeshes: Box<[QuadSubMesh]>,
     pub submeshes: Box<[SubMesh]>,
+    pub mesh_shader: Box<[mesh_shader::Mesh]>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -227,7 +230,7 @@ struct BlockModel {
 
 struct BlockModelResolver {
     mcdata: Arc<MinecraftData>,
-    cache: HashMap<BlockData, Arc<[BlockModel]>>,
+    cache: RefCell<HashMap<BlockData, Rc<[BlockModel]>>>,
 }
 
 impl BlockModelResolver {
@@ -433,20 +436,22 @@ impl BlockModelResolver {
         }
     }
 
-    fn resolve_block_model(&mut self, block_data: &BlockData) -> &Arc<[BlockModel]> {
-        if let Some(model) = self.cache.get(block_data) {
-            return model;
+    fn resolve_block_model(&self, block_data: &BlockData) -> Rc<[BlockModel]> {
+        if let Some(model) = self.cache.borrow().get(block_data) {
+            return Rc::clone(model);
         }
 
         let models = self.resolve_block_elements(block_data)
             .into_iter()
             .map(|elements| Self::resolved_elements_to_block_model(elements))
             .collect();
-        self.cache.entry(block_data.clone()).insert_entry(models).into_mut()
+        Rc::clone(self.cache.borrow_mut().entry(block_data.clone()).insert_entry(models).into_mut())
     }
 }
 
 struct ChunkMeshingCtx<'chunk, 'neighbor, 'resolver> {
+    config: Config,
+    palette_block_models: Box<[Rc<[BlockModel]>]>,
     chunk_pos: ISizeVec3,
     chunk: &'chunk Chunk,
     neighbors: EnumMap<TwentySixDirection, &'neighbor Chunk>,
@@ -454,7 +459,18 @@ struct ChunkMeshingCtx<'chunk, 'neighbor, 'resolver> {
 }
 
 impl ChunkMeshingCtx<'_, '_, '_> {
-    fn get_delta_signed(&mut self, delta: ISizeVec3) -> bool {
+    fn model_for_pos(&self, pos: USizeVec3) -> &BlockModel {
+        let models = &self.palette_block_models[self.chunk.get(pos)];
+        if let [model] = &**models {
+            model
+        }
+        else {
+            let global_pos = self.chunk_pos * CHUNK_SIZE.as_isizevec3() + pos.as_isizevec3();
+            models.get_modulo(get_coordinate_seed(global_pos))
+        }
+    }
+
+    fn get_delta_signed(&self, delta: ISizeVec3) -> bool {
         let chunk_delta = delta.div_euclid(CHUNK_SIZE.as_isizevec3());
         if chunk_delta == ISizeVec3::ZERO {
             self.model_resolver.resolve_block_model(self.chunk.get_data(delta.as_usizevec3()))[0]
@@ -469,7 +485,7 @@ impl ChunkMeshingCtx<'_, '_, '_> {
         }
     }
 
-    fn accumulate_ambient_occlusion(&mut self, direction: CardinalDirection, pos: USizeVec3) -> usize {
+    fn accumulate_ambient_occlusion(&self, direction: CardinalDirection, pos: USizeVec3) -> usize {
         let ambient_occlusion_sides: [bool; 8] = [
             ISizeVec2::new(-1,  0),
             ISizeVec2::new(-1, -1),
@@ -535,6 +551,9 @@ struct ChunkMeshBuilder<'a> {
     textures: &'a mut OrderSet<ResourceLocation>,
     quad_submeshes: EnumMap<QuadSubmeshKey, IncompleteQuadSubMesh>,
     submeshes: EnumMap<SubmeshKey, IncompleteSubMesh>,
+    // For each block, lists faces that are *not* culled
+    culled_face_data: Box<[[[EnumSet<CardinalDirection>; CHUNK_SIZE.x]; CHUNK_SIZE.y]; CHUNK_SIZE.z]>,
+    mesh_shader: EnumMap<SubmeshKey, mesh_shader::IncompleteMesh>,
 }
 
 impl ChunkMeshBuilder<'_> {
@@ -599,10 +618,20 @@ impl ChunkMeshBuilder<'_> {
                 }
             })
             .collect();
+        let mesh_shader = self.mesh_shader.into_iter()
+            .map(|(SubmeshKey(transparency), mesh_shader::IncompleteMesh { data, models })| {
+                mesh_shader::Mesh {
+                    transparency,
+                    data: data.into_boxed_slice(),
+                    models: models.into_boxed_slice(),
+                }
+            })
+            .collect();
 
         ChunkMesh {
             quad_submeshes,
             submeshes,
+            mesh_shader,
         }
     }
 }
@@ -628,92 +657,151 @@ impl<T> SliceExt<T> for [T] {
     }
 }
 
-fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
+fn accumulate_culling(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
     let chunk_global_block_offset = ctx.chunk_pos * CHUNK_SIZE.as_isizevec3();
-
-    let block_models: Box<[Arc<[BlockModel]>]> = ctx.chunk.palette().iter()
-        .map(|block_data| Arc::clone(ctx.model_resolver.resolve_block_model(block_data)))
-        .collect();
-
-    let model_for_pos = |pos: USizeVec3| -> &BlockModel {
-        let models = &block_models[ctx.chunk.get(pos)];
-        if let [model] = &**models {
-            model
-        }
-        else {
-            let global_pos = chunk_global_block_offset + pos.as_isizevec3();
-            models.get_modulo(get_coordinate_seed(global_pos))
-        }
-    };
 
     for direction in CardinalDirection::VALUES {
         for pos in INTERIOR_RANGES[direction] {
-            let model = model_for_pos(pos);
+            let model = ctx.model_for_pos(pos);
             let faces = &model.cullable_faces[direction];
             if faces.is_empty() { continue; }
 
-            if model_for_pos(pos.wrapping_add_signed(direction.as_isizevec3()) /* INTERIOR_RANGE should only return positions for which this does not wrap */).culling_directions.contains(direction.opposit()) { continue }
+            if ctx.model_for_pos(pos.wrapping_add_signed(direction.as_isizevec3()) /* INTERIOR_RANGE should only return positions for which this does not wrap */).culling_directions.contains(direction.opposit()) { continue }
 
-            let ao = if model.enable_ambient_occlusion { ctx.accumulate_ambient_occlusion(direction, pos) } else { 0 };
-            for face in &faces.full_faces {
-                builder.push_full_face(pos, face, ao);
-            }
-            for face in &faces.faces {
-                builder.push_face(pos, face, ao);
-            }
+            builder.culled_face_data[pos.z][pos.y][pos.x].insert(direction);
         }
     }
 
     for direction in CardinalDirection::VALUES {
         for pos in EXTERIOR_RANGES[direction] {
-            let model = model_for_pos(pos);
+            let model = ctx.model_for_pos(pos);
             let faces = &model.cullable_faces[direction];
             if faces.is_empty() { continue; }
 
             let neighbor_block_idx = exterior_neighbor(pos, direction);
             let neighbor_models = ctx.model_resolver.resolve_block_model(ctx.neighbors[direction.into()].get_data(neighbor_block_idx));
-            let neighbor_model = if let [neighbor_model] = &**neighbor_models {
+            let neighbor_model = if let [neighbor_model] = &*neighbor_models {
                 neighbor_model
             } else {
                 neighbor_models.get_modulo(get_coordinate_seed(chunk_global_block_offset + pos.as_isizevec3() + direction))
             };
             if neighbor_model.culling_directions.contains(direction.opposit()) { continue }
 
+            builder.culled_face_data[pos.z][pos.y][pos.x].insert(direction);
+        }
+    }
+}
+
+fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
+    for pos in Vec3Range(USizeVec3::ZERO, CHUNK_SIZE) {
+        let model = ctx.model_for_pos(pos);
+
+        for direction in CardinalDirection::VALUES {
+            let face_list = &model.cullable_faces[direction];
+            if face_list.is_empty() || !builder.culled_face_data[pos.z][pos.y][pos.x].contains(direction) { continue }
             let ao = if model.enable_ambient_occlusion { ctx.accumulate_ambient_occlusion(direction, pos) } else { 0 };
-            for face in &faces.full_faces {
-                builder.push_full_face(pos, face, ao);
+            if !ctx.config.enable_mesh_shader {
+                for face in &face_list.full_faces {
+                    builder.push_full_face(pos, face, ao);
+                }
             }
-            for face in &faces.faces {
+            for face in &face_list.faces {
                 builder.push_face(pos, face, ao);
             }
         }
-    }
 
-    for pos in Vec3Range(USizeVec3::ZERO, CHUNK_SIZE) {
-        let model = model_for_pos(pos);
-        let faces = &model.faces;
-        if faces.is_empty() { continue; }
-
-        for face in &faces.full_faces {
+        for face in &model.faces.full_faces {
             builder.push_full_face(pos, face, 0);
         }
-        for face in &faces.faces {
+        for face in &model.faces.faces {
             builder.push_face(pos, face, 0);
         }
     }
 }
 
+fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
+    for (SubmeshKey(transparency), mesh) in &mut builder.mesh_shader {
+        struct PaletteIdx {
+            offset: usize,
+            count: usize,
+        }
+        let mut palette_idxs = Vec::<PaletteIdx>::new();
+
+        for block_data in ctx.chunk.palette() {
+            let models = ctx.model_resolver.resolve_block_model(block_data);
+            palette_idxs.push(PaletteIdx {
+                offset: mesh.models.len(),
+                count: models.len(),
+            });
+            for model in models.iter() {
+                let mut face_data: [mesh_shader::FaceDataCombined; 3] = Default::default();
+                for (dir, face) in model.cullable_faces.iter().flat_map(|(dir, facelist)| facelist.full_faces.iter().map(move |face| (dir, face))) {
+                    if dir != face.direction { tracing::warn!("Full face not culled in its direction??"); continue; }
+                    let texture_data = builder.mcdata.texture(face.texture.location);
+                    let face_transparency = ChunkTransparencyMode::from_data(texture_data, face.texture.force_translucent);
+                    if face_transparency != transparency { continue; }
+                    let (texture_idx, _) = builder.textures.insert_full(face.texture.location);
+
+                    let dir_idx = dir.into_usize();
+                    let data = mesh_shader::BlockModelFaceData::new()
+                        .with_tint_index(face.texture.tint_index)
+                        .with_texture_index(texture_idx)
+                        // FIXME: Face does not, but should, have a face tint
+                        .with_face_tint(dir_idx)
+                    ;
+                    
+                    let x = &mut face_data[dir_idx/2];
+                    *x = match dir_idx % 2 {
+                        0 => x.with_face1(data),
+                        1 => x.with_face2(data),
+                        _ => unreachable!(),
+                    };
+                }
+                mesh.models.push(mesh_shader::BlockModel {
+                    face_data,
+                    face_mask: mesh_shader::BlockModelFaceMask::new()
+                        .with_culling_faces(model.culling_directions.map(CardinalDirection::opposit)),
+                });
+            }
+            debug_assert_eq!(mesh.models.len(), palette_idxs.last().unwrap().offset + palette_idxs.last().unwrap().count);
+        }
+
+        mesh.data.reserve(Vec3Range(USizeVec3::ZERO, CHUNK_SIZE).into_iter().len());
+        for pos in Vec3Range(USizeVec3::ZERO, CHUNK_SIZE) {
+            let palette_idx = ctx.chunk.get(pos);
+            let idx = &palette_idxs[palette_idx];
+            let variant_offset = if idx.count == 0 {
+                0
+            } else {
+                let global_pos = ctx.chunk_pos * CHUNK_SIZE.as_isizevec3() + pos.as_isizevec3();
+                usize::try_from(get_coordinate_seed(global_pos) % u64::try_from(idx.count).unwrap()).unwrap()
+            };
+            mesh.data.push(mesh_shader::Block::new()
+                .with_model_idx(idx.offset + variant_offset)
+                .with_face_mask(builder.culled_face_data[pos.z][pos.y][pos.x])
+            );
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Config {
+    pub enable_mesh_shader: bool,
+}
+
 pub struct ChunkMesher {
+    config: Config,
     resolver: BlockModelResolver,
     textures: OrderSet<ResourceLocation>,
 }
 
 impl ChunkMesher {
-    pub fn new(mcdata: Arc<MinecraftData>) -> Self {
+    pub fn new(config: Config, mcdata: Arc<MinecraftData>) -> Self {
         Self {
+            config,
             resolver: BlockModelResolver {
                 mcdata,
-                cache: HashMap::default(),
+                cache: Default::default(),
             },
             textures: OrderSet::new(),
         }
@@ -724,19 +812,31 @@ impl ChunkMesher {
     }
 
     pub fn mesh_chunk(&mut self, chunk_pos: ISizeVec3, chunk: &Chunk, neighbors: EnumMap<TwentySixDirection, &Chunk>) -> ChunkMesh {
+        let palette_block_models: Box<[Rc<[BlockModel]>]> = chunk.palette().iter()
+            .map(|block_data| self.resolver.resolve_block_model(block_data))
+            .collect();
+
         let mut builder = ChunkMeshBuilder {
             mcdata: Arc::clone(&self.resolver.mcdata),
             textures: &mut self.textures,
             quad_submeshes: EnumMap::default(),
             submeshes: EnumMap::default(),
+            culled_face_data: Box::default(),
+            mesh_shader: EnumMap::default(),
         };
         let mut ctx = ChunkMeshingCtx {
+            config: self.config,
+            palette_block_models,
             chunk_pos,
             chunk,
             neighbors,
             model_resolver: &mut self.resolver,
         };
+        accumulate_culling(&mut ctx, &mut builder);
         mesh_chunk(&mut ctx, &mut builder);
+        if self.config.enable_mesh_shader {
+            mesh_chunk_for_mesh_shader(&mut ctx, &mut builder);
+        }
         builder.finish()
     }
 }
