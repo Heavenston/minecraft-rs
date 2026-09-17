@@ -85,18 +85,22 @@ fn block_info_model(block_info: u32) -> u32 {
     return block_info & 0xFFFF;
 }
 
+fn block_info_has_any_face(block_info: u32) -> bool {
+    return (block_info & 0x3F0000u) != 0;
+}
+
 fn block_info_has_face(block_info: u32, face_dir: u32) -> bool {
     return (block_info & (1u << (16 + face_dir))) != 0;
 }
 
 fn block_model_get_face_data(model: u32, face_dir: u32) -> BlockModelFaceData {
     let packed = models[model].faces_data[face_dir >> 1];
-    let offset = (packed & 0x1) * 12;
+    let offset = (face_dir & 0x1) * 12;
 
     var out: BlockModelFaceData;
-    out.tint_index    = (packed << (offset + 0)) & 0x03;
-    out.texture_index = (packed << (offset + 2)) & 0x7f;
-    out.face_tint     = (packed << (offset + 9)) & 0x07;
+    out.tint_index    = (packed >> (offset + 0)) & 0x03;
+    out.texture_index = (packed >> (offset + 2)) & 0x7f;
+    out.face_tint     = (packed >> (offset + 9)) & 0x07;
     return out;
 }
 
@@ -148,7 +152,37 @@ struct MeshOutput {
 }
 var<workgroup> mesh_output: MeshOutput;
 
-const directions: array<vec3i, 6> = array(vec3i(1,0,0), vec3i(-1,0,0), vec3i(0,1,0), vec3i(0,-1,0), vec3i(0,0,1), vec3i(0,0,-1));
+fn run_mesh_shader(block_pos: vec3i, dir: u32) {
+    let block_info = block_info_at(block_pos);
+    if !block_info_has_any_face(block_info) {
+        return;
+    }
+
+    if !block_info_has_face(block_info, dir) {
+        mesh_output.primitives[dir*2u + 0u].cull = true;
+        mesh_output.primitives[dir*2u + 1u].cull = true;
+        return;
+    }
+
+    let block_posf = vec3f(f32(block_pos.x), f32(block_pos.y), f32(block_pos.z));
+    for (var vi = 0u; vi < 4u; vi++) {
+        let vertex = &mesh_output.vertices[dir*4 + vi];
+        (*vertex).texcoord = get_cube_uv(vi);
+        (*vertex).position = world.view_projection_matrix * vec4f(get_cube_vertex((*vertex).texcoord, dir) + block_posf + imm.chunk_offset, 1.);
+    }
+
+    mesh_output.primitives[dir*2u + 0u].indices = vec3u(dir*4) + vec3u(0,1,2);
+    mesh_output.primitives[dir*2u + 1u].indices = vec3u(dir*4) + vec3u(2,1,3);
+
+    let face: BlockModelFaceData = block_model_get_face_data(block_info_model(block_info), dir);
+    for (var pi = 0u; pi < 2u; pi++) {
+        let prim = &mesh_output.primitives[dir*2u + pi];
+        (*prim).cull = false;
+        (*prim).tint_index = face.tint_index;
+        (*prim).texture_index = face.texture_index;
+        (*prim).face_tint = face.face_tint;
+    }
+}
 
 @mesh(mesh_output)
 @workgroup_size(6)
@@ -156,34 +190,12 @@ fn ms(
     @builtin(local_invocation_id) invocation_id: vec3u,
     @builtin(workgroup_id) workgroup_id: vec3u,
 ) {
-    let pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
-    let dir = invocation_id.x;
-    let dir_offset = directions[invocation_id.x];
-
-    let block_info = block_info_at(pos);
-    let model = block_info_model(block_info);
-    if !block_info_has_face(block_info, dir) {
-        mesh_output.primitives[dir * 2 + 0].cull = true;
-        mesh_output.primitives[dir * 2 + 1].cull = true;
-        return;
+    if invocation_id.x == 0 {
+        mesh_output.vertex_count = 24;
+        mesh_output.primitive_count = 12;
     }
-    for (var vi = 0u; vi < 4u; vi++) {
-        let vertex = &mesh_output.vertices[dir * 4 + vi];
-        (*vertex).texcoord = get_cube_uv(vi);
-        (*vertex).position = world.view_projection_matrix * vec4f(get_cube_vertex((*vertex).texcoord, dir) + imm.chunk_offset, 1.);
-    }
-
-    mesh_output.primitives[dir*2 + 0].indices = vec3u(0,1,2);
-    mesh_output.primitives[dir*2 + 1].indices = vec3u(2,1,3);
-
-    let face: BlockModelFaceData = block_model_get_face_data(model, dir);
-    for (var pi = 0u; pi < 2u; pi++) {
-        let prim = &mesh_output.primitives[dir*2 + pi];
-        (*prim).cull = false;
-        (*prim).tint_index = face.tint_index;
-        (*prim).texture_index = face.texture_index;
-        (*prim).face_tint = face.face_tint;
-    }
+    let block_pos = vec3i(i32(workgroup_id.x), i32(workgroup_id.y), i32(workgroup_id.z));
+    run_mesh_shader(block_pos, invocation_id.x);
 }
 
 // Directional fake shading on blocks for each direction, same as minecraft

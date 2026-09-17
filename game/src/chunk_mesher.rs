@@ -1,7 +1,7 @@
 
 use std::{cell::RefCell, collections::HashMap, num::Wrapping, rc::Rc, sync::Arc};
 
-use enum_map::{Enum, EnumMap};
+use enum_map::{Enum as _, EnumMap};
 use glam::{ISizeVec2, ISizeVec3, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
 
@@ -621,6 +621,7 @@ impl ChunkMeshBuilder<'_> {
             .collect();
         let mesh_shader = if self.config.enable_mesh_shader {
             self.mesh_shader.into_iter()
+                .filter(|(_, submesh)| submesh.data.iter().any(|b| !b.face_mask().is_empty()))
                 .map(|(SubmeshKey(transparency), mesh_shader::IncompleteMesh { data, models })| {
                     mesh_shader::Mesh {
                         transparency,
@@ -764,8 +765,6 @@ fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMesh
                 }
                 mesh.models.push(mesh_shader::BlockModel {
                     face_data,
-                    face_mask: mesh_shader::BlockModelFaceMask::new()
-                        .with_culling_faces(model.culling_directions.map(CardinalDirection::opposit)),
                 });
             }
             debug_assert_eq!(mesh.models.len(), palette_idxs.last().unwrap().offset + palette_idxs.last().unwrap().count);

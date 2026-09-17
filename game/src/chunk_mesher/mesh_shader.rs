@@ -24,20 +24,10 @@ pub struct FaceDataCombined {
     pub _padding: (),
 }
 
-#[bitfield_struct::bitfield(u32, order = Lsb)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable)]
-pub struct BlockModelFaceMask {
-    #[bits(6)]
-    pub culling_faces: EnumSet<CardinalDirection>,
-    #[bits(26)]
-    pub _padding: (),
-}
-
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct BlockModel {
     pub face_data: [FaceDataCombined; 3],
-    pub face_mask: BlockModelFaceMask,
 }
 
 #[bitfield_struct::bitfield(u32, order = Lsb)]

@@ -41,10 +41,16 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
     render_graph::node_helper!(into render_graph;
         CreateShaderModule
         (device: ref render_res::Device, shader_code: ref ShaderSourceCode) -> (ShaderModule) {
-            OutputValue(unsafe { device.create_shader_module_trusted(wgpu::ShaderModuleDescriptor {
+            let descriptor = wgpu::ShaderModuleDescriptor {
                 label: Some("Chunk mesh shader"),
                 source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(shader_code.clone())),
-            }, wgpu::ShaderRuntimeChecks::unchecked()) })
+            };
+            if cfg!(debug_assertions) {
+                OutputValue(device.create_shader_module(descriptor))
+            }
+            else {
+                OutputValue(unsafe { device.create_shader_module_trusted(descriptor, wgpu::ShaderRuntimeChecks::unchecked()) })
+            }
         };
 
         CreateBindGroupLayout
