@@ -84,7 +84,10 @@ impl Renderer {
         };
 
         if effective_features.contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER) {
-            limits = limits.using_recommended_minimum_mesh_shader_values();
+            limits = wgpu::Limits {
+                max_mesh_workgroup_total_count: 4096,
+                ..limits.using_recommended_minimum_mesh_shader_values()
+            };
         }
 
         let (device, queue) = adapter
