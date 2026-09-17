@@ -1,7 +1,7 @@
 use crate::utils::{ CardinalDirection, EnumSet };
 
 #[bitfield_struct::bitfield(u32, order = Lsb)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, PartialEq, Eq)]
 pub struct BlockModelFaceData {
     #[bits(2)]
     pub tint_index: u32,
@@ -14,7 +14,7 @@ pub struct BlockModelFaceData {
 }
 
 #[bitfield_struct::bitfield(u32, order = Lsb)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, PartialEq, Eq)]
 pub struct FaceDataCombined {
     #[bits(12)]
     pub face1: BlockModelFaceData,

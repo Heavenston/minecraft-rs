@@ -98,9 +98,9 @@ fn block_model_get_face_data(model: u32, face_dir: u32) -> BlockModelFaceData {
     let offset = (face_dir & 0x1) * 12;
 
     var out: BlockModelFaceData;
-    out.tint_index    = (packed >> (offset + 0)) & 0x03;
-    out.texture_index = (packed >> (offset + 2)) & 0x7f;
-    out.face_tint     = (packed >> (offset + 9)) & 0x07;
+    out.tint_index    = (packed >> (offset + 0u)) & 0x03u;
+    out.texture_index = (packed >> (offset + 2u)) & 0x7Fu;
+    out.face_tint     = (packed >> (offset + 9u)) & 0x07u;
     return out;
 }
 
@@ -134,14 +134,14 @@ struct VertexOutput {
 struct PrimitiveOutput {
     @builtin(triangle_indices) indices: vec3<u32>,
     @builtin(cull_primitive) cull: bool,
-    @interpolate(flat) @per_primitive @location(1) tint_index: u32,
-    @interpolate(flat) @per_primitive @location(2) texture_index: u32,
-    @interpolate(flat) @per_primitive @location(3) face_tint: u32,
+    @interpolate(flat, either) @per_primitive @location(1) tint_index: u32,
+    @interpolate(flat, either) @per_primitive @location(2) texture_index: u32,
+    @interpolate(flat, either) @per_primitive @location(3) face_tint: u32,
 }
 struct PrimitiveInput {
-    @interpolate(flat) @per_primitive @location(1) tint_index: u32,
-    @interpolate(flat) @per_primitive @location(2) texture_index: u32,
-    @interpolate(flat) @per_primitive @location(3) face_tint: u32,
+    @interpolate(flat, either) @per_primitive @location(1) tint_index: u32,
+    @interpolate(flat, either) @per_primitive @location(2) texture_index: u32,
+    @interpolate(flat, either) @per_primitive @location(3) face_tint: u32,
 }
 
 struct MeshOutput {
@@ -174,7 +174,8 @@ fn run_mesh_shader(block_pos: vec3i, dir: u32) {
     mesh_output.primitives[dir*2u + 0u].indices = vec3u(dir*4) + vec3u(0,1,2);
     mesh_output.primitives[dir*2u + 1u].indices = vec3u(dir*4) + vec3u(2,1,3);
 
-    let face: BlockModelFaceData = block_model_get_face_data(block_info_model(block_info), dir);
+    let model = block_info_model(block_info);
+    let face: BlockModelFaceData = block_model_get_face_data(model, dir);
     for (var pi = 0u; pi < 2u; pi++) {
         let prim = &mesh_output.primitives[dir*2u + pi];
         (*prim).cull = false;
@@ -207,7 +208,7 @@ const occlusion_levels: array<f32, 4> = array(1.0, 0.8, 0.6, 0.4);
     var tex = textureSample(texture, texture_sampler, vertex.texcoord, primitive.texture_index);
 
     var light = 1.;
-    if primitive.face_tint < 7 {
+    if primitive.face_tint < 6 {
         light = lights[primitive.face_tint];
     }
     tex = vec4f(tex.rgb * light, tex.a);

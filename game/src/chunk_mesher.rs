@@ -730,14 +730,16 @@ fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMesh
         struct PaletteIdx {
             offset: usize,
             count: usize,
+            faces_for_this_mesh: EnumSet<CardinalDirection>,
         }
         let mut palette_idxs = Vec::<PaletteIdx>::new();
 
         for block_data in ctx.chunk.palette() {
             let models = ctx.model_resolver.resolve_block_model(block_data);
-            palette_idxs.push(PaletteIdx {
+            let idxs = palette_idxs.push_mut(PaletteIdx {
                 offset: mesh.models.len(),
                 count: models.len(),
+                faces_for_this_mesh: EnumSet::empty(),
             });
             for model in models.iter() {
                 let mut face_data: [mesh_shader::FaceDataCombined; 3] = Default::default();
@@ -746,6 +748,9 @@ fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMesh
                     let texture_data = builder.mcdata.texture(face.texture.location);
                     let face_transparency = ChunkTransparencyMode::from_data(texture_data, face.texture.force_translucent);
                     if face_transparency != transparency { continue; }
+
+                    idxs.faces_for_this_mesh.insert(dir);
+
                     let (texture_idx, _) = builder.textures.insert_full(face.texture.location);
 
                     let dir_idx = dir.into_usize();
@@ -756,12 +761,11 @@ fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMesh
                         .with_face_tint(dir_idx)
                     ;
                     
-                    let x = &mut face_data[dir_idx/2];
-                    *x = match dir_idx % 2 {
-                        0 => x.with_face1(data),
-                        1 => x.with_face2(data),
+                    match dir_idx & 1usize {
+                        0 => face_data[dir_idx >> 1usize].set_face1(data),
+                        1 => face_data[dir_idx >> 1usize].set_face2(data),
                         _ => unreachable!(),
-                    };
+                    }
                 }
                 mesh.models.push(mesh_shader::BlockModel {
                     face_data,
@@ -782,7 +786,7 @@ fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMesh
             };
             mesh.data.push(mesh_shader::Block::new()
                 .with_model_idx(idx.offset + variant_offset)
-                .with_face_mask(builder.culled_face_data[pos.z][pos.y][pos.x])
+                .with_face_mask(builder.culled_face_data[pos.z][pos.y][pos.x].intersection(idx.faces_for_this_mesh))
             );
         }
     }
