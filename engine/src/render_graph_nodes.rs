@@ -56,7 +56,7 @@ pub(crate) fn register(graph: &mut RenderGraph) {
                 label: Some("world bind group layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    visibility: wgpu::ShaderStages::all(),
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -92,6 +92,7 @@ pub(crate) fn register(graph: &mut RenderGraph) {
             let data = WorldUniform {
                 view_projection_matrix: world.camera_projection * world.camera_transform.inverse_or_zero(),
                 time: world.created_at.elapsed().as_secs_f32(),
+                camera_position: world.camera_transform.transform_point3(glam::Vec3::ZERO),
             }.as_std140();
             let bytes = data.as_bytes();
 

@@ -4,10 +4,11 @@ use std::{cell::RefCell, collections::{HashMap, HashSet}, sync::Arc, time::Insta
 
 use anyhow::{Context as _, Result};
 use crossbeam_channel::Receiver;
-use engine::{MaterialHandle, wgpu::{self, util::DeviceExt as _}};
+use engine::{MaterialHandle, MaterialStore, wgpu::{self, util::DeviceExt as _}};
 use enum_map::EnumMap;
 use glam::{ISizeVec3, U8Vec4, USizeVec3, Vec3, Vec4, Vec4Swizzles as _};
 use image::{EncodableLayout as _, Pixel as _};
+use itertools::Itertools as _;
 use ordermap::OrderMap;
 use parking_lot::RwLock;
 use render_graph::RenderGraph;

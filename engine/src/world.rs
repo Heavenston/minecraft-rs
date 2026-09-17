@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use crevice::std140::AsStd140;
-use glam::{ Mat4, Vec4 };
+use glam::{ Mat4, Vec3, Vec4 };
 use render_graph::RenderGraph;
 use static_assertions as sa;
 
@@ -45,4 +45,5 @@ impl Default for World {
 pub struct WorldUniform {
     pub view_projection_matrix: Mat4,
     pub time: f32,
+    pub camera_position: Vec3,
 }

@@ -202,6 +202,14 @@ impl MaterialStore {
             };
         }
 
+        for stored_material in self.materials.values_mut().iter_mut() {
+            if stored_material.registered_nodes.is_none() {
+                let mut wrapper = RenderGraphWrapper::new(render_graph);
+                stored_material.material.register(&mut wrapper);
+                stored_material.registered_nodes = Some(wrapper.finish());
+            }
+        }
+
         #[expect(clippy::iter_over_hash_type, reason = "Order (should) not matter")]
         for data in self.material_types_datas.values_mut() {
             if let GlobalMaterialState::Registered { value, .. } = &mut data.state {
@@ -210,14 +218,7 @@ impl MaterialStore {
         }
 
         for stored_material in self.materials.values_mut().iter_mut() {
-            if stored_material.registered_nodes.is_none() {
-                let mut wrapper = RenderGraphWrapper::new(render_graph);
-                stored_material.material.register(&mut wrapper);
-                stored_material.registered_nodes = Some(wrapper.finish());
-            }
-            else {
-                stored_material.material.update(render_graph);
-            }
+            stored_material.material.update(render_graph);
         }
     }
 }

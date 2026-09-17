@@ -32,11 +32,11 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
                 wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => {
                     surface_texture
                 }
-                wgpu::CurrentSurfaceTexture::Timeout
+                g @ (wgpu::CurrentSurfaceTexture::Timeout
                 | wgpu::CurrentSurfaceTexture::Occluded
-                | wgpu::CurrentSurfaceTexture::Validation => {
+                | wgpu::CurrentSurfaceTexture::Validation) => {
                     // Skip this frame
-                    todo!()
+                    todo!("{g:?}")
                 }
                 wgpu::CurrentSurfaceTexture::Outdated => {
                     todo!()

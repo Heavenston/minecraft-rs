@@ -344,6 +344,15 @@ impl<T> GenMap<T> {
         )
     }
 
+    #[inline]
+    pub fn enumerated_mut(&mut self) -> impl Iterator<Item = (SparseIdx, DenseIdx, &'_ mut T)> + DoubleEndedIterator + ExactSizeIterator {
+        izip!(
+            self.dense_to_sparse.iter().copied(),
+            self.dense_values.indexes(),
+            self.dense_values.iter_mut(),
+        )
+    }
+
     /// Returns an iterator of mutable references over all values in the map
     /// in the same order as in the dense array.
     #[inline]

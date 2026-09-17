@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-pub impl(self) const trait Integer: Copy + Clone + Sized + PartialEq + Eq + Hash + std::ops::BitAnd<Output = Self> + std::ops::BitOr<Output = Self> + std::ops::BitXor<Output = Self> + std::ops::Not<Output = Self> {
+pub impl(self) const trait Integer: Copy + Clone + Sized + [const] PartialEq + [const] Eq + Hash + [const] std::ops::BitAnd<Output = Self> + [const] std::ops::BitOr<Output = Self> + [const] std::ops::BitXor<Output = Self> + [const] std::ops::Not<Output = Self> {
     const BITS: u32;
     const BITS_LEN: usize = Self::BITS as usize;
 
@@ -125,24 +125,36 @@ fn test_integer_to_from_bit_array() {
 pub trait Enum: enum_map::Enum {
     #[expect(clippy::cast_possible_truncation, reason = "Done at compile time")]
     const VARIANT_COUNT: u32 = <<Self as enum_map::Enum>::Array::<()> as enum_map::Array>::LENGTH as u32;
-    type Integer: Integer;
+    type Integer: const Integer;
 }
 
+#[repr(transparent)]
 pub struct EnumSet<E: Enum> {
     inner: E::Integer,
 }
 
 impl<E: Enum> EnumSet<E> {
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         assert!(E::Integer::BITS >= E::VARIANT_COUNT);
         Self { inner: E::Integer::zero() }
     }
 
-    pub fn all() -> Self {
+    pub const fn all() -> Self {
         assert!(E::Integer::BITS >= E::VARIANT_COUNT);
         Self {
             inner: E::Integer::filled(E::VARIANT_COUNT),
         }
+    }
+
+    pub const fn from_bits(bits: E::Integer) -> Self {
+        assert!(E::Integer::BITS >= E::VARIANT_COUNT);
+        Self {
+            inner: bits & E::Integer::filled(E::VARIANT_COUNT),
+        }
+    }
+
+    pub const fn into_bits(self) -> E::Integer {
+        self.inner
     }
 
     pub fn len(self) -> usize {
@@ -150,7 +162,7 @@ impl<E: Enum> EnumSet<E> {
     }
 
     pub fn is_empty(self) -> bool {
-        self.len() == 0
+        self == Self::empty()
     }
 
     pub fn is_all(self) -> bool {
@@ -220,11 +232,15 @@ impl<E: Enum> EnumSet<E> {
     pub fn iter(self) -> impl ExactSizeIterator<Item = E> + DoubleEndedIterator {
         self.inner.iter_ones().map(|b| E::from_usize(usize::try_from(b).unwrap()))
     }
+
+    pub fn map<T: Enum>(self, f: impl FnMut(E) -> T) -> EnumSet<T> {
+        self.iter().map(f).collect()
+    }
 }
 
 impl<E: Enum> Default for EnumSet<E> {
     fn default() -> Self {
-        Self { inner: E::Integer::zero() }
+        Self::empty()
     }
 }
 
@@ -292,3 +308,7 @@ impl<E: Enum> FromIterator<E> for EnumSet<E> {
         set
     }
 }
+
+unsafe impl<E: Enum + 'static> bytemuck::NoUninit for EnumSet<E>
+where E::Integer: bytemuck::NoUninit
+{ }

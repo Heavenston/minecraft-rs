@@ -30,7 +30,7 @@ pub mod resources {
     res!(pub struct FrameCommandEncoderSubmitted(pub ()));
     res!(pub struct SurfacePresented(pub ()));
     res!(#[derive(Default)] pub struct ComputingFrame(pub ()); unordered);
-    res!(pub struct FrameFinished(pub ()); permanent);
+    res!(pub struct FrameFinished(pub ()));
 }
 use resources as res;
 
@@ -57,12 +57,12 @@ pub struct Renderer {
 impl Renderer {
     pub async fn new(display_handle: winit::event_loop::OwnedDisplayHandle, window: Arc<winit::window::Window>) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
+            backends: wgpu::Backends::PRIMARY.with_env(),
             flags: wgpu::InstanceFlags::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             backend_options: wgpu::BackendOptions::default(),
             display: Some(Box::new(display_handle)),
-        });
+        }.with_env());
         
         let surface = instance.create_surface(Arc::clone(&window)).unwrap();
 
@@ -75,17 +75,25 @@ impl Renderer {
             })
             .await?;
 
-        let optional_features = wgpu::Features::POLYGON_MODE_LINE;
+        let optional_features: wgpu::Features =
+            wgpu::Features::POLYGON_MODE_LINE
+        ;
+        let required_features: wgpu::Features =
+            wgpu::Features::IMMEDIATES
+        ;
+        let effective_features = required_features | adapter.features().intersection(optional_features);
+
+        let limits = wgpu::Limits {
+            max_immediate_size: 128,
+            ..Default::default()
+        };
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::IMMEDIATES | adapter.features().intersection(optional_features),
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                required_limits: wgpu::Limits {
-                    max_immediate_size: 128,
-                    ..wgpu::Limits::default()
-                },
+                required_features: effective_features,
+                experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
+                required_limits: limits,
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
             })
@@ -140,7 +148,8 @@ impl Renderer {
     pub fn render(&mut self) -> anyhow::Result<()> {
         self.render_graph.prepare_run();
         self.window.request_redraw();
-        let () = self.render_graph.compute::<res::FrameFinished>();
+        let () = self.render_graph.compute::<res::FrameFinished>().take();
+        self.render_graph.clear_unpermanent();
         Ok(())
     }
 }

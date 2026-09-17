@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 #[cfg(debug_assertions)]
 use rand::{SeedableRng as _, seq::IteratorRandom as _};
 
-use crate::{Label, NodeData, RenderGraph, ResourceConfig, ResourceData, UncheckedNodeHandle, UncheckedResourceHandle};
+use crate::{Label, NodeData, RenderGraph, ResourceConfig, ResourceData, UncheckedNodeHandle, UncheckedResourceHandle, UntypedResourceHandle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeRef(DenseIdx);
@@ -669,7 +669,7 @@ pub struct CompiledGraph {
     total_order: Box<[NodeRef]>,
     /// Only contains `permanent` resources.
     not_dirty: Vec<ResourceRef>,
-    cache: RwLock<HashMap<Vec<ResourceRef>, Arc<ComputeResult>>>,
+    cache: RwLock<HashMap<Vec<ResourceRef>, HashMap<UntypedResourceHandle, Arc<ComputeResult>>>>,
 }
 
 impl CompiledGraph {
@@ -746,19 +746,20 @@ impl CompiledGraph {
 
     #[tracing::instrument(level = "trace", skip_all)]
     pub fn compute(&self, graph: &RenderGraph, resource: UncheckedResourceHandle) -> Arc<ComputeResult> {
+        let resource_full_handle = UntypedResourceHandle(graph.resources.with(AssumeAlive(resource.0)).handle());
         let resource = graph.resource_ref(resource);
-        let cached = self.cache.read().get(&self.not_dirty).map(Arc::clone);
+        let cached = self.cache.read().get(&self.not_dirty).and_then(|cache| cache.get(&resource_full_handle)).map(Arc::clone);
         if let Some(cached) = cached {
             return cached;
         }
         tracing::trace!("Cache miss");
 
-        assert!(graph.is_resource_ref_permanent(resource), "Can only compute a permanent resource");
-        let &[InputOrNode::Node(producer)] = self.producers.get(&resource).map(Vec::as_slice).unwrap_or_default()
-        else { panic!("Can only compute if there is exactly one producer of a resource, and that producer isn't the input"); };
-        if !self.is_dirty(graph, &ResolvedInput { resource, producer: InputOrNode::Node(producer) }) {
+        let &[producer] = self.producers.get(&resource).map(Vec::as_slice).unwrap_or_default()
+        else { panic!("Can only compute if there is exactly one producer of a resource"); };
+        if !self.is_dirty(graph, &ResolvedInput { resource, producer }) {
             return Arc::new(ComputeResult::default());
         }
+        tracing::trace!(?producer);
 
         let mut required_inputs = HashSet::<ResourceRef>::new();
         let mut done = IndexMap::<bool, NodeRef>::from(vec![false; graph.nodes.len()]);
@@ -766,9 +767,16 @@ impl CompiledGraph {
         let mut stack = Vec::<NodeRef>::new();
         let mut created: Vec<ResourceRef> = vec![];
 
-        stack.push(producer);
-        done[producer] = true;
-        needed[producer] = true;
+        match producer {
+            InputOrNode::Input => {
+                required_inputs.insert(resource);
+            },
+            InputOrNode::Node(producer) => {
+                stack.push(producer);
+                done[producer] = true;
+                needed[producer] = true;
+            },
+        }
 
         while let Some(node_idx) = stack.pop() {
             for input in self.resolved.combined_inputs(node_idx) {
@@ -778,14 +786,9 @@ impl CompiledGraph {
                     },
                     InputOrNode::Node(n) => if !done[n] {
                         done[n] = true;
-                        if graph.is_resource_ref_permanent(input.resource) {
-                            if !self.not_dirty.contains(&input.resource) {
-                                created.push(input.resource);
-                                needed[n] = true;
-                                stack.push(n);
-                            }
-                        }
-                        else {
+                        let is_permanent = graph.is_resource_ref_permanent(input.resource);
+                        if !is_permanent || !self.not_dirty.contains(&input.resource) {
+                            if is_permanent { created.push(input.resource); }
                             needed[n] = true;
                             stack.push(n);
                         }
@@ -802,7 +805,9 @@ impl CompiledGraph {
             output_new_permanents: created.into(),
         });
         debug_assert!(self.not_dirty.is_sorted_by_key(indexmap::MapIndex::as_usize));
-        self.cache.write().insert(self.not_dirty.clone(), Arc::clone(&result));
+        self.cache.write().entry(self.not_dirty.clone())
+            .or_default()
+            .insert(resource_full_handle, Arc::clone(&result));
 
         result
     }
