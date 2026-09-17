@@ -121,9 +121,6 @@ impl MeshingState {
             buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(instances_bytes);
             buffer.unmap();
             let material = self.get_chunk_full_face_material(submesh.transparency);
-            if self.device.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER) {
-                self.get_chunk_mesh_shader_material(submesh.transparency);
-            }
 
             let mut materials = self.materials.write();
             let material = materials.get_material_mut(material).unwrap();
@@ -151,6 +148,14 @@ impl MeshingState {
                 position: (chunk_pos * CHUNK_SIZE.as_isizevec3()).as_vec3(),
                 vertex_buffer: buffer,
             }]).collect();
+        }
+        for submesh in &mesh.mesh_shader {
+            let material = self.get_chunk_mesh_shader_material(submesh.transparency);
+            let uploaded = materials::chunk_mesh_shader::ChunkBuffers::upload_mesh(&self.device, chunk_pos, submesh);
+
+            let mut materials = self.materials.write();
+            let material = materials.get_material_mut(material).unwrap();
+            material.add_chunk(uploaded);
         }
 
         true

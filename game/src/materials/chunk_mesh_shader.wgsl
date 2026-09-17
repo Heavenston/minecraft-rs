@@ -85,7 +85,7 @@ fn block_info_model(block_info: u32) -> u32 {
     return block_info & 0xFFFF;
 }
 
-fn block_info_has_face(block_info: u32, face_dir: u32) -> u32 {
+fn block_info_has_face(block_info: u32, face_dir: u32) -> bool {
     return (block_info & (1u << (16 + face_dir))) != 0;
 }
 

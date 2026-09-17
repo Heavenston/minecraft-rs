@@ -288,6 +288,7 @@ trait DynOption: Any {
     fn dyn_insert(&mut self, other: Box<dyn Any>);
     fn dyn_take(&mut self) -> Option<Box<dyn Any>>;
     fn dyn_as_ref(&self) -> Option<&dyn Any>;
+    fn dyn_as_mut(&mut self) -> Option<&mut dyn Any>;
     fn dyn_clear(&mut self);
 }
 impl<T: Any> DynOption for Option<T> {
@@ -305,6 +306,10 @@ impl<T: Any> DynOption for Option<T> {
 
     fn dyn_as_ref(&self) -> Option<&dyn Any> {
         self.as_ref().map(|p| p as &dyn Any)
+    }
+
+    fn dyn_as_mut(&mut self) -> Option<&mut dyn Any> {
+        self.as_mut().map(|p| p as &mut dyn Any)
     }
 
     fn dyn_clear(&mut self) {
@@ -470,6 +475,91 @@ impl<T> From<ResourceHandle<T>> for UncheckedResourceHandle {
     }
 }
 
+pub struct ComputedResourceRef<'a, T> {
+    inner: Option<&'a mut Option<T>>,
+    is_permanent: bool,
+}
+
+impl<'a, T> ComputedResourceRef<'a, T> {
+    pub fn take(mut self) -> T {
+        assert!(!self.is_permanent, "You cannot a take permanent resource");
+        self.inner.take().expect("always Some before the destructor").take().expect("computed resource always present")
+    }
+
+    pub fn into_ref(mut self) -> &'a T {
+        assert!(self.is_permanent, "You cannot convert into a ref for a non-permanent resource");
+        self.inner.take().expect("always Some before the destructor").as_ref().expect("computed resource always present")
+    }
+
+    pub fn into_mut(mut self) -> &'a mut T {
+        assert!(self.is_permanent, "You cannot convert into a mut ref for a non-permanent resource");
+        self.inner.take().expect("always Some before the destructor").as_mut().expect("computed resource always present")
+    }
+}
+
+impl<T> AsRef<T> for ComputedResourceRef<'_, T> {
+    fn as_ref(&self) -> &T {
+        self.inner.as_ref().expect("always Some before the destructor").as_ref().expect("computed resource always present")
+    }
+}
+
+impl<T> AsMut<T> for ComputedResourceRef<'_, T> {
+    fn as_mut(&mut self) -> &mut T {
+        self.inner.as_mut().expect("always Some before the destructor").as_mut().expect("computed resource always present")
+    }
+}
+
+impl<T> Drop for ComputedResourceRef<'_, T> {
+    fn drop(&mut self) {
+        if !self.is_permanent && let Some(inner) = self.inner.take() {
+            *inner = None;
+        }
+    }
+}
+
+/// Equivalent to [`ComputedResourceRef`] but with no known type.
+pub struct ComputedResourceUntypedRef<'a> {
+    inner: Option<&'a mut dyn DynOption>,
+    is_permanent: bool,
+}
+
+impl<'a> ComputedResourceUntypedRef<'a> {
+    pub fn take(mut self) -> Box<dyn Any> {
+        assert!(!self.is_permanent, "You cannot take a permanent resource");
+        self.inner.take().expect("always Some before the destructor").dyn_take().expect("computed resource always present")
+    }
+
+    pub fn into_ref(mut self) -> &'a dyn Any {
+        assert!(self.is_permanent, "You cannot convert into a ref for a non-permanent resource");
+        self.inner.take().expect("always Some before the destructor").dyn_as_ref().expect("computed resource always present")
+    }
+
+    pub fn into_mut(mut self) -> &'a mut dyn Any {
+        assert!(self.is_permanent, "You cannot convert into a mut ref for a non-permanent resource");
+        self.inner.take().expect("always Some before the destructor").dyn_as_mut().expect("computed resource always present")
+    }
+}
+
+impl AsRef<dyn Any> for ComputedResourceUntypedRef<'_> {
+    fn as_ref(&self) -> &dyn Any {
+        self.inner.as_ref().expect("always Some before the destructor").dyn_as_ref().expect("computed resource always present")
+    }
+}
+
+impl AsMut<dyn Any> for ComputedResourceUntypedRef<'_> {
+    fn as_mut(&mut self) -> &mut dyn Any {
+        self.inner.as_mut().expect("always Some before the destructor").dyn_as_mut().expect("computed resource always present")
+    }
+}
+
+impl Drop for ComputedResourceUntypedRef<'_> {
+    fn drop(&mut self) {
+        if !self.is_permanent && let Some(inner) = self.inner.take() {
+            inner.dyn_clear();
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct RenderGraph {
     type_resources_info: HashMap<TypeId, ResourceTypeInfo>,
@@ -480,6 +570,7 @@ pub struct RenderGraph {
 
     compiled: Option<CompiledGraph>,
 }
+sa::assert_not_impl_any!(RenderGraph: Send, Sync);
 
 impl RenderGraph {
     pub fn new() -> Self {
@@ -562,7 +653,7 @@ impl RenderGraph {
 
         let shared = consumes.iter().filter(|o| borrows.contains(o)).collect_vec();
         assert!(shared.is_empty(), "Error pushing Node {} into render graph, the following resources are both consumed and borrowed: {shared:?}", std::any::type_name::<N>());
-        let consumed_permanents = consumes.iter().filter(|p| self.resources.with(AssumeAlive(p.0)).get().config.permanent).collect_vec();
+        let consumed_permanents = consumes.iter().map(|p| self.resources.with(AssumeAlive(p.0)).get()).filter(|p| p.config.permanent).map(|p| p.label.as_str()).collect_vec();
         assert!(consumed_permanents.is_empty(), "Error pushing Node {} into render graph, the following resources cannot be consumed because they are permanent: {consumed_permanents:?}", std::any::type_name::<N>());
 
         let handle = self.nodes.insert(NodeData {
@@ -620,25 +711,13 @@ impl RenderGraph {
         self.compiled = None;
     }
 
-    fn execute(&mut self, steps: &[UncheckedNodeHandle]) {
-        for node in steps {
-            self.nodes.get_mut(AssumeAlive(node.0)).node.run(&mut ResourceManager {
-                resources: &mut self.resources,
-                type_resources_info: &mut self.type_resources_info,
-            });
-        }
-        for resource in &mut self.resources {
-            if !resource.config.permanent {
-                resource.value.dyn_clear();
-            }
-        }
-    }
+    #[track_caller]
+    fn compute_inner(&mut self, target_resource: UntypedResourceHandle) {
+        assert!(self.resources.has(target_resource.0), "Invalid resource handle");
 
-    fn compute_inner(&mut self, resource: UntypedResourceHandle) {
-        assert!(self.resources.has(resource.0), "Invalid resource handle");
-
+        // NOTE: We take the CompiledGraph out, in case of panic it is just droped
         let mut compiled = self.compiled.take().unwrap_or_else(|| CompiledGraph::new(self));
-        let result = compiled.compute(self, resource.into());
+        let result = compiled.compute(self, target_resource.into());
 
         if let Some(path) = option_env!("DEBUG_GRAPH_COMPUTE_PATH") {
             static PREVIOUS_WRITEN_RESULT: AtomicPtr<compiler::ComputeResult> = AtomicPtr::new(std::ptr::null_mut());
@@ -657,25 +736,50 @@ impl RenderGraph {
             .map(|p| self.resources.get(AssumeAlive(p.0)).label.to_string())
             .join(", ");
         assert!(missing_inputs.is_empty(), "Cannot run, missing inputs! {missing_inputs}");
-        self.execute(&result.steps);
+
+        for &node in &result.steps {
+            self.nodes.get_mut(AssumeAlive(node.0)).node.run(&mut ResourceManager {
+                resources: &mut self.resources,
+                type_resources_info: &mut self.type_resources_info,
+            });
+        }
+        debug_assert!(self.resources.with(target_resource.0).unwrap().get().value.dyn_is_some());
+        self.resources.enumerated_mut()
+            .filter(|&(resource_sparse,_,_)| target_resource.0.sparse_index() != resource_sparse)
+            .filter(|&(resource_sparse,_,_)| !self.inputs.contains(&UncheckedResourceHandle(resource_sparse)))
+            .filter(| (_,_,resource)| !resource.config.permanent)
+            .for_each(|(_,_,resource)| resource.value.dyn_clear())
+        ;
+        debug_assert!(self.resources.with(target_resource.0).unwrap().get().value.dyn_is_some());
         compiled.apply_compute_result(self, &result);
         
         self.compiled = Some(compiled);
     }
 
-    pub fn compute<T: GraphResourceId>(&mut self) -> T::Resource {
+    #[track_caller]
+    pub fn compute<T: GraphResourceId>(&mut self) -> ComputedResourceRef<'_, T::Resource> {
         let resource = self.resource_from_type::<T>();
         self.compute_resource(resource)
     }
 
-    pub fn compute_resource<T: 'static>(&mut self, resource: ResourceHandle<T>) -> T {
+    #[track_caller]
+    pub fn compute_resource<T: 'static>(&mut self, resource: ResourceHandle<T>) -> ComputedResourceRef<'_, T> {
         self.compute_inner(resource.to_untyped());
-        self.resources.get_mut(resource.inner).expect("valid resource handle").get_mut().take().expect("value was created during compute")
+        let resource_data = self.resources.get_mut(resource.inner).expect("valid resource handle");
+        ComputedResourceRef {
+            is_permanent: resource_data.config.permanent,
+            inner: Some(resource_data.get_mut()),
+        }
     }
 
-    pub fn compute_untyped(&mut self, resource: UntypedResourceHandle) -> Box<dyn Any> {
+    #[track_caller]
+    pub fn compute_untyped(&mut self, resource: UntypedResourceHandle) -> ComputedResourceUntypedRef<'_> {
         self.compute_inner(resource);
-        self.resources.get_mut(resource.0).expect("valid resource handle").value.dyn_take().expect("value was created during compute")
+        let resource_data = self.resources.get_mut(resource.0).expect("valid resource handle");
+        ComputedResourceUntypedRef {
+            is_permanent: resource_data.config.permanent,
+            inner: Some(&mut *resource_data.value),
+        }
     }
 
     fn get_simplified_node_labels(&self) -> HashMap<UncheckedNodeHandle, String> {

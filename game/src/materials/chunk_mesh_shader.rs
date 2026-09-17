@@ -6,9 +6,10 @@ use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::reso
 use glam::{ISizeVec3, Vec3};
 use render_graph::ResourceHandle;
 use resource::resource_str;
+use wgpu::util::DeviceExt;
 
 use super::{ test_aabb_against_frustum, EnableWireframes, CutoutRenderStep, OpaqueRenderStep, TranslucentRenderStep };
-use crate::chunk_mesher::ChunkTransparencyMode;
+use crate::chunk_mesher::{self, ChunkTransparencyMode};
 use crate::chunk::{CHUNK_SIZE, Chunk};
 
 render_graph::graph_resource!(struct ShaderSourceCode(wgpu::naga::Module); permanent);
@@ -30,11 +31,11 @@ struct Immediates {
 #[derive(Debug, Clone)]
 pub struct PerChunkRenderData {
     pub position: Vec3,
-    pub vertex_buffer: wgpu::Buffer,
+    pub bind_group: wgpu::BindGroup,
 }
 
 struct ChunkList {
-    chunks: Arc<[PerChunkRenderData]>,
+    chunks: Vec<PerChunkRenderData>,
 }
 
 fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
@@ -163,21 +164,38 @@ impl engine::GlobalMaterial for GlobalMaterial {
     }
 }
 
-struct ToDoChunk {
-    data: wgpu::Buffer,
-    models: wgpu::Buffer,
+pub struct ChunkBuffers {
+    pub pos: ISizeVec3,
+    pub data: wgpu::Buffer,
+    pub models: wgpu::Buffer,
+}
+
+impl ChunkBuffers {
+    pub fn upload_mesh(device: &wgpu::Device, pos: ISizeVec3, mesh: &chunk_mesher::mesh_shader::Mesh) -> Self {
+        let data = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("Chunk {pos} data buffer")),
+            contents: bytemuck::cast_slice::<_, u8>(&mesh.data),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let models = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("Chunk {pos} models buffer")),
+            contents: bytemuck::cast_slice::<_, u8>(&mesh.models),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        Self { pos, data, models }
+    }
 }
 
 fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_>) -> ResourceHandle<ChunkList> {
     use render_graph::ResourceConfig as Cfg;
     render_graph::node_helper!(into render_graph;
-        using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::new());
+        using @chunk_list: ChunkList = render_graph.create_resource("chunk_mesh_shader_material::chunk_list", Cfg::permanent());
 
-        using @transparency: ChunkTransparencyMode = render_graph.create_resource("chunk_material::transparency", Cfg::permanent());
-        using @texture: wgpu::Texture = render_graph.create_resource("chunk_material::texture", Cfg::permanent());
+        using @transparency: ChunkTransparencyMode = render_graph.create_resource("chunk_mesh_shader_material::transparency", Cfg::permanent());
+        using @texture: wgpu::Texture = render_graph.create_resource("chunk_mesh_shader_material::texture", Cfg::permanent());
 
-        using @bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_material::bind_group", Cfg::permanent());
-        using @render_pipeline: wgpu::RenderPipeline = render_graph.create_resource("chunk_material::render_pipeline", Cfg::permanent());
+        using @bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_mesh_shader_material::bind_group", Cfg::permanent());
+        using @render_pipeline: wgpu::RenderPipeline = render_graph.create_resource("chunk_mesh_shader_material::render_pipeline", Cfg::permanent());
 
         using @draw_step: () = match cfg.transparency {
             ChunkTransparencyMode::Opaque => render_graph.resource_from_type::<OpaqueRenderStep>(),
@@ -287,14 +305,14 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
             world: ref engine_graph::WorldResource,
             bind_group: ref @bind_group,
             render_pipeline: ref @render_pipeline,
-            chunk_list: @chunk_list,
+            chunk_list: ref @chunk_list,
 
             &transparency: ref @transparency,
             _: ref @draw_step,
         ) -> (engine_graph::RenderPass) {
             let view_projection = world.camera_projection * world.camera_clip_transform.inverse_or_zero();
 
-            render_pass.push_debug_group(&format!("{transparency:?} Chunk renderer"));
+            render_pass.push_debug_group(&format!("{transparency:?} Chunk mesh shader renderer"));
             render_pass.set_pipeline(render_pipeline);
             render_pass.set_bind_group(1, bind_group, &[]);
             for chunk in &*chunk_list.chunks {
@@ -303,8 +321,8 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
                 render_pass.set_immediates(0, Immediates {
                     position: chunk.position,
                 }.as_std140().as_bytes());
-                render_pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
-                render_pass.draw(0..(chunk.vertex_buffer.size() / 24).try_into().unwrap(), 0..1);
+                render_pass.set_bind_group(2, &chunk.bind_group, &[]);
+                render_pass.draw_mesh_tasks(16,16,16);
             }
             render_pass.pop_debug_group();
 
@@ -322,17 +340,21 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
 #[expect(clippy::module_name_repetitions, reason = "Needed here to not clash with Material trait")]
 pub struct ChunkMeshShaderMaterial {
     pub cfg: RenderConfig,
-    new_chunk_list: Vec<ToDoChunk>,
+    new_chunk_list: Vec<ChunkBuffers>,
     chunk_list_resource: Option<ResourceHandle<ChunkList>>,
 }
 
 impl ChunkMeshShaderMaterial {
     pub fn new(cfg: RenderConfig) -> Self {
-        todo!()
+        Self {
+            cfg,
+            new_chunk_list: vec![],
+            chunk_list_resource: None,
+        }
     }
 
-    pub fn add_chunk(&mut self, pos: ISizeVec3, chunk: &Chunk) {
-        todo!()
+    pub fn add_chunk(&mut self, chunk: ChunkBuffers) {
+        self.new_chunk_list.push(chunk);
     }
 }
 
@@ -348,6 +370,32 @@ impl Material for ChunkMeshShaderMaterial {
     }
 
     fn update(&mut self, render_graph: &mut render_graph::RenderGraph) {
-        todo!()
+        let Some(chunk_list_resource) = self.chunk_list_resource
+        else { return };
+
+        let device = render_graph.compute::<render_res::Device>().as_ref().clone();
+        let chunk_bind_group_layout = render_graph.compute::<ChunkBindGroupLayout>().into_ref().clone();
+        let chunk_list = render_graph.compute_resource(chunk_list_resource).into_mut();
+
+        for ChunkBuffers { pos, data, models } in self.new_chunk_list.drain(..) {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("Chunk {pos} for mesh shader")),
+                layout: &chunk_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(data.as_entire_buffer_binding()),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Buffer(models.as_entire_buffer_binding()),
+                    },
+                ],
+            });
+            chunk_list.chunks.push(PerChunkRenderData {
+                position: (pos * CHUNK_SIZE.as_isizevec3()).as_vec3(),
+                bind_group,
+            });
+        }
     }
 }

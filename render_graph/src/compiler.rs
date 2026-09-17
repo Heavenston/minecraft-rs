@@ -753,10 +753,9 @@ impl CompiledGraph {
         }
         tracing::trace!("Cache miss");
 
-        assert!(graph.is_resource_ref_permanent(resource), "Can only compute a permanent resource");
-        let &[InputOrNode::Node(producer)] = self.producers.get(&resource).map(Vec::as_slice).unwrap_or_default()
-        else { panic!("Can only compute if there is exactly one producer of a resource, and that producer isn't the input"); };
-        if !self.is_dirty(graph, &ResolvedInput { resource, producer: InputOrNode::Node(producer) }) {
+        let &[producer] = self.producers.get(&resource).map(Vec::as_slice).unwrap_or_default()
+        else { panic!("Can only compute if there is exactly one producer of a resource"); };
+        if !self.is_dirty(graph, &ResolvedInput { resource, producer }) {
             return Arc::new(ComputeResult::default());
         }
 
@@ -766,9 +765,11 @@ impl CompiledGraph {
         let mut stack = Vec::<NodeRef>::new();
         let mut created: Vec<ResourceRef> = vec![];
 
-        stack.push(producer);
-        done[producer] = true;
-        needed[producer] = true;
+        if let InputOrNode::Node(producer) = producer {
+            stack.push(producer);
+            done[producer] = true;
+            needed[producer] = true;
+        }
 
         while let Some(node_idx) = stack.pop() {
             for input in self.resolved.combined_inputs(node_idx) {
