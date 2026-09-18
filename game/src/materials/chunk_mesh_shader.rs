@@ -290,8 +290,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     front_face: wgpu::FrontFace::Ccw,
-                    // Culling is done by the mesh shader
-                    cull_mode: None,
+                    cull_mode: (!enable_wireframes).then_some(wgpu::Face::Back),
                     polygon_mode: if enable_wireframes {
                         if device.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
                             wgpu::PolygonMode::Line

@@ -256,7 +256,7 @@ fn extract_group_task_data(idx: u32) -> ExtractedGroupTaskData {
 }
 
 const DIR_FACE_VERTICES = array<array<vec3u,2>,6>(
-    array(vec3u(1,26,6),vec3u(6,26,31)),
+    array(vec3u(26,1,31),vec3u(31,1,6)),
     array(vec3u(0,25,5),vec3u(5,25,30)),
     array(vec3u(30,31,5),vec3u(5,31,6)),
     array(vec3u(0,1,25),vec3u(25,1,26)),
@@ -334,24 +334,35 @@ const lights: array<f32, 6> = array(0.6, 0.6, 1.0, 0.5, 0.8, 0.8);
 const plains_grass_tint: vec4f = vec4f(0.5686274509803921, 0.7411764705882353, 0.34901960784313724, 1.);
 
 const occlusion_levels: array<f32, 4> = array(1.0, 0.8, 0.6, 0.4);
+
+fn get_uv(world_pos: vec3f, dir: u32) -> vec2f {
+    let uv = ((world_pos % vec3f(1.)) + vec3f(1.)) % vec3f(1.);
+    switch (dir) {
+    case 0u: { return uv.zy * vec2(-1.,-1.) + vec2(1.,1.); }
+    case 1u: { return uv.zy * vec2(1.,-1.) + vec2(0.,1.); }
+    case 2u: { return uv.xz * vec2(1.,1.) + vec2(0.,0.); }
+    case 3u: { return uv.xz * vec2(-1.,1.) + vec2(1.,0.); }
+    case 4u: { return uv.xy * vec2(1.,-1.) + vec2(0.,1.); }
+    default: { return uv.xy * vec2(-1.,-1.) + vec2(1.,1.); }
+    }
+}
+
 @fragment fn fs(vertex: VertexOutput, primitive: PrimitiveInput) -> @location(0) vec4f {
     var light = 1.;
     if primitive.face_tint < 6 {
         light = lights[primitive.face_tint];
     }
 
-    let uv = ((vertex.world_pos % vec3f(1.)) + vec3f(1.)) % vec3f(1.);
-    return vec4f(uv * light,1.);
+    let texcoord = get_uv(vertex.world_pos, primitive.face_direction);
 
-    // var tex = textureSample(texture, texture_sampler, vertex.texcoord, primitive.texture_index);
+    var tex = textureSample(texture, texture_sampler, texcoord, primitive.texture_index);
+    tex = vec4f(tex.rgb * light, tex.a);
 
-    // tex = vec4f(tex.rgb * light, tex.a);
-
-    // if primitive.tint_index != 0 {
-    //     tex *= plains_grass_tint;
-    // }
-    // if ENABLE_CUTOUT && tex.a < 0.5 {
-    //     discard;
-    // }
-    // return tex;
+    if primitive.tint_index != 0 {
+        tex *= plains_grass_tint;
+    }
+    if ENABLE_CUTOUT && tex.a < 0.5 {
+        discard;
+    }
+    return tex;
 }
