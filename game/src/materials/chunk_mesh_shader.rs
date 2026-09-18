@@ -11,8 +11,9 @@ use super::{ EnableWireframes, CutoutRenderStep, OpaqueRenderStep, TranslucentRe
 use crate::chunk_mesher::{self, ChunkTransparencyMode};
 use crate::chunk::CHUNK_SIZE;
 
-const MAX_CHUNK_COUNT: usize = 0x0001_0000;
-const MAX_MODEL_COUNT: usize = 0x0010_0000;
+const MAX_CHUNK_COUNT: usize = 0x0010_0000;
+pub const MAX_MODEL_COUNT: usize = 0x0001_0000;
+pub const MODEL_BUFFER_SIZE: usize = MAX_MODEL_COUNT * size_of::<chunk_mesher::mesh_shader::BlockModel>();
 
 render_graph::graph_resource!(struct ShaderSourceCode(wgpu::naga::Module); permanent);
 render_graph::graph_resource!(struct ShaderModule(wgpu::ShaderModule); permanent);
@@ -22,6 +23,7 @@ render_graph::graph_resource!(struct RenderPipelineLayout(wgpu::PipelineLayout);
 
 pub struct RenderConfig {
     pub texture: wgpu::Texture,
+    pub models: wgpu::Buffer,
     pub transparency: ChunkTransparencyMode,
 }
 
@@ -202,6 +204,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
 
         using @transparency: ChunkTransparencyMode = render_graph.create_resource("chunk_mesh_shader_material::transparency", Cfg::permanent());
         using @texture: wgpu::Texture = render_graph.create_resource("chunk_mesh_shader_material::texture", Cfg::permanent());
+        using @models: wgpu::Buffer = render_graph.create_resource("chunk_mesh_shader_material::models", Cfg::permanent());
 
         using @bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_mesh_shader_material::bind_group", Cfg::permanent());
         using @chunk_list_bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_mesh_shader_material::chunk_list_bind_group", Cfg::permanent());
@@ -217,6 +220,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
             device: ref render_res::Device,
             bind_group_layout: ref BindGroupLayout,
             texture: ref @texture,
+            models: ref @models,
         ) -> (@bind_group) {
             let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
                 label: None,
@@ -235,6 +239,10 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(&texture.create_view(&wgpu::TextureViewDescriptor::default()))
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: models.as_entire_binding(),
+                    },
                 ],
             }))
         };
@@ -244,6 +252,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
             chunk_list_bind_group_layout: ref ChunkListBindGroupLayout,
             chunk_list: ref @chunk_list,
         ) -> (@chunk_list_bind_group) {
+            assert!(!chunk_list.chunks.is_empty(), "no chunk to render");
             let bindings = chunk_list.chunks.iter().map(|chunk| chunk.buffer.as_entire_buffer_binding()).collect_vec();
             OutputValue(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Chunk mesh shader global"),
@@ -358,6 +367,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
     );
 
     render_graph.set_resource_input(texture_resource, cfg.texture.clone());
+    render_graph.set_resource_input(models_resource, cfg.models.clone());
     render_graph.set_resource_input(transparency_resource, cfg.transparency);
     render_graph.set_resource_input(chunk_list_resource, ChunkList { chunks: Default::default() });
 
@@ -368,8 +378,9 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
 pub struct ChunkMeshShaderMaterial {
     pub cfg: RenderConfig,
     new_chunk_list: Vec<ChunkBuffers>,
-    models: Option<Box<[chunk_mesher::mesh_shader::Block]>>,
     chunk_list_resource: Option<ResourceHandle<ChunkList>>,
+
+    chunk_count: usize,
 }
 
 impl ChunkMeshShaderMaterial {
@@ -383,20 +394,18 @@ impl ChunkMeshShaderMaterial {
     }
 
     pub fn new(cfg: RenderConfig) -> Self {
+        assert_eq!(cfg.models.size(), u64::try_from(MODEL_BUFFER_SIZE).unwrap());
         Self {
             cfg,
             new_chunk_list: vec![],
-            models: None,
             chunk_list_resource: None,
+
+            chunk_count: 0,
         }
     }
 
     pub fn add_chunk(&mut self, chunk: ChunkBuffers) {
         self.new_chunk_list.push(chunk);
-    }
-
-    pub fn update_models(&mut self, models: &[chunk_mesher::mesh_shader::Block]) {
-        self.models = Some(models.iter().copied().collect());
     }
 }
 
@@ -412,15 +421,17 @@ impl Material for ChunkMeshShaderMaterial {
     }
 
     fn update(&mut self, render_graph: &mut render_graph::RenderGraph) {
-        let Some(chunk_list_resource) = self.chunk_list_resource
-        else { return };
+        let chunk_list_resource = self.chunk_list_resource.expect("should have been registered");
 
-        let chunk_list = render_graph.compute_resource(chunk_list_resource).into_mut();
-        for ChunkBuffers { buffer: data } in self.new_chunk_list.drain(..) {
-            chunk_list.chunks.push(PerChunkRenderData {
-                buffer: data,
-            });
+        if !self.new_chunk_list.is_empty() {
+            let chunk_list = render_graph.compute_resource(chunk_list_resource).into_mut();
+            for ChunkBuffers { buffer } in self.new_chunk_list.drain(..) {
+                self.chunk_count += 1;
+                chunk_list.chunks.push(PerChunkRenderData { buffer });
+            }
+            render_graph.mark_resource_input_dirty(chunk_list_resource);
         }
-        render_graph.mark_resource_input_dirty(chunk_list_resource);
+
+        assert_ne!(self.chunk_count, 0);
     }
 }

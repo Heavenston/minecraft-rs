@@ -4,10 +4,11 @@ use std::{cell::RefCell, collections::{HashMap, HashSet}, sync::Arc, time::Insta
 
 use anyhow::{Context as _, Result};
 use crossbeam_channel::Receiver;
-use engine::{MaterialHandle, wgpu::{self, util::DeviceExt as _}};
+use engine::{MaterialHandle, MaterialStore, wgpu::{self, util::DeviceExt as _}};
 use enum_map::EnumMap;
 use glam::{ISizeVec3, U8Vec4, USizeVec3, Vec3, Vec4, Vec4Swizzles as _};
 use image::{EncodableLayout as _, Pixel as _};
+use itertools::Itertools as _;
 use ordermap::OrderMap;
 use parking_lot::RwLock;
 use render_graph::RenderGraph;
@@ -39,6 +40,7 @@ struct MeshingState {
     queue: wgpu::Queue,
     texture: wgpu::Texture,
     texture_layers: EnumMap<u8, Option<ResourceLocation>>,
+    models: Option<wgpu::Buffer>,
     mesher: ChunkMesher,
     mcdata: Arc<MinecraftData>,
     materials: Arc<RwLock<engine::MaterialStore>>,
@@ -87,16 +89,17 @@ impl MeshingState {
         material
     }
 
-    fn get_chunk_mesh_shader_material(&mut self, transparency: ChunkTransparencyMode) -> MaterialHandle<ChunkMeshShaderMaterial> {
-        assert!(self.device.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER));
+    fn get_chunk_mesh_shader_material(&mut self, materials: &mut parking_lot::ArcRwLockWriteGuard<parking_lot::RawRwLock, MaterialStore>, transparency: ChunkTransparencyMode) -> MaterialHandle<ChunkMeshShaderMaterial> {
+        assert!(ChunkMeshShaderMaterial::is_suported(&self.device));
 
         let key = ChunkMaterialKey { transparency };
         if let Some(&material) = self.chunk_mesh_shader_materials.get(&key) {
             return material;
         }
 
-        let material = self.materials.write().add_material(ChunkMeshShaderMaterial::new(materials::chunk_mesh_shader::RenderConfig {
+        let material = materials.add_material(ChunkMeshShaderMaterial::new(materials::chunk_mesh_shader::RenderConfig {
             texture: self.texture.clone(),
+            models: self.models.clone().expect("models needed for mesh shader"),
             transparency,
         }));
         self.chunk_mesh_shader_materials.insert(key, material);
@@ -152,10 +155,10 @@ impl MeshingState {
             }]).collect();
         }
         for submesh in &mesh.mesh_shader {
-            let material = self.get_chunk_mesh_shader_material(submesh.transparency);
             let uploaded = materials::chunk_mesh_shader::ChunkBuffers::upload_mesh(&self.device, chunk_pos, submesh);
 
-            let mut materials = self.materials.write();
+            let mut materials = self.materials.write_arc();
+            let material = self.get_chunk_mesh_shader_material(&mut materials, submesh.transparency);
             let material = materials.get_material_mut(material).unwrap();
             material.add_chunk(uploaded);
         }
@@ -210,6 +213,13 @@ impl MeshingState {
             }
         }
     }
+
+    fn update_models(&self) {
+        assert!(ChunkMeshShaderMaterial::is_suported(&self.device));
+        let models_buffer = self.models.clone().expect("Present if mesh shader is enabled");
+        let models = self.mesher.models().collect_vec();
+        self.queue.write_buffer(&models_buffer, 0, bytemuck::cast_slice::<_, u8>(&models));
+    }
 }
 
 struct State {
@@ -229,6 +239,14 @@ impl State {
 }
 
 pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata: Arc<MinecraftData>, device: wgpu::Device, queue: wgpu::Queue, materials: Arc<RwLock<engine::MaterialStore>>) {
+    let enable_mesh_shader = ChunkMeshShaderMaterial::is_suported(&device);
+    if enable_mesh_shader {
+        tracing::info!("Using MESH SHADERS ✨️");
+    }
+    else {
+        tracing::info!("Not using mesh shaders...");
+    }
+
     let texture = device.create_texture(&wgpu::wgt::TextureDescriptor {
         label: Some("Blocks texture"),
         size: wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 256 },
@@ -239,14 +257,14 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
         usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
-
-    let enable_mesh_shader = ChunkMeshShaderMaterial::is_suported(&device);
-    if enable_mesh_shader {
-        tracing::info!("Using MESH SHADERS ✨️");
-    }
-    else {
-        tracing::info!("Not using mesh shaders...");
-    }
+    let models = enable_mesh_shader.then(|| {
+        device.create_buffer(&wgpu::wgt::BufferDescriptor {
+            label: Some("Mesh shader models"),
+            size: materials::chunk_mesh_shader::MODEL_BUFFER_SIZE.try_into().unwrap(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        })
+    });
 
     let mut state = State {
         generator: crate::proc_gen::Generator::new(seed),
@@ -255,6 +273,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
             queue,
             texture,
             texture_layers: EnumMap::default(),
+            models,
             mesher: ChunkMesher::new(crate::chunk_mesher::Config { enable_mesh_shader }, Arc::clone(&mcdata)),
             mcdata,
             chunk_full_face_materials: Default::default(),
@@ -281,6 +300,9 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
                 state.gen_chunk(ISizeVec3::new(distance, y, dz));
             }
             state.store.update_textures();
+            if enable_mesh_shader {
+                state.store.update_models();
+            }
         }
         distance += 1;
 

@@ -776,7 +776,7 @@ fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMesh
 
                             let palette_idx = ctx.chunk.get(pos);
                             let idxs = &palette_idxs[palette_idx];
-                            debug_assert!(idxs.models.is_empty());
+                            debug_assert!(!idxs.models.is_empty());
                             let model_idx = if let &[model] = &idxs.models[..] {
                                 model
                             } else {
