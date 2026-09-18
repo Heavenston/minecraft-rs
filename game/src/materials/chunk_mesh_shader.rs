@@ -1,20 +1,23 @@
 #![expect(dead_code, reason = "wip")]
 
-use crevice::std140::AsStd140;
+use crevice::std140::{AsStd140, Std140 as _};
 use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
-use glam::{ISizeVec3, Vec3};
+use glam::ISizeVec3;
+use itertools::{ Itertools as _ };
 use render_graph::ResourceHandle;
 use resource::resource_str;
-use wgpu::util::DeviceExt as _;
 
 use super::{ EnableWireframes, CutoutRenderStep, OpaqueRenderStep, TranslucentRenderStep };
 use crate::chunk_mesher::{self, ChunkTransparencyMode};
 use crate::chunk::CHUNK_SIZE;
 
+const MAX_CHUNK_COUNT: usize = 0x0001_0000;
+const MAX_MODEL_COUNT: usize = 0x0010_0000;
+
 render_graph::graph_resource!(struct ShaderSourceCode(wgpu::naga::Module); permanent);
 render_graph::graph_resource!(struct ShaderModule(wgpu::ShaderModule); permanent);
 render_graph::graph_resource!(struct BindGroupLayout(wgpu::BindGroupLayout); permanent);
-render_graph::graph_resource!(struct ChunkBindGroupLayout(wgpu::BindGroupLayout); permanent);
+render_graph::graph_resource!(struct ChunkListBindGroupLayout(wgpu::BindGroupLayout); permanent);
 render_graph::graph_resource!(struct RenderPipelineLayout(wgpu::PipelineLayout); permanent);
 
 pub struct RenderConfig {
@@ -24,13 +27,12 @@ pub struct RenderConfig {
 
 #[derive(AsStd140)]
 struct Immediates {
-    position: Vec3,
+    chunk_idx: u32,
 }
 
 #[derive(Debug, Clone)]
-pub struct PerChunkRenderData {
-    pub position: Vec3,
-    pub bind_group: wgpu::BindGroup,
+struct PerChunkRenderData {
+    buffer: wgpu::Buffer,
 }
 
 struct ChunkList {
@@ -74,14 +76,24 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::MESH,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             }))
         };
 
-        CreateChunkBindGroupLayout
-        (device: ref render_res::Device) -> (ChunkBindGroupLayout) {
+        CreateChunkListBindGroupLayout
+        (device: ref render_res::Device) -> (ChunkListBindGroupLayout) {
             OutputValue(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Chunk mesh shader, per chunk"),
+                label: Some("Chunk mesh shader, chunk data list"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -91,17 +103,7 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::MESH,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                        count: Some(std::num::NonZero::new(MAX_CHUNK_COUNT.try_into().unwrap()).unwrap()),
                     },
                 ],
             }))
@@ -111,7 +113,7 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
             device: ref render_res::Device,
             world_bind_group_layout: ref engine_graph::WorldBindGroupLayout,
             bind_group_layout: ref BindGroupLayout,
-            chunk_bind_group_layout: ref ChunkBindGroupLayout,
+            chunk_bind_group_layout: ref ChunkListBindGroupLayout,
         ) -> (RenderPipelineLayout) {
             OutputValue(device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Chunk mesh shader"),
@@ -170,24 +172,26 @@ impl engine::GlobalMaterial for GlobalMaterial {
 }
 
 pub struct ChunkBuffers {
-    pub pos: ISizeVec3,
-    pub data: wgpu::Buffer,
-    pub models: wgpu::Buffer,
+    buffer: wgpu::Buffer,
 }
 
 impl ChunkBuffers {
     pub fn upload_mesh(device: &wgpu::Device, pos: ISizeVec3, mesh: &chunk_mesher::mesh_shader::Mesh) -> Self {
-        let data = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        assert_eq!(mesh.data.len(), CHUNK_SIZE.element_product());
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("Chunk {pos} data buffer")),
-            contents: bytemuck::cast_slice::<_, u8>(&mesh.data),
+            size: u64::try_from(mesh.data.len() * 4 + 16).unwrap(),
             usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: true,
         });
-        let models = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("Chunk {pos} models buffer")),
-            contents: bytemuck::cast_slice::<_, u8>(&mesh.models),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        Self { pos, data, models }
+
+        let mut view = buffer.get_mapped_range_mut(..).unwrap();
+        view.slice(..12).copy_from_slice((pos * CHUNK_SIZE.as_isizevec3()).as_vec3().as_std140().as_bytes());
+        view.slice(16..).copy_from_slice(bytemuck::cast_slice::<_, u8>(&mesh.data[..]));
+        drop(view);
+        
+        buffer.unmap();
+        Self { buffer }
     }
 }
 
@@ -200,6 +204,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
         using @texture: wgpu::Texture = render_graph.create_resource("chunk_mesh_shader_material::texture", Cfg::permanent());
 
         using @bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_mesh_shader_material::bind_group", Cfg::permanent());
+        using @chunk_list_bind_group: wgpu::BindGroup = render_graph.create_resource("chunk_mesh_shader_material::chunk_list_bind_group", Cfg::permanent());
         using @render_pipeline: wgpu::RenderPipeline = render_graph.create_resource("chunk_mesh_shader_material::render_pipeline", Cfg::permanent());
 
         using @draw_step: () = match cfg.transparency {
@@ -229,6 +234,24 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(&texture.create_view(&wgpu::TextureViewDescriptor::default()))
+                    },
+                ],
+            }))
+        };
+
+        CreateChunkListBindGroup (
+            device: ref render_res::Device,
+            chunk_list_bind_group_layout: ref ChunkListBindGroupLayout,
+            chunk_list: ref @chunk_list,
+        ) -> (@chunk_list_bind_group) {
+            let bindings = chunk_list.chunks.iter().map(|chunk| chunk.buffer.as_entire_buffer_binding()).collect_vec();
+            OutputValue(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Chunk mesh shader global"),
+                layout: chunk_list_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::BufferArray(&bindings),
                     },
                 ],
             }))
@@ -310,25 +333,22 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
 
         Draw (
             mut render_pass: engine_graph::RenderPass,
-            world: ref engine_graph::WorldResource,
             bind_group: ref @bind_group,
+            chunk_list_bind_group: ref @chunk_list_bind_group,
             render_pipeline: ref @render_pipeline,
             chunk_list: ref @chunk_list,
 
             &transparency: ref @transparency,
             _: ref @draw_step,
         ) -> (engine_graph::RenderPass) {
-            let view_projection = world.camera_projection * world.camera_clip_transform.inverse_or_zero();
-
             render_pass.push_debug_group(&format!("{transparency:?} Chunk mesh shader renderer"));
             render_pass.set_pipeline(render_pipeline);
             render_pass.set_bind_group(1, bind_group, &[]);
-            for chunk in &*chunk_list.chunks {
-                if !(crate::utils::AABB3 { min: chunk.position, max: chunk.position + CHUNK_SIZE.as_vec3() }).frustrum_test(&view_projection) { continue }
+            render_pass.set_bind_group(2, chunk_list_bind_group, &[]);
+            for chunk_idx in 0..u32::try_from(chunk_list.chunks.len()).unwrap() {
                 render_pass.set_immediates(0, Immediates {
-                    position: chunk.position,
+                    chunk_idx,
                 }.as_std140().as_bytes());
-                render_pass.set_bind_group(2, &chunk.bind_group, &[]);
                 render_pass.draw_mesh_tasks(8,8,16);
             }
             render_pass.pop_debug_group();
@@ -348,6 +368,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
 pub struct ChunkMeshShaderMaterial {
     pub cfg: RenderConfig,
     new_chunk_list: Vec<ChunkBuffers>,
+    models: Option<Box<[chunk_mesher::mesh_shader::Block]>>,
     chunk_list_resource: Option<ResourceHandle<ChunkList>>,
 }
 
@@ -365,12 +386,17 @@ impl ChunkMeshShaderMaterial {
         Self {
             cfg,
             new_chunk_list: vec![],
+            models: None,
             chunk_list_resource: None,
         }
     }
 
     pub fn add_chunk(&mut self, chunk: ChunkBuffers) {
         self.new_chunk_list.push(chunk);
+    }
+
+    pub fn update_models(&mut self, models: &[chunk_mesher::mesh_shader::Block]) {
+        self.models = Some(models.iter().copied().collect());
     }
 }
 
@@ -389,29 +415,12 @@ impl Material for ChunkMeshShaderMaterial {
         let Some(chunk_list_resource) = self.chunk_list_resource
         else { return };
 
-        let device = render_graph.compute::<render_res::Device>().as_ref().clone();
-        let chunk_bind_group_layout = render_graph.compute::<ChunkBindGroupLayout>().into_ref().clone();
         let chunk_list = render_graph.compute_resource(chunk_list_resource).into_mut();
-
-        for ChunkBuffers { pos, data, models } in self.new_chunk_list.drain(..) {
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("Chunk {pos} for mesh shader")),
-                layout: &chunk_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::Buffer(data.as_entire_buffer_binding()),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Buffer(models.as_entire_buffer_binding()),
-                    },
-                ],
-            });
+        for ChunkBuffers { buffer: data } in self.new_chunk_list.drain(..) {
             chunk_list.chunks.push(PerChunkRenderData {
-                position: (pos * CHUNK_SIZE.as_isizevec3()).as_vec3(),
-                bind_group,
+                buffer: data,
             });
         }
+        render_graph.mark_resource_input_dirty(chunk_list_resource);
     }
 }

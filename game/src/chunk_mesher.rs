@@ -554,6 +554,7 @@ struct ChunkMeshBuilder<'a> {
     submeshes: EnumMap<SubmeshKey, IncompleteSubMesh>,
     // For each block, lists faces that are *not* culled
     culled_face_data: Box<[[[EnumSet<CardinalDirection>; CHUNK_SIZE.x]; CHUNK_SIZE.y]; CHUNK_SIZE.z]>,
+    models: &'a mut OrderSet<mesh_shader::BlockModel>,
     mesh_shader: EnumMap<SubmeshKey, mesh_shader::IncompleteMesh>,
 }
 
@@ -622,11 +623,10 @@ impl ChunkMeshBuilder<'_> {
         let mesh_shader = if self.config.enable_mesh_shader {
             self.mesh_shader.into_iter()
                 .filter(|(_, submesh)| submesh.data.iter().any(|b| !b.face_mask().is_empty()))
-                .map(|(SubmeshKey(transparency), mesh_shader::IncompleteMesh { data, models })| {
+                .map(|(SubmeshKey(transparency), mesh_shader::IncompleteMesh { data })| {
                     mesh_shader::Mesh {
                         transparency,
                         data: data.into_boxed_slice(),
-                        models: models.into_boxed_slice(),
                     }
                 })
                 .collect()
@@ -728,28 +728,24 @@ fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
 fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
     for (SubmeshKey(transparency), mesh) in &mut builder.mesh_shader {
         struct PaletteIdx {
-            offset: usize,
-            count: usize,
+            models: Box<[usize]>,
             faces_for_this_mesh: EnumSet<CardinalDirection>,
         }
         let mut palette_idxs = Vec::<PaletteIdx>::new();
 
         for block_data in ctx.chunk.palette() {
             let models = ctx.model_resolver.resolve_block_model(block_data);
-            let idxs = palette_idxs.push_mut(PaletteIdx {
-                offset: mesh.models.len(),
-                count: models.len(),
-                faces_for_this_mesh: EnumSet::empty(),
-            });
+            let mut indexes = Vec::<usize>::new();
+            let mut faces_for_this_mesh = EnumSet::empty();
             for model in models.iter() {
-                let mut face_data: [mesh_shader::FaceDataCombined; 3] = Default::default();
+                let mut block_model_data = mesh_shader::BlockModel::default();
                 for (dir, face) in model.cullable_faces.iter().flat_map(|(dir, facelist)| facelist.full_faces.iter().map(move |face| (dir, face))) {
                     if dir != face.direction { tracing::warn!("Full face not culled in its direction??"); continue; }
                     let texture_data = builder.mcdata.texture(face.texture.location);
                     let face_transparency = ChunkTransparencyMode::from_data(texture_data, face.texture.force_translucent);
                     if face_transparency != transparency { continue; }
 
-                    idxs.faces_for_this_mesh.insert(dir);
+                    faces_for_this_mesh.insert(dir);
 
                     let (texture_idx, _) = builder.textures.insert_full(face.texture.location);
 
@@ -761,17 +757,11 @@ fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMesh
                         .with_face_tint(dir_idx)
                     ;
                     
-                    match dir_idx & 1usize {
-                        0 => face_data[dir_idx >> 1usize].set_face1(data),
-                        1 => face_data[dir_idx >> 1usize].set_face2(data),
-                        _ => unreachable!(),
-                    }
+                    block_model_data.set_face(dir, data);
                 }
-                mesh.models.push(mesh_shader::BlockModel {
-                    face_data,
-                });
+                indexes.push(builder.models.insert_full(block_model_data).0);
             }
-            debug_assert_eq!(mesh.models.len(), palette_idxs.last().unwrap().offset + palette_idxs.last().unwrap().count);
+            palette_idxs.push(PaletteIdx { models: indexes.into_boxed_slice(), faces_for_this_mesh });
         }
 
         mesh.data.reserve(Vec3Range(USizeVec3::ZERO, CHUNK_SIZE).into_iter().len());
@@ -785,17 +775,18 @@ fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMesh
                             let pos = USizeVec3::new(gx + dx, gy + dy, z);
 
                             let palette_idx = ctx.chunk.get(pos);
-                            let idx = &palette_idxs[palette_idx];
-                            let variant_offset = if idx.count == 0 {
-                                0
+                            let idxs = &palette_idxs[palette_idx];
+                            debug_assert!(idxs.models.is_empty());
+                            let model_idx = if let &[model] = &idxs.models[..] {
+                                model
                             } else {
                                 let global_pos = ctx.chunk_pos * CHUNK_SIZE.as_isizevec3() + pos.as_isizevec3();
-                                usize::try_from(get_coordinate_seed(global_pos) % u64::try_from(idx.count).unwrap()).unwrap()
+                                *idxs.models.get_modulo(get_coordinate_seed(global_pos))
                             };
-                            let faces = builder.culled_face_data[pos.z][pos.y][pos.x].intersection(idx.faces_for_this_mesh);
+                            let faces = builder.culled_face_data[pos.z][pos.y][pos.x].intersection(idxs.faces_for_this_mesh);
                             group_faces = group_faces.union(faces);
                             mesh.data.push(mesh_shader::Block::new()
-                                .with_model_idx(idx.offset + variant_offset)
+                                .with_model_idx(model_idx)
                                 .with_face_mask(faces)
                             );
                         }
@@ -818,6 +809,7 @@ pub struct ChunkMesher {
     config: Config,
     resolver: BlockModelResolver,
     textures: OrderSet<ResourceLocation>,
+    models: OrderSet<mesh_shader::BlockModel>,
 }
 
 impl ChunkMesher {
@@ -829,11 +821,16 @@ impl ChunkMesher {
                 cache: Default::default(),
             },
             textures: OrderSet::new(),
+            models: OrderSet::new(),
         }
     }
 
     pub fn textures(&self) -> impl ExactSizeIterator<Item = ResourceLocation> {
         self.textures.iter().copied()
+    }
+
+    pub fn models(&self) -> impl ExactSizeIterator<Item = mesh_shader::BlockModel> {
+        self.models.iter().copied()
     }
 
     pub fn mesh_chunk(&mut self, chunk_pos: ISizeVec3, chunk: &Chunk, neighbors: EnumMap<TwentySixDirection, &Chunk>) -> ChunkMesh {
@@ -848,6 +845,7 @@ impl ChunkMesher {
             quad_submeshes: EnumMap::default(),
             submeshes: EnumMap::default(),
             culled_face_data: Box::default(),
+            models: &mut self.models,
             mesh_shader: EnumMap::default(),
         };
         let mut ctx = ChunkMeshingCtx {

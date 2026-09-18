@@ -63,16 +63,22 @@ struct BlockModel {
     //   face_tint     (3 bits)
     //  x2 for two faces per integer
     faces_data: array<u32, 3>,
-};
+}
+
+struct ChunkData {
+    offset: vec3f,
+    padding: u32,
+    blocks: array<u32, 4096>,
+}
 
 @group(0) @binding(0) var<uniform> world: WorldUniform;
 @group(1) @binding(0) var texture_sampler: sampler;
 @group(1) @binding(1) var texture: texture_2d_array<f32>;
-@group(2) @binding(0) var<storage, read> chunk_data: array<u32>;
+@group(2) @binding(0) var<storage, read> chunk_data: array<ChunkData>;
 @group(2) @binding(1) var<storage, read> models: array<BlockModel>;
 
 struct Immediates {
-    chunk_offset: vec3f,
+    chunk_index: u32,
 };
 
 var<immediate> imm: Immediates;
@@ -103,28 +109,6 @@ fn block_model_get_face_data(model: u32, face_dir: u32) -> BlockModelFaceData {
     out.face_tint     = (packed >> (offset + 9u)) & 0x07u;
     return out;
 }
-
-// struct VertexOutput {
-//     @builtin(position) position: vec4f,
-//     @location(0) texcoord: vec2f,
-//     @interpolate(flat) @location(1) tint_index: u32,
-//     @interpolate(flat) @location(2) texture_index: u32,
-//     @interpolate(flat) @location(3) face_tint: u32,
-// };
-
-// @vertex fn vs(
-//     @location(0) vertex_pos: vec3f,
-//     @location(1) vertex_uv: vec2f,
-//     @location(2) bits_data: u32,
-// ) -> VertexOutput {
-//     var output: VertexOutput;
-//     output.position = world.view_projection_matrix * vec4f(vertex_pos + imm.chunk_offset, 1.0);
-//     output.texcoord = vertex_uv;
-//     output.tint_index = (bits_data >> 0) & 0x3;
-//     output.texture_index = (bits_data >> 2) & 0x7f;
-//     output.face_tint = (bits_data >> 9) & 0x7;
-//     return output;
-// }
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -163,7 +147,7 @@ fn ms(
     let group_base_block_pos = group_pos * vec3i(2,2,1);
     let group_base_idx = workgroup_id.x*4 + workgroup_id.y*32 + workgroup_id.z*256;
 
-    if !block_info_has_any_group_face(chunk_data[group_base_idx]) {
+    if !block_info_has_any_group_face(chunk_data[imm.chunk_index].blocks[group_base_idx]) {
         if invocation_idx == 0 {
             mesh_output.vertex_count = 0;
             mesh_output.primitive_count = 0;
@@ -184,7 +168,7 @@ fn ms(
     let prim_offset = block_group_invocation_idx*12u + dir*2u;
     let vert_offset = block_group_invocation_idx*24u + dir*4u + vertex_idx;
 
-    let block_info = chunk_data[group_base_idx + invocation_id.x + invocation_id.y*2u];
+    let block_info = chunk_data[imm.chunk_index].blocks[group_base_idx + invocation_id.x + invocation_id.y*2u];
     if !block_info_has_any_face(block_info) {
         if vertex_idx == 0 {
             mesh_output.primitives[prim_offset+0u].cull = true;
@@ -194,7 +178,7 @@ fn ms(
     }
 
     let block_posf = vec3f(f32(block_pos.x), f32(block_pos.y), f32(block_pos.z));
-    let global_block_posf = block_posf + imm.chunk_offset;
+    let global_block_posf = block_posf + chunk_data[imm.chunk_index].offset;
     var cull: bool = false;
     switch (dir) {
         // +X
