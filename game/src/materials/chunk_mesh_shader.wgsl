@@ -1,4 +1,5 @@
 enable wgpu_mesh_shader;
+enable wgpu_binding_array;
 
 const pi = radians(180.0);
 const tau = radians(360.0);
@@ -75,7 +76,7 @@ struct ChunkData {
 @group(1) @binding(0) var texture_sampler: sampler;
 @group(1) @binding(1) var texture: texture_2d_array<f32>;
 @group(1) @binding(2) var<storage, read> models: array<BlockModel>;
-@group(2) @binding(0) var<storage, read> chunk_data: array<ChunkData>;
+@group(2) @binding(0) var<storage, read> chunk_data: binding_array<ChunkData>;
 
 struct Immediates {
     chunk_index: u32,

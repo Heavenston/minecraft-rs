@@ -141,9 +141,10 @@ impl GlobalMaterial {
         };
         if !cfg!(debug_assertions) { return Some(module); }
 
-        use wgpu::naga::valid::{ Validator, ValidationFlags, Capabilities };
+        use wgpu::naga::valid::{ Validator, ValidationFlags };
 
-        let mut validator = Validator::new(ValidationFlags::all(), Capabilities::IMMEDIATES | Capabilities::MESH_SHADER);
+        let capabilities = wgpu::wgc::device::features_to_naga_capabilities(ChunkMeshShaderMaterial::required_features(), wgpu::DownlevelFlags::compliant());
+        let mut validator = Validator::new(ValidationFlags::all(), capabilities);
         match validator.validate(&module) {
             Ok(_) => (),
             Err(error) => {
@@ -385,13 +386,16 @@ pub struct ChunkMeshShaderMaterial {
 }
 
 impl ChunkMeshShaderMaterial {
+    fn required_features() -> wgpu::Features {
+        wgpu::Features::IMMEDIATES                     |
+        wgpu::Features::EXPERIMENTAL_MESH_SHADER       |
+        wgpu::Features::BUFFER_BINDING_ARRAY           |
+        wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY |
+        wgpu::Features::PARTIALLY_BOUND_BINDING_ARRAY
+    }
+
     pub fn is_suported(device: &wgpu::Device) -> bool {
-        device.features().contains(
-            wgpu::Features::EXPERIMENTAL_MESH_SHADER       |
-            wgpu::Features::BUFFER_BINDING_ARRAY           |
-            wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY |
-            wgpu::Features::PARTIALLY_BOUND_BINDING_ARRAY
-        )
+        device.features().contains(Self::required_features())
     }
 
     pub fn new(cfg: RenderConfig) -> Self {
