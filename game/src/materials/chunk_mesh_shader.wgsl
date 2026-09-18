@@ -126,6 +126,29 @@ struct TaskPayload {
 var<task_payload> taskPayload: TaskPayload;
 var<workgroup> required_faces_per_task: array<u32, 64>;
 
+fn make_camera_culled_faces_mask(min_pos: vec3f, max_pos: vec3f) -> u32 {
+    var mask: u32 = 0;
+    if world.camera_position.x > min_pos.x {
+        mask |= 1u << 0u;
+    }
+    if world.camera_position.x < max_pos.x {
+        mask |= 1u << 1u;
+    }
+    if world.camera_position.y > min_pos.y {
+        mask |= 1u << 2u;
+    }
+    if world.camera_position.y < max_pos.y {
+        mask |= 1u << 3u;
+    }
+    if world.camera_position.z > min_pos.z {
+        mask |= 1u << 4u;
+    }
+    if world.camera_position.z < max_pos.z {
+        mask |= 1u << 5u;
+    }
+    return mask;
+}
+
 @task
 @payload(taskPayload)
 @workgroup_size(4,4,4)
@@ -136,11 +159,14 @@ fn ts_main(
     @builtin(num_workgroups) num_workgroups: vec3u,
 ) -> @builtin(mesh_task_size) vec3u {
     let chunk_index = workgroup_id.x * num_workgroups.y * num_workgroups.z + workgroup_id.y * num_workgroups.z + workgroup_id.z;
+    let chunk_offset = all_chunks_data[chunk_index].offset;
     let blocks = &all_chunks_data[chunk_index].blocks;
 
     let y_slice = invocation_id.y;
     let task_idx = invocation_id.z * 16 + invocation_id.y * 4 + invocation_id.x;
-    required_faces_per_task[task_idx] = block_info_group_faces((*blocks)[task_idx * 64]);
+    let task_blocks_offset = chunk_offset + vec3f(invocation_id) * vec3f(4.);
+    let face_camera_mask = make_camera_culled_faces_mask(task_blocks_offset, task_blocks_offset + vec3f(4.));
+    required_faces_per_task[task_idx] = block_info_group_faces((*blocks)[task_idx * 64]) & face_camera_mask;
 
     workgroupBarrier();
     if invocation_idx < 6 {
