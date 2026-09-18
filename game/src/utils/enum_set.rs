@@ -162,7 +162,7 @@ impl<E: Enum> EnumSet<E> {
     }
 
     pub fn is_empty(self) -> bool {
-        self.len() == 0
+        self == Self::empty()
     }
 
     pub fn is_all(self) -> bool {

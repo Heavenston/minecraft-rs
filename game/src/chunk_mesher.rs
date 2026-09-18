@@ -765,32 +765,35 @@ fn mesh_chunk_for_mesh_shader(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMesh
         }
 
         mesh.data.reserve(Vec3Range(USizeVec3::ZERO, CHUNK_SIZE).into_iter().len());
-        for z in 0..CHUNK_SIZE.z {
-            for gy in (0..CHUNK_SIZE.y).step_by(2) {
-                for gx in (0..CHUNK_SIZE.x).step_by(2) {
+        for gz in (0..CHUNK_SIZE.z).step_by(4) {
+            for gy in (0..CHUNK_SIZE.y).step_by(4) {
+                for gx in (0..CHUNK_SIZE.x).step_by(4) {
                     let group_start_idx = mesh.data.len();
                     let mut group_faces = EnumSet::empty();
-                    for dy in 0..2usize {
-                        for dx in 0..2usize {
-                            let pos = USizeVec3::new(gx + dx, gy + dy, z);
+                    for dz in 0..4usize {
+                        for dy in 0..4usize {
+                            for dx in 0..4usize {
+                                let pos = USizeVec3::new(gx + dx, gy + dy, gz + dz);
 
-                            let palette_idx = ctx.chunk.get(pos);
-                            let idxs = &palette_idxs[palette_idx];
-                            debug_assert!(!idxs.models.is_empty());
-                            let model_idx = if let &[model] = &idxs.models[..] {
-                                model
-                            } else {
-                                let global_pos = ctx.chunk_pos * CHUNK_SIZE.as_isizevec3() + pos.as_isizevec3();
-                                *idxs.models.get_modulo(get_coordinate_seed(global_pos))
-                            };
-                            let faces = builder.culled_face_data[pos.z][pos.y][pos.x].intersection(idxs.faces_for_this_mesh);
-                            group_faces = group_faces.union(faces);
-                            mesh.data.push(mesh_shader::Block::new()
-                                .with_model_idx(model_idx)
-                                .with_face_mask(faces)
-                            );
+                                let palette_idx = ctx.chunk.get(pos);
+                                let idxs = &palette_idxs[palette_idx];
+                                debug_assert!(!idxs.models.is_empty());
+                                let model_idx = if let &[model] = &idxs.models[..] {
+                                    model
+                                } else {
+                                    let global_pos = ctx.chunk_pos * CHUNK_SIZE.as_isizevec3() + pos.as_isizevec3();
+                                    *idxs.models.get_modulo(get_coordinate_seed(global_pos))
+                                };
+                                let faces = builder.culled_face_data[pos.z][pos.y][pos.x].intersection(idxs.faces_for_this_mesh);
+                                group_faces = group_faces.union(faces);
+                                mesh.data.push(mesh_shader::Block::new()
+                                    .with_model_idx(model_idx)
+                                    .with_face_mask(faces)
+                                );
+                            }
                         }
                     }
+                    debug_assert_eq!(mesh.data[group_start_idx..].len(), 64);
                     for i in &mut mesh.data[group_start_idx..] {
                         i.set_group_face_mask(group_faces);
                     }

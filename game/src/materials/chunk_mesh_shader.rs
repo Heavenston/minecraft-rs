@@ -1,6 +1,6 @@
 #![expect(dead_code, reason = "wip")]
 
-use crevice::std140::{AsStd140, Std140 as _};
+use crevice::std140::{AsStd140 as _, Std140 as _};
 use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
 use glam::ISizeVec3;
 use itertools::{ Itertools as _ };
@@ -25,11 +25,6 @@ pub struct RenderConfig {
     pub texture: wgpu::Texture,
     pub models: wgpu::Buffer,
     pub transparency: ChunkTransparencyMode,
-}
-
-#[derive(AsStd140)]
-struct Immediates {
-    chunk_idx: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -99,7 +94,7 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::MESH,
+                        visibility: wgpu::ShaderStages::MESH | wgpu::ShaderStages::TASK,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
@@ -120,7 +115,7 @@ fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
             OutputValue(device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Chunk mesh shader"),
                 bind_group_layouts: &[Some(world_bind_group_layout), Some(bind_group_layout), Some(chunk_bind_group_layout)],
-                immediate_size: Immediates::std140_size_static().try_into().unwrap(),
+                immediate_size: 0,
             }))
         };
     );
@@ -276,7 +271,14 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
             OutputValue(device.create_mesh_pipeline(&wgpu::MeshPipelineDescriptor {
                 label:Some("Chunk material"),
                 layout:Some(render_pipeline_layout),
-                task: None,
+                task: Some(wgpu::TaskState {
+                    module: shader_module,
+                    entry_point: None,
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[],
+                        zero_initialize_workgroup_memory: false,
+                    },
+                }),
                 mesh: wgpu::MeshState {
                     module: shader_module,
                     entry_point: None,
@@ -356,12 +358,10 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
             render_pass.set_pipeline(render_pipeline);
             render_pass.set_bind_group(1, bind_group, &[]);
             render_pass.set_bind_group(2, chunk_list_bind_group, &[]);
-            for chunk_idx in 0..u32::try_from(chunk_list.chunks.len()).unwrap() {
-                render_pass.set_immediates(0, Immediates {
-                    chunk_idx,
-                }.as_std140().as_bytes());
-                render_pass.draw_mesh_tasks(8,8,16);
-            }
+
+            let chunk_count = u32::try_from(chunk_list.chunks.len()).unwrap();
+            render_pass.draw_mesh_tasks(chunk_count & 0xFFFF, chunk_count.div_ceil(0xFFFF), 1);
+
             render_pass.pop_debug_group();
 
             OutputValue(render_pass)
