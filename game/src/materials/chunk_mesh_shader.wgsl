@@ -284,6 +284,9 @@ fn ms(
     let group_base_block_pos = group_pos * vec3u(4);
     let group_base_block_idx = (group_pos.x + group_pos.y*4 + group_pos.z*16)*64;
 
+    let global_base_group_pos = vec3f(group_base_block_pos) + (*chunk_data).offset;
+    let global_base_group_pos_clip_space = world.view_projection_matrix * vec4f(global_base_group_pos, 1.);
+
     if invocation_idx == 0 {
         mesh_output.vertex_count = 125;
         mesh_output.primitive_count = 128;
@@ -296,7 +299,7 @@ fn ms(
     {
         let vertex = &mesh_output.vertices[vertex_idx];
         (*vertex).world_pos = global_vertex_pos;
-        (*vertex).position = world.view_projection_matrix * vec4f(global_vertex_pos, 1.);
+        (*vertex).position = global_base_group_pos_clip_space + world.view_projection_matrix[0] * f32(invocation_id.x) + world.view_projection_matrix[1] * f32(invocation_id.y) + world.view_projection_matrix[2] * f32(invocation_id.z);
     }
 
     let block_pos = vertex_pos;
