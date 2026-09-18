@@ -240,7 +240,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
         view_formats: &[],
     });
 
-    let enable_mesh_shader = device.features().contains(wgpu::Features::EXPERIMENTAL_MESH_SHADER);
+    let enable_mesh_shader = ChunkMeshShaderMaterial::is_suported(&device);
     if enable_mesh_shader {
         tracing::info!("Using MESH SHADERS ✨️");
     }

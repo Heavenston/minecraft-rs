@@ -7,7 +7,7 @@ use render_graph::ResourceHandle;
 use resource::resource_str;
 use wgpu::util::DeviceExt as _;
 
-use super::{ test_aabb_against_frustum, EnableWireframes, CutoutRenderStep, OpaqueRenderStep, TranslucentRenderStep };
+use super::{ EnableWireframes, CutoutRenderStep, OpaqueRenderStep, TranslucentRenderStep };
 use crate::chunk_mesher::{self, ChunkTransparencyMode};
 use crate::chunk::CHUNK_SIZE;
 
@@ -324,8 +324,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
             render_pass.set_pipeline(render_pipeline);
             render_pass.set_bind_group(1, bind_group, &[]);
             for chunk in &*chunk_list.chunks {
-                let max_pos = chunk.position + CHUNK_SIZE.as_vec3();
-                if !test_aabb_against_frustum(&view_projection, chunk.position, max_pos) { continue }
+                if !(crate::utils::AABB3 { min: chunk.position, max: chunk.position + CHUNK_SIZE.as_vec3() }).frustrum_test(&view_projection) { continue }
                 render_pass.set_immediates(0, Immediates {
                     position: chunk.position,
                 }.as_std140().as_bytes());
@@ -353,6 +352,15 @@ pub struct ChunkMeshShaderMaterial {
 }
 
 impl ChunkMeshShaderMaterial {
+    pub fn is_suported(device: &wgpu::Device) -> bool {
+        device.features().contains(
+            wgpu::Features::EXPERIMENTAL_MESH_SHADER       |
+            wgpu::Features::BUFFER_BINDING_ARRAY           |
+            wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY |
+            wgpu::Features::PARTIALLY_BOUND_BINDING_ARRAY
+        )
+    }
+
     pub fn new(cfg: RenderConfig) -> Self {
         Self {
             cfg,

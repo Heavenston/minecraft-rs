@@ -75,8 +75,17 @@ impl Renderer {
             })
             .await?;
 
-        let optional_features = wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::EXPERIMENTAL_MESH_SHADER;
-        let effective_features = wgpu::Features::IMMEDIATES | adapter.features().intersection(optional_features);
+        let optional_features: wgpu::Features =
+            wgpu::Features::POLYGON_MODE_LINE |
+            wgpu::Features::EXPERIMENTAL_MESH_SHADER |
+            wgpu::Features::BUFFER_BINDING_ARRAY |
+            wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY |
+            wgpu::Features::PARTIALLY_BOUND_BINDING_ARRAY
+        ;
+        let required_features: wgpu::Features =
+            wgpu::Features::IMMEDIATES
+        ;
+        let effective_features = required_features | adapter.features().intersection(optional_features);
 
         let mut limits = wgpu::Limits {
             max_immediate_size: 128,
