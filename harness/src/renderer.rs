@@ -62,7 +62,7 @@ impl Renderer {
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             backend_options: wgpu::BackendOptions::default(),
             display: Some(Box::new(display_handle)),
-        });
+        }.with_env());
         
         let surface = instance.create_surface(Arc::clone(&window)).unwrap();
 
