@@ -1,7 +1,6 @@
-use std::sync::Arc;
 use crevice::std140::AsStd140;
 use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
-use glam::Vec3;
+use glam::{ISizeVec3, Vec3};
 use render_graph::ResourceHandle;
 use resource::resource_str;
 
@@ -28,13 +27,37 @@ struct Immediates {
 
 #[derive(Debug, Clone)]
 pub struct ChunkRenderData {
-    pub direction: CardinalDirection,
-    pub position: Vec3,
-    pub vertex_buffer: wgpu::Buffer,
+    direction: CardinalDirection,
+    position: Vec3,
+    vertex_buffer: wgpu::Buffer,
+}
+
+impl ChunkRenderData {
+    pub fn upload(
+        device: &wgpu::Device,
+        chunk_pos: ISizeVec3,
+        submesh: &crate::chunk_mesher::QuadSubMesh,
+    ) -> Self {
+            let instances_bytes = bytemuck::cast_slice::<_, u8>(&submesh.instances);
+            let buffer = device.create_buffer(&wgpu::wgt::BufferDescriptor {
+                label: Some(&format!("chunk,{chunk_pos},{:?}", submesh.direction)),
+                size: instances_bytes.len().try_into().unwrap(),
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: true,
+            });
+            buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(instances_bytes);
+            buffer.unmap();
+
+            Self {
+                direction: submesh.direction,
+                position: (chunk_pos * CHUNK_SIZE.as_isizevec3()).as_vec3(),
+                vertex_buffer: buffer,
+            }
+    }
 }
 
 struct ChunkList {
-    chunks: Arc<[ChunkRenderData]>,
+    chunks: Vec<ChunkRenderData>,
 }
 
 fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
@@ -126,7 +149,7 @@ impl engine::GlobalMaterial for GlobalMaterial {
 fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_>) -> ResourceHandle<ChunkList> {
     use render_graph::ResourceConfig as Cfg;
     render_graph::node_helper!(into render_graph;
-        using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::new());
+        using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::permanent());
 
         using @transparency: ChunkTransparencyMode = render_graph.create_resource("chunk_material::transparency", Cfg::permanent());
         using @texture: wgpu::Texture = render_graph.create_resource("chunk_material::texture", Cfg::permanent());
@@ -250,7 +273,7 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::RenderGraphWrapp
             world: ref engine_graph::WorldResource,
             bind_group: ref @bind_group,
             render_pipeline: ref @render_pipeline,
-            chunk_list: @chunk_list,
+            chunk_list: ref @chunk_list,
 
             &transparency: ref @transparency,
             _: ref @draw_step,
@@ -292,8 +315,9 @@ fn register(cfg: &ChunkRenderConfig, render_graph: &mut engine::RenderGraphWrapp
 
 #[expect(clippy::module_name_repetitions, reason = "Needed here to not clash with Material trait")]
 pub struct ChunkFullFaceMaterial {
-    pub cfg: ChunkRenderConfig,
-    pub chunk_list: Arc<[ChunkRenderData]>,
+    cfg: ChunkRenderConfig,
+    new_chunks: Vec<ChunkRenderData>,
+    clear_chunks: bool,
     chunk_list_resource: Option<ResourceHandle<ChunkList>>,
 }
 
@@ -301,9 +325,19 @@ impl ChunkFullFaceMaterial {
     pub fn new(cfg: ChunkRenderConfig) -> Self {
         Self {
             cfg,
-            chunk_list: Default::default(),
+            new_chunks: vec![],
+            clear_chunks: false,
             chunk_list_resource: None,
         }
+    }
+
+    pub fn push_chunk(&mut self, data: ChunkRenderData) {
+        self.new_chunks.push(data);
+    }
+
+    pub fn clear_chunks(&mut self) {
+        self.new_chunks.clear();
+        self.clear_chunks = true;
     }
 }
 
@@ -319,6 +353,16 @@ impl Material for ChunkFullFaceMaterial {
     }
 
     fn update(&mut self, render_graph: &mut render_graph::RenderGraph) {
-        render_graph.set_resource_input(self.chunk_list_resource.unwrap(), ChunkList { chunks: Arc::clone(&self.chunk_list) });
+        let chunk_list_resource = self.chunk_list_resource.unwrap();
+        let chunk_list = render_graph.compute_resource(chunk_list_resource).into_mut();
+        let changed = (self.clear_chunks && !chunk_list.chunks.is_empty()) || !self.new_chunks.is_empty();
+        if self.clear_chunks {
+            self.clear_chunks = false;
+            chunk_list.chunks.clear();
+        }
+        chunk_list.chunks.append(&mut self.new_chunks);
+        if changed {
+            render_graph.mark_resource_input_dirty(chunk_list_resource);
+        }
     }
 }

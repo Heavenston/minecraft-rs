@@ -53,7 +53,7 @@ impl MeshingState {
         self.chunks.clear();
         #[expect(clippy::iter_over_hash_type, reason = "me no care")]
         for &handle in self.chunk_full_face_materials.values() {
-            self.materials.write().get_material_mut(handle).unwrap().chunk_list = Arc::default();
+            self.materials.write().get_material_mut(handle).unwrap().clear_chunks();
         }
     }
 
@@ -106,14 +106,8 @@ impl MeshingState {
             buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(instances_bytes);
             buffer.unmap();
             let material = self.get_chunk_full_face_material(submesh.transparency);
-
-            let mut materials = self.materials.write();
-            let material = materials.get_material_mut(material).unwrap();
-            material.chunk_list = material.chunk_list.iter().cloned().chain([materials::chunk_full_face::ChunkRenderData {
-                direction: submesh.direction,
-                position: (chunk_pos * CHUNK_SIZE.as_isizevec3()).as_vec3(),
-                vertex_buffer: buffer,
-            }]).collect();
+            let chunk_render_data = materials::chunk_full_face::ChunkRenderData::upload(&self.device, chunk_pos, &submesh);
+            self.materials.write().get_material_mut(material).unwrap().push_chunk(chunk_render_data);
         }
         for submesh in mesh.submeshes {
             let vertices_bytes = bytemuck::cast_slice::<_, u8>(&submesh.vertices);
