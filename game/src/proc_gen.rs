@@ -56,11 +56,11 @@ impl Generator {
 
     pub fn generate_chunk(&self, chunk_pos: ISizeVec3) -> Chunk {
         let mut chunk = Chunk::new();
-        let top_block = BlockData { id: location!("minecraft:grass_block"), state: "snowy=false".to_string(), };
-        let bottom_block = BlockData { id: location!("minecraft:dirt"), state: String::new(), };
+        let top_block = chunk.palette_insert(BlockData { id: location!("minecraft:grass_block"), state: "snowy=false".to_string() });
+        let bottom_block = chunk.palette_insert(BlockData { id: location!("minecraft:dirt"), state: String::new(), });
         // let log_block = BlockData { id: location!("minecraft:oak_log"), state: "axis=y".to_string(), };
         // let log_block = BlockData { id: location!("minecraft:anvil"), state: "facing=east".to_string(), };
-        let log_block = BlockData { id: location!("minecraft:cauldron"), state: String::new(), };
+        let log_block = chunk.palette_insert(BlockData { id: location!("minecraft:cauldron"), state: String::new(), });
         // let top_block = BlockData { id: location!("kgs-debug-blocks:debug2"), state: String::new(), };
         // let bottom_block = BlockData { id: location!("kgs-debug-blocks:debug2"), state: String::new(), };
         // let log_block = BlockData { id: location!("kgs-debug-blocks:debug2"), state: String::new(), };
@@ -85,11 +85,11 @@ impl Generator {
                     let global_pos = DVec3::new(global_pos2d.x, global_y as f64, global_pos2d.y);
                     if self.generate_block(global_pos, height) {
                         if prev {
-                            chunk.set(delta_pos, &bottom_block);
+                            chunk.set(delta_pos, bottom_block);
                         }
                         else {
                             ground = Some(dy);
-                            chunk.set(delta_pos, &top_block);
+                            chunk.set(delta_pos, top_block);
                         }
                         prev = true;
                     }
@@ -101,13 +101,13 @@ impl Generator {
                 if global_pos2d == DVec2::ZERO {
                     if let Some(g) = ground {
                         for dy in g+1..CHUNK_SIZE.y {
-                            chunk.set(USizeVec3::new(dx, dy, dz), &log_block);
+                            chunk.set(USizeVec3::new(dx, dy, dz), log_block);
                         }
                     }
                     else if !prev {
                         for dy in 0..CHUNK_SIZE.y {
                             if dy % 2 == 0 {
-                                chunk.set(USizeVec3::new(dx, dy, dz), &log_block);
+                                chunk.set(USizeVec3::new(dx, dy, dz), log_block);
                             }
                         }
                     }

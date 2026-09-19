@@ -5,7 +5,7 @@ use glam::USizeVec3;
 use itertools::Itertools as _;
 use ordermap::{OrderSet, orderset};
 
-use crate::resource_location::{ResourceLocation, location};
+use crate::{resource_location::{ResourceLocation, location}, utils::RefOrOwned};
 
 pub const CHUNK_SIZE: USizeVec3 = USizeVec3::new(16, 16, 16);
 pub const CHUNK_BLOCK_COUNT: usize = CHUNK_SIZE.x * CHUNK_SIZE.y * CHUNK_SIZE.z;
@@ -20,13 +20,87 @@ enum ChunkData {
 
 impl ChunkData {
     #[expect(clippy::single_call_fn, reason = "needed once")]
-    fn upgrade_to_u16(data: &[u8; CHUNK_BLOCK_COUNT]) -> Box<[u16; CHUNK_BLOCK_COUNT]> {
+    fn upgrade_to_u16<T>(data: &[T; CHUNK_BLOCK_COUNT]) -> Box<[u16; CHUNK_BLOCK_COUNT]>
+        where T: Copy,
+              u16: From<T>,
+    {
         Box::new(data.iter().copied().map(From::from).collect_array().expect("Same length"))
     }
 
-    #[expect(clippy::single_call_fn, reason = "needed once")]
-    fn upgrade_to_u32(data: &[u16; CHUNK_BLOCK_COUNT]) -> Box<[u32; CHUNK_BLOCK_COUNT]> {
+    fn upgrade_to_u32<T>(data: &[T; CHUNK_BLOCK_COUNT]) -> Box<[u32; CHUNK_BLOCK_COUNT]>
+        where T: Copy,
+              u32: From<T>,
+    {
         Box::new(data.iter().copied().map(From::from).collect_array().expect("Same length"))
+    }
+
+    fn set_u8(&mut self, idx: usize, value: u8) {
+        match self {
+            Self::Filled if value == 0 => (),
+            Self::Filled => {
+                let mut values: Box<[u8; CHUNK_BLOCK_COUNT]> = Box::new(std::iter::repeat_n(0, CHUNK_BLOCK_COUNT).collect_array().expect("correct length"));
+                values[idx] = value;
+                *self = Self::U8(values);
+            },
+            Self::U8(values) => values[idx] = value,
+            Self::U16(values) => values[idx] = value.into(),
+            Self::U32(values) => values[idx] = value.into(),
+        }
+    }
+
+    fn set_u16(&mut self, idx: usize, value: u16) {
+        match self {
+            Self::Filled if value == 0 => (),
+            Self::Filled => {
+                let mut values: Box<[u16; CHUNK_BLOCK_COUNT]> = Box::new([0; CHUNK_BLOCK_COUNT]);
+                values[idx] = value;
+                *self = Self::U16(values);
+            },
+            Self::U8(values) => {
+                let mut values = Self::upgrade_to_u16(values);
+                values[idx] = value;
+                *self = Self::U16(values);
+            },
+            Self::U16(values) => values[idx] = value,
+            Self::U32(values) => values[idx] = value.into(),
+        }
+    }
+
+    fn set_u32(&mut self, idx: usize, value: u32) {
+        match self {
+            Self::Filled if value == 0 => (),
+            Self::Filled => {
+                let mut values: Box<[u32; CHUNK_BLOCK_COUNT]> = Box::new([0; CHUNK_BLOCK_COUNT]);
+                values[idx] = value;
+                *self = Self::U32(values);
+            },
+            Self::U8(values) => {
+                let mut values = Self::upgrade_to_u32(values);
+                values[idx] = value;
+                *self = Self::U32(values);
+            },
+            Self::U16(values) => {
+                let mut values = Self::upgrade_to_u32(values);
+                values[idx] = value;
+                *self = Self::U32(values);
+            },
+            Self::U32(values) => values[idx] = value,
+        }
+    }
+
+    fn set(&mut self, idx: usize, value: usize) {
+        if let Ok(value) = u8::try_from(value) {
+            self.set_u8(idx, value);
+        }
+        else if let Ok(value) = u16::try_from(value) {
+            self.set_u16(idx, value);
+        }
+        else if let Ok(value) = u32::try_from(value) {
+            self.set_u32(idx, value);
+        }
+        else {
+            panic!("Palette index overflows u32");
+        }
     }
 }
 
@@ -82,6 +156,15 @@ impl Chunk {
         self.pallette.blocks.as_slice()
     }
 
+    pub fn palette_insert<'c>(&mut self, data: impl RefOrOwned<'c, BlockData>) -> usize {
+        if let Some(idx) = self.pallette.blocks.get_index_of(data.borrow()) {
+            idx
+        }
+        else {
+            self.pallette.blocks.insert_full(data.into_owned()).0
+        }
+    }
+
     pub fn try_get(&self, pos: USizeVec3) -> Option<usize> {
         let idx = Self::pos_to_idx(pos)?;
         Some(match &self.blocks {
@@ -104,54 +187,16 @@ impl Chunk {
         self.try_get_data(pos).expect("Out of bound chunk position")
     }
 
-    pub fn set(&mut self, pos: USizeVec3, val: &BlockData) {
+    pub fn set(&mut self, pos: USizeVec3, palette_idx: usize) {
+        assert!(self.pallette.blocks.len() > palette_idx, "Palette index out of bound");
         let idx = Self::pos_to_idx(pos).expect("Out of bound chunk position");
-        match &mut self.blocks {
-            ChunkData::Filled => if self.pallette.blocks.first() == Some(val) {
-                /* NOOP */
-            } else {
-                let mut new_blocks = Box::new([0u8; CHUNK_BLOCK_COUNT]);
-                new_blocks[idx] = 1;
-                self.blocks = ChunkData::U8(new_blocks);
-                self.pallette.blocks.insert(val.clone());
-                debug_assert_eq!(self.pallette.blocks.len(), 2);
-            },
-            ChunkData::U8(blocks) => {
-                let (palette_idx, had) = self.pallette.blocks.insert_full(val.clone());
-                if palette_idx > 0xFF {
-                    debug_assert!(!had);
-                    debug_assert_eq!(palette_idx, 0x0100);
-                    let mut blocks = ChunkData::upgrade_to_u16(blocks);
-                    blocks[idx] = 0x0100;
-                    self.blocks = ChunkData::U16(blocks);
-                }
-                else {
-                    blocks[idx] = u8::try_from(palette_idx).expect("plette_idx <= 0xFF in this branch");
-                }
-            },
-            ChunkData::U16(blocks) => {
-                let (palette_idx, had) = self.pallette.blocks.insert_full(val.clone());
-                if palette_idx > 0xFFFF {
-                    debug_assert!(!had);
-                    debug_assert_eq!(palette_idx, 0x0001_0000);
-                    let mut blocks = ChunkData::upgrade_to_u32(blocks);
-                    blocks[idx] = 0x0001_0000;
-                    self.blocks = ChunkData::U32(blocks);
-                }
-                else {
-                    blocks[idx] = u16::try_from(palette_idx).expect("palette_idx <= 0xFFFF in this branch");
-                }
-            },
-            ChunkData::U32(blocks) => {
-                let (palette_idx, _had) = self.pallette.blocks.insert_full(val.clone());
-                if let Ok(palette_idx) = u32::try_from(palette_idx) {
-                    blocks[idx] = palette_idx;
-                }
-                else {
-                    panic!("Exceeded u32 index capacity");
-                }
-            },
-        }
+        self.blocks.set(idx, palette_idx);
+    }
+
+    #[expect(dead_code, reason = "yet-unused util")]
+    pub fn set_data(&mut self, pos: USizeVec3, val: &BlockData) {
+        let palette_idx = self.palette_insert(val);
+        self.set(pos, palette_idx);
     }
 }
 
