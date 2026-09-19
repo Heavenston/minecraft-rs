@@ -5,7 +5,7 @@ use glam::{ISizeVec2, ISizeVec3, USizeVec3, Vec2, Vec3};
 use ordermap::OrderSet;
 
 use crate::{
-    chunk::{BlockData, CHUNK_SIZE, Chunk}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model}, resource_location::ResourceLocation, utils::{
+    chunk::{BlockData, CHUNK_BLOCK_COUNT, CHUNK_SIZE, Chunk, ChunkBlockIndex}, data_extractor::{self, MinecraftData, blockstate::{BlockState, ModelRotation}, model}, resource_location::ResourceLocation, utils::{
         AABB2, AABB3, AxisVec3Ext as _, CardinalDirection, EnumSet, Gather as _, GridAngle, TwentySixDirection, Vec3Range
     },
 };
@@ -454,13 +454,13 @@ struct ChunkMeshingCtx<'chunk, 'neighbor, 'resolver> {
 }
 
 impl ChunkMeshingCtx<'_, '_, '_> {
-    fn model_for_pos(&self, pos: USizeVec3) -> &BlockModel {
+    fn model_for_pos(&self, pos: ChunkBlockIndex) -> &BlockModel {
         let models = &self.palette_block_models[self.chunk.get(pos)];
         if let [model] = &**models {
             model
         }
         else {
-            let global_pos = self.chunk_pos * CHUNK_SIZE.as_isizevec3() + pos.as_isizevec3();
+            let global_pos = self.chunk_pos * CHUNK_SIZE.as_isizevec3() + pos.as_pos().as_isizevec3();
             models.get_modulo(get_coordinate_seed(global_pos))
         }
     }
@@ -468,11 +468,11 @@ impl ChunkMeshingCtx<'_, '_, '_> {
     fn get_delta_signed(&self, delta: ISizeVec3) -> bool {
         let chunk_delta = delta.div_euclid(CHUNK_SIZE.as_isizevec3());
         if chunk_delta == ISizeVec3::ZERO {
-            self.model_resolver.resolve_block_model(self.chunk.get_data(delta.as_usizevec3()))[0]
+            self.model_resolver.resolve_block_model(self.chunk.try_get_data(delta.as_usizevec3()).unwrap())[0]
                 .culling_directions.is_all()
         }
         else if let Some(&dir) = TwentySixDirection::VALUES.iter().find(|dir| dir.as_isizevec3() == chunk_delta) {
-            self.model_resolver.resolve_block_model(self.neighbors[dir].get_data(delta.rem_euclid(CHUNK_SIZE.as_isizevec3()).as_usizevec3()))[0]
+            self.model_resolver.resolve_block_model(self.neighbors[dir].try_get_data(delta.rem_euclid(CHUNK_SIZE.as_isizevec3()).as_usizevec3()).unwrap())[0]
                 .culling_directions.is_all()
         }
         else {
@@ -547,7 +547,7 @@ struct ChunkMeshBuilder<'a> {
     quad_submeshes: EnumMap<QuadSubmeshKey, IncompleteQuadSubMesh>,
     submeshes: EnumMap<SubmeshKey, IncompleteSubMesh>,
     // For each block, lists faces that are *not* culled
-    culled_face_data: Box<[[[EnumSet<CardinalDirection>; CHUNK_SIZE.x]; CHUNK_SIZE.y]; CHUNK_SIZE.z]>,
+    culled_face_data: Box<[EnumSet<CardinalDirection>; CHUNK_BLOCK_COUNT]>,
 }
 
 impl ChunkMeshBuilder<'_> {
@@ -646,23 +646,28 @@ fn accumulate_culling(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder)
 
     for direction in CardinalDirection::VALUES {
         for pos in INTERIOR_RANGES[direction] {
-            let model = ctx.model_for_pos(pos);
+            let idx = ChunkBlockIndex::from_pos(pos).unwrap();
+
+            let model = ctx.model_for_pos(idx);
             let faces = &model.cullable_faces[direction];
             if faces.is_empty() { continue; }
 
-            if ctx.model_for_pos(pos.wrapping_add_signed(direction.as_isizevec3()) /* INTERIOR_RANGE should only return positions for which this does not wrap */).culling_directions.contains(direction.opposit()) { continue }
+            if ctx.model_for_pos(ChunkBlockIndex::from_pos(pos.wrapping_add_signed(direction.as_isizevec3())).unwrap() /* INTERIOR_RANGE should only return positions for which this does not wrap */).culling_directions.contains(direction.opposit()) { continue }
 
-            builder.culled_face_data[pos.z][pos.y][pos.x].insert(direction);
+            builder.culled_face_data[idx].insert(direction);
         }
     }
 
     for direction in CardinalDirection::VALUES {
         for pos in EXTERIOR_RANGES[direction] {
-            let model = ctx.model_for_pos(pos);
+            let idx = ChunkBlockIndex::from_pos(pos).unwrap();
+
+            let model = ctx.model_for_pos(idx);
             let faces = &model.cullable_faces[direction];
             if faces.is_empty() { continue; }
 
-            let neighbor_block_idx = exterior_neighbor(pos, direction);
+            let neighbor_block_pos = exterior_neighbor(pos, direction);
+            let neighbor_block_idx = ChunkBlockIndex::from_pos(neighbor_block_pos).unwrap();
             let neighbor_models = ctx.model_resolver.resolve_block_model(ctx.neighbors[direction.into()].get_data(neighbor_block_idx));
             let neighbor_model = if let [neighbor_model] = &*neighbor_models {
                 neighbor_model
@@ -671,18 +676,19 @@ fn accumulate_culling(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder)
             };
             if neighbor_model.culling_directions.contains(direction.opposit()) { continue }
 
-            builder.culled_face_data[pos.z][pos.y][pos.x].insert(direction);
+            builder.culled_face_data[idx].insert(direction);
         }
     }
 }
 
 fn mesh_chunk(ctx: &mut ChunkMeshingCtx, builder: &mut ChunkMeshBuilder) {
     for pos in Vec3Range(USizeVec3::ZERO, CHUNK_SIZE) {
-        let model = ctx.model_for_pos(pos);
+        let idx = ChunkBlockIndex::from_pos(pos).unwrap();
+        let model = ctx.model_for_pos(idx);
 
         for direction in CardinalDirection::VALUES {
             let face_list = &model.cullable_faces[direction];
-            if face_list.is_empty() || !builder.culled_face_data[pos.z][pos.y][pos.x].contains(direction) { continue }
+            if face_list.is_empty() || !builder.culled_face_data[idx].contains(direction) { continue }
             let ao = if model.enable_ambient_occlusion { ctx.accumulate_ambient_occlusion(direction, pos) } else { 0 };
             for face in &face_list.full_faces {
                 builder.push_full_face(pos, face, ao);
@@ -731,7 +737,7 @@ impl ChunkMesher {
             textures: &mut self.textures,
             quad_submeshes: EnumMap::default(),
             submeshes: EnumMap::default(),
-            culled_face_data: Box::default(),
+            culled_face_data: Box::new([EnumSet::empty(); CHUNK_BLOCK_COUNT]),
         };
         let mut ctx = ChunkMeshingCtx {
             palette_block_models,

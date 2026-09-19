@@ -7,6 +7,11 @@ opt-level = 3
 codegen-units = 16
 incremental = false
 
+[profile.profile]
+inherits = "release"
+strip = false
+debug = true
+
 [profile.release-lto]
 inherits = "release"
 codegen-units = 1

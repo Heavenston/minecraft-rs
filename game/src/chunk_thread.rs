@@ -199,6 +199,9 @@ impl State {
         if self.store.chunks.contains_key(&chunk_pos) { return }
         self.store.chunks.insert(chunk_pos, self.generator.generate_chunk(chunk_pos));
         self.mesh_queue.push(chunk_pos);
+    }
+
+    fn drain_mesh_queue(&mut self) {
         self.mesh_queue.retain(|&pos| !self.store.mesh_chunk(pos));
     }
 }
@@ -246,6 +249,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
                 state.gen_chunk(ISizeVec3::new(-distance, y, dz));
                 state.gen_chunk(ISizeVec3::new(distance, y, dz));
             }
+            state.drain_mesh_queue();
             state.store.update_textures();
         }
         distance += 1;

@@ -5,7 +5,7 @@ use glam::{DVec2, DVec3, ISizeVec3, USizeVec2, USizeVec3, Vec3Swizzles as _};
 
 use noise::{Fbm, MultiFractal as _, NoiseFn as _, Simplex};
 use rand::{Rng as _, RngExt as _, SeedableRng as _, rngs::SmallRng};
-use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk}, resource_location::location};
+use crate::{chunk::{BlockData, CHUNK_SIZE, Chunk, ChunkBlockIndex}, resource_location::location};
 
 const MAX_HEIGHT: f64 = 64.;
 const MIN_HEIGHT: f64 = -64.;
@@ -85,11 +85,11 @@ impl Generator {
                     let global_pos = DVec3::new(global_pos2d.x, global_y as f64, global_pos2d.y);
                     if self.generate_block(global_pos, height) {
                         if prev {
-                            chunk.set(delta_pos, bottom_block);
+                            chunk.set(ChunkBlockIndex::from_pos(delta_pos).unwrap(), bottom_block);
                         }
                         else {
                             ground = Some(dy);
-                            chunk.set(delta_pos, top_block);
+                            chunk.set(ChunkBlockIndex::from_pos(delta_pos).unwrap(), top_block);
                         }
                         prev = true;
                     }
@@ -101,13 +101,13 @@ impl Generator {
                 if global_pos2d == DVec2::ZERO {
                     if let Some(g) = ground {
                         for dy in g+1..CHUNK_SIZE.y {
-                            chunk.set(USizeVec3::new(dx, dy, dz), log_block);
+                            chunk.set(ChunkBlockIndex::from_pos(USizeVec3::new(dx, dy, dz)).unwrap(), log_block);
                         }
                     }
                     else if !prev {
                         for dy in 0..CHUNK_SIZE.y {
                             if dy % 2 == 0 {
-                                chunk.set(USizeVec3::new(dx, dy, dz), log_block);
+                                chunk.set(ChunkBlockIndex::from_pos(USizeVec3::new(dx, dy, dz)).unwrap(), log_block);
                             }
                         }
                     }

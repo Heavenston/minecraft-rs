@@ -9,6 +9,7 @@
 #![feature(const_convert)]
 #![feature(const_cmp)]
 #![feature(const_index)]
+#![feature(likely_unlikely)]
 
 #![allow(clippy::single_call_fn, reason = "in development")]
 #![allow(incomplete_features, reason = "specialization")]
