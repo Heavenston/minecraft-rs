@@ -114,7 +114,15 @@ struct VertexOutput {
 }
 
 // Directional fake shading on blocks for each direction, same as minecraft
-const lights: array<f32, 6> = array(0.6, 0.6, 1.0, 0.5, 0.8, 0.8);
+fn get_light(dir: u32) -> f32 {
+    switch (dir) {
+    case 0u: { return 0.6; }
+    case 1u: { return 0.6; }
+    case 2u: { return 1.0; }
+    case 3u: { return 0.5; }
+    default: { return 0.8; }
+    }
+}
 
 const plains_grass_tint: vec4f = vec4f(0.5686274509803921, 0.7411764705882353, 0.34901960784313724, 1.);
 
@@ -176,7 +184,7 @@ const occlusion_levels: array<f32, 4> = array(1.0, 0.8, 0.6, 0.4);
     ;
 
     var tex = textureSample(texture, texture_sampler, input.texcoord, input.texture_index);
-    let light = lights[imm.direction];
+    let light = get_light(imm.direction);
     tex = vec4f(tex.rgb * light * occlusion, tex.a);
     if input.tint_index != 0 {
         tex *= plains_grass_tint;
