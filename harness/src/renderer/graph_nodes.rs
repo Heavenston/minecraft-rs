@@ -97,9 +97,11 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
         // Define that FrameSubmitListSubmitted must have happen before SurfaceTexture is destroyed
         SubmitListBorrowsSurfaceTexture(_: ref res::FrameSubmitListSubmitted, _: ref res::SurfaceTexture) -> ();
 
-        PresentSurface
-        (queue: ref res::Queue, output: res::SurfaceTexture) -> (default res::SurfacePresented)
-        { queue.present(output); };
+        PresentSurface(queue: ref res::Queue, output: res::SurfaceTexture) -> (default res::SurfacePresented) {
+            queue.present(output);
+            #[cfg(feature = "tracy")]
+            { tracy_client::frame_mark(); }
+        };
     );
 }
 
