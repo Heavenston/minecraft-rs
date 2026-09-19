@@ -77,9 +77,11 @@ impl engine::App for App {
             let device = ctx.renderer.device().clone();
             let queue = ctx.renderer.queue().clone();
             let materials = Arc::clone(ctx.materials_arc);
-            std::thread::spawn(move || {
-                chunk_thread::chunk_thread(0, &to_chunk_thread_receiver, mcdata, device, queue, materials);
-            });
+            std::thread::Builder::new()
+                .name("chunk thread".to_string())
+                .spawn(move || {
+                    chunk_thread::chunk_thread(0, &to_chunk_thread_receiver, mcdata, device, queue, materials);
+                }).unwrap();
         }
         self.to_chunk_thread = Some(to_chunk_thread);
 
@@ -207,10 +209,14 @@ async fn main() -> Result<()> {
     start_deadlock_detection();
     #[cfg(feature = "tracy")]
     {
-        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::layer::{ SubscriberExt, Layer };
         tracing::subscriber::set_global_default(
-            tracing_subscriber::registry().with(tracing_tracy::TracyLayer::default())
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::fmt::layer()
+                    .with_filter(tracing_subscriber::filter::EnvFilter::from_default_env()))
+                .with(tracing_tracy::TracyLayer::default())
         ).expect("setup tracy layer");
+        tracing_tracy::client::register_demangler!();
     }
     #[cfg(not(feature = "tracy"))]
     {
