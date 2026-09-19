@@ -205,7 +205,18 @@ fn start_deadlock_detection() {
 #[tokio::main]
 async fn main() -> Result<()> {
     start_deadlock_detection();
-    tracing_subscriber::fmt::init();
+    #[cfg(feature = "tracy")]
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::registry().with(tracing_tracy::TracyLayer::default())
+        ).expect("setup tracy layer");
+    }
+    #[cfg(not(feature = "tracy"))]
+    {
+        tracing_subscriber::fmt::init();
+    }
+
     let mc_data = Arc::new(data_extractor::MinecraftData::read()?);
 
     engine::start(App {

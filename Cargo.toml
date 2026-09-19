@@ -6,6 +6,7 @@ inherits = "dev"
 opt-level = 3
 codegen-units = 16
 incremental = false
+debug = true
 
 [profile.release-lto]
 inherits = "release"

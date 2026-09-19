@@ -145,6 +145,7 @@ impl Renderer {
         self.render_graph.set_input::<res::WindowSize>((width, height));
     }
 
+    #[tracing::instrument(skip_all)]
     pub fn render(&mut self) -> anyhow::Result<()> {
         self.render_graph.prepare_run();
         self.window.request_redraw();

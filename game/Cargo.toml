@@ -6,6 +6,7 @@ edition.workspace = true
 
 [features]
 deadlock_detection = ["parking_lot/deadlock_detection"]
+tracy = ["tracing-tracy"]
 
 [dependencies]
 engine = { workspace = true }
@@ -36,6 +37,7 @@ crossbeam-channel = "0.5.17"
 bitfield-struct = "0.13.0"
 resource = "0.6.1"
 wgpu = { workspace = true, features = ["naga-ir"] }
+tracing-tracy = { version = "0.12.0", optional = true }
 
 [lints]
 workspace = true
