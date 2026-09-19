@@ -149,6 +149,28 @@ fn make_camera_culled_faces_mask(min_pos: vec3f, max_pos: vec3f) -> u32 {
     return mask;
 }
 
+// Conservative frustum test of a 4x4x4 group: culled only if all 8 corners
+// are outside the same clip plane
+fn is_group_visible(min_pos: vec3f) -> bool {
+    let base = world.view_projection_matrix * vec4f(min_pos, 1.);
+    let dx = world.view_projection_matrix[0] * 4.;
+    let dy = world.view_projection_matrix[1] * 4.;
+    let dz = world.view_projection_matrix[2] * 4.;
+    var outside = 0x3Fu;
+    for (var i = 0u; i < 8u; i++) {
+        let c = base + dx * f32(i & 1u) + dy * f32((i >> 1u) & 1u) + dz * f32(i >> 2u);
+        var m = 0u;
+        if c.x < -c.w { m |= 1u; }
+        if c.x >  c.w { m |= 2u; }
+        if c.y < -c.w { m |= 4u; }
+        if c.y >  c.w { m |= 8u; }
+        if c.z <  0.  { m |= 16u; }
+        if c.z >  c.w { m |= 32u; }
+        outside &= m;
+    }
+    return outside == 0u;
+}
+
 @task
 @payload(taskPayload)
 @workgroup_size(4,4,4)
@@ -167,6 +189,9 @@ fn ts_main(
     let task_blocks_offset = chunk_offset + vec3f(invocation_id) * vec3f(4.);
     let face_camera_mask = make_camera_culled_faces_mask(task_blocks_offset, task_blocks_offset + vec3f(4.));
     required_faces_per_task[task_idx] = block_info_group_faces((*blocks)[task_idx * 64]) & face_camera_mask;
+    if required_faces_per_task[task_idx] != 0 && !is_group_visible(task_blocks_offset) {
+        required_faces_per_task[task_idx] = 0;
+    }
 
     workgroupBarrier();
     if invocation_idx < 6 {
