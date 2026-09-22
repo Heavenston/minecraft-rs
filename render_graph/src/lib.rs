@@ -252,17 +252,18 @@ impl ResourceStorer for ResourceManager<'_> {
 
 trait GraphNodeWrapperTrait: std::any::Any {
     fn label(&self) -> Label<'_>;
-    fn run(&mut self, manager: &mut ResourceManager<'_>);
+    fn run(&mut self, manager: &mut ResourceManager<'_>) -> anyhow::Result<()>;
 }
 sa::assert_obj_safe!(GraphNodeWrapperTrait);
-impl<N: GraphNode> GraphNodeWrapperTrait for (N::InputBundle, N, N::OutputBundle) {
+impl<N: FailibleGraphNode> GraphNodeWrapperTrait for (N::InputBundle, N, N::OutputBundle) {
     fn label(&self) -> Label<'_> {
         self.1.label()
     }
-    fn run(&mut self, manager: &mut ResourceManager<'_>) {
+    fn run(&mut self, manager: &mut ResourceManager<'_>) -> anyhow::Result<()> {
         let input = self.0.gather(manager);
-        let output = self.1.run(input);
+        let output = self.1.run(input)?;
         self.2.store(output, manager);
+        Ok(())
     }
 }
 
@@ -662,7 +663,7 @@ impl RenderGraph {
         }
     }
 
-    pub fn push_node_complete<N: GraphNode>(&mut self, node: N, input_bundle: N::InputBundle, output_bundle: N::OutputBundle) -> NodeHandle<N> {
+    pub fn push_node_complete<N: FailibleGraphNode>(&mut self, node: N, input_bundle: N::InputBundle, output_bundle: N::OutputBundle) -> NodeHandle<N> {
         let mut manager = ResourceManager {
             resources: &mut self.resources,
             type_resources_info: &mut self.type_resources_info,
@@ -695,7 +696,7 @@ impl RenderGraph {
         NodeHandle { node: PhantomData, inner: handle }
     }
 
-    pub fn push_node<N: GraphNode>(&mut self, node: N) -> NodeHandle<N>
+    pub fn push_node<N: FailibleGraphNode>(&mut self, node: N) -> NodeHandle<N>
         where N::InputBundle: Default,
               N::OutputBundle: Default,
     {
@@ -711,7 +712,7 @@ impl RenderGraph {
         self.compiled = None;
     }
 
-    pub fn remove_node<N: GraphNode>(&mut self, handle: NodeHandle<N>) -> Option<N> {
+    pub fn remove_node<N: FailibleGraphNode>(&mut self, handle: NodeHandle<N>) -> Option<N> {
         Some(*self.remove_node_untyped(handle.to_untyped())?.downcast::<N>().expect("Correct type associated with handle"))
     }
 
@@ -740,13 +741,16 @@ impl RenderGraph {
 
     #[track_caller]
     #[tracing::instrument(level = "debug", skip_all, fields(target_resource_label = self.resources.get(target_resource.0).map(|resource_data| resource_data.label.as_str())))]
-    fn compute_inner(&mut self, target_resource: UntypedResourceHandle) {
+    fn compute_inner(&mut self, target_resource: UntypedResourceHandle) -> anyhow::Result<()> {
         tracing::trace!("Start");
         assert!(self.resources.has(target_resource.0), "Invalid resource handle");
 
-        // NOTE: We take the CompiledGraph out, in case of panic it is just droped
-        let mut compiled = self.compiled.take().unwrap_or_else(|| CompiledGraph::new(self));
-        let result = compiled.compute(self, target_resource.into());
+        let result;
+        {
+            let compiled = self.compiled.take().unwrap_or_else(|| CompiledGraph::new(self));
+            result = compiled.compute(self, target_resource.into());
+            self.compiled = Some(compiled);
+        }
 
         if let Some(path) = option_env!("DEBUG_GRAPH_COMPUTE_PATH") {
             static PREVIOUS_WRITEN_RESULT: AtomicPtr<compiler::ComputeResult> = AtomicPtr::new(std::ptr::null_mut());
@@ -774,39 +778,43 @@ impl RenderGraph {
             node_data.node.run(&mut ResourceManager {
                 resources: &mut self.resources,
                 type_resources_info: &mut self.type_resources_info,
-            });
+            })?;
         }
         debug_assert!(self.resources.with(target_resource.0).unwrap().get().value.dyn_is_some(), "Compiled steps failed to create expected resource");
 
-        compiled.apply_compute_result(self, &result);
-        
-        self.compiled = Some(compiled);
+        {
+            let mut compiled = self.compiled.take().unwrap();
+            compiled.apply_compute_result(self, &result);
+            self.compiled = Some(compiled);
+        }
+
+        Ok(())
     }
 
     #[track_caller]
-    pub fn compute<T: GraphResourceId>(&mut self) -> ComputedResourceRef<'_, T::Resource> {
+    pub fn compute<T: GraphResourceId>(&mut self) -> anyhow::Result<ComputedResourceRef<'_, T::Resource>> {
         let resource = self.resource_from_type::<T>();
         self.compute_resource(resource)
     }
 
     #[track_caller]
-    pub fn compute_resource<T: 'static>(&mut self, resource: ResourceHandle<T>) -> ComputedResourceRef<'_, T> {
-        self.compute_inner(resource.to_untyped());
+    pub fn compute_resource<T: 'static>(&mut self, resource: ResourceHandle<T>) -> anyhow::Result<ComputedResourceRef<'_, T>> {
+        self.compute_inner(resource.to_untyped())?;
         let resource_data = self.resources.get_mut(resource.inner).expect("valid resource handle");
-        ComputedResourceRef {
+        Ok(ComputedResourceRef {
             is_permanent: resource_data.config.permanent,
             inner: Some(resource_data.get_mut()),
-        }
+        })
     }
 
     #[track_caller]
-    pub fn compute_untyped(&mut self, resource: UntypedResourceHandle) -> ComputedResourceUntypedRef<'_> {
-        self.compute_inner(resource);
+    pub fn compute_untyped(&mut self, resource: UntypedResourceHandle) -> anyhow::Result<ComputedResourceUntypedRef<'_>> {
+        self.compute_inner(resource)?;
         let resource_data = self.resources.get_mut(resource.0).expect("valid resource handle");
-        ComputedResourceUntypedRef {
+        Ok(ComputedResourceUntypedRef {
             is_permanent: resource_data.config.permanent,
             inner: Some(&mut *resource_data.value),
-        }
+        })
     }
 
     pub fn clear_unpermanent(&mut self) {

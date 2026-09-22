@@ -7,6 +7,16 @@ use anyhow::Result;
 
 use render_graph::RenderGraph;
 
+#[derive(thiserror::Error, Debug)]
+enum RenderError {
+    #[error("timeout")]
+    Timeout,
+    #[error("occluded")]
+    Occluded,
+    #[error("validation")]
+    Validation,
+}
+
 pub mod resources {
     use render_graph::graph_resource as res;
     res!(pub struct Instance(pub wgpu::Instance); permanent);
@@ -149,7 +159,15 @@ impl Renderer {
     pub fn render(&mut self) -> anyhow::Result<()> {
         self.render_graph.prepare_run();
         self.window.request_redraw();
-        let () = self.render_graph.compute::<res::FrameFinished>().take();
+        match self.render_graph.compute::<res::FrameFinished>().map(|result| result.take()) {
+            Ok(()) => (),
+            Err(ref e) if let Some(render_error) = e.downcast_ref::<RenderError>() => match render_error {
+                RenderError::Timeout |
+                RenderError::Occluded |
+                RenderError::Validation => (),
+            },
+            Err(e) => panic!("Unexpected error during rendering: {e}"),
+        }
         self.render_graph.clear_unpermanent();
         Ok(())
     }

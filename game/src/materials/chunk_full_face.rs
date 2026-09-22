@@ -358,7 +358,7 @@ impl Material for ChunkFullFaceMaterial {
 
     fn update(&mut self, render_graph: &mut render_graph::RenderGraph) {
         let chunk_list_resource = self.chunk_list_resource.unwrap();
-        let chunk_list = render_graph.compute_resource(chunk_list_resource).into_mut();
+        let chunk_list = render_graph.compute_resource(chunk_list_resource).unwrap().into_mut();
         let changed = !self.remove_chunks.is_empty() || !self.new_chunks.is_empty();
         if !changed { return; }
         for pos in self.remove_chunks.drain(..) {

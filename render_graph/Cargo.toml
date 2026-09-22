@@ -6,10 +6,11 @@ edition.workspace = true
 
 [dependencies]
 render_graph_macros = { path = "../render_graph_macros" }
-indexmap = { workspace = true }
-itertools = { workspace = true }
-tracing = { workspace = true }
-genmap = { workspace = true }
+indexmap.workspace = true
+itertools.workspace = true
+tracing.workspace = true
+genmap.workspace = true
+anyhow.workspace = true
 static_assertions = "1.1.0"
 parking_lot = "0.12.5"
 ordermap = "1.2.2"

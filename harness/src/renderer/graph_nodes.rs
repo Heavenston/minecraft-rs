@@ -1,4 +1,4 @@
-use super::resources as res;
+use super::{ resources as res, RenderError };
 
 #[expect(clippy::single_call_fn, reason = "only called when creating graph")]
 pub(super) fn register(graph: &mut render_graph::RenderGraph) {
@@ -32,12 +32,9 @@ pub(super) fn register(graph: &mut render_graph::RenderGraph) {
                 wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => {
                     surface_texture
                 }
-                g @ (wgpu::CurrentSurfaceTexture::Timeout
-                | wgpu::CurrentSurfaceTexture::Occluded
-                | wgpu::CurrentSurfaceTexture::Validation) => {
-                    // Skip this frame
-                    todo!("{g:?}")
-                }
+                wgpu::CurrentSurfaceTexture::Timeout => return Err(RenderError::Timeout.into()),
+                wgpu::CurrentSurfaceTexture::Occluded => return Err(RenderError::Occluded.into()),
+                wgpu::CurrentSurfaceTexture::Validation => return Err(RenderError::Validation.into()),
                 wgpu::CurrentSurfaceTexture::Outdated => {
                     todo!()
                 }

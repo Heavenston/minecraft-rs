@@ -251,6 +251,8 @@ fn process_entry(input: &Input, entry: &Entry) -> TokenStream {
         });
     }
 
+    body = parse_quote!({Ok(#body)});
+
     let input_bundle = input_bundle_macro(PseudoStruct::<input_bundle::Entry> {
         visibility: syn::Visibility::Public(syn::token::Pub { span: Span::call_site() }),
         name: format_ident!("Input"),
@@ -280,11 +282,12 @@ fn process_entry(input: &Input, entry: &Entry) -> TokenStream {
             #output_bundle
 
             pub struct #node_name;
-            impl #render_graph::GraphNode for #node_name {
+            impl #render_graph::FailibleGraphNode for #node_name {
                 type InputBundle = Input;
                 type OutputBundle = Output;
                 #[inline]
-                fn run(&mut self, InputValue(#(#arg_pats),*): InputValue) -> OutputValue #body
+                #[allow(unused_braces)]
+                fn run(&mut self, InputValue(#(#arg_pats),*): InputValue) -> ::anyhow::Result<OutputValue> #body
             }
         }
 
