@@ -481,16 +481,19 @@ pub struct ComputedResourceRef<'a, T> {
 }
 
 impl<'a, T> ComputedResourceRef<'a, T> {
+    #[track_caller]
     pub fn take(mut self) -> T {
         assert!(!self.is_permanent, "You cannot a take permanent resource");
         self.inner.take().expect("always Some before the destructor").take().expect("computed resource always present")
     }
 
+    #[track_caller]
     pub fn into_ref(mut self) -> &'a T {
         assert!(self.is_permanent, "You cannot convert into a ref for a non-permanent resource");
         self.inner.take().expect("always Some before the destructor").as_ref().expect("computed resource always present")
     }
 
+    #[track_caller]
     pub fn into_mut(mut self) -> &'a mut T {
         assert!(self.is_permanent, "You cannot convert into a mut ref for a non-permanent resource");
         self.inner.take().expect("always Some before the destructor").as_mut().expect("computed resource always present")

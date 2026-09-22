@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use glam::DVec2;
 use winit::{application::ApplicationHandler, event::{KeyEvent, WindowEvent}, event_loop::ActiveEventLoop, keyboard::{KeyCode, PhysicalKey}, window::Window};
 
-use crate::{App, Ctx, InputsState, Renderer};
+use crate::{App, Ctx, Input, InputsState, Renderer};
 
 pub struct WinitLoopHandler<A> {
     #[cfg(target_arch = "wasm32")]
@@ -115,7 +116,7 @@ impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
                         event_loop.exit();
                     }
                 }
-                self.inputs_state.clear_just_pressed_keys();
+                self.inputs_state.frame_clear();
                 match renderer.render() {
                     Ok(()) => {}
                     Err(e) => {
@@ -137,10 +138,31 @@ impl<A: App> ApplicationHandler<Renderer> for WinitLoopHandler<A> {
             } => match (code, key_state.is_pressed()) {
                 (KeyCode::Escape, true) => event_loop.exit(),
                 _ => {
-                    self.inputs_state.register_key_event(code, key_state.is_pressed());
+                    self.inputs_state.register_input_event(Input::Key(code), key_state.is_pressed());
                 }
             },
+            WindowEvent::MouseInput {
+                device_id: _,
+                state,
+                button,
+            } => {
+                self.inputs_state.register_input_event(Input::Button(button), state.is_pressed());
+            },
+            WindowEvent::CursorMoved { device_id: _, position } => {
+                self.inputs_state.register_mouse_pos(DVec2::new(position.x, position.y));
+            }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        if let winit::event::DeviceEvent::MouseMotion { delta } = event {
+            self.inputs_state.register_mouse_motion(DVec2::new(delta.0, delta.1));
         }
     }
 }

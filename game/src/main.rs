@@ -18,11 +18,12 @@ use std::{f32::consts::{PI, TAU}, sync::Arc, time::Instant};
 
 use anyhow::Result;
 use crossbeam_channel::Sender;
-use engine::wgpu;
-use glam::{Vec3, Vec3Swizzles as _, Vec4};
+use engine::{MaterialHandle, wgpu};
+use glam::{ISizeVec3, UVec2, Vec2, Vec3, Vec3Swizzles as _, Vec4};
+use parking_lot::RwLock;
 use render_graph::RenderGraph;
 
-use crate::data_extractor::MinecraftData;
+use crate::{chunk::{CHUNK_SIZE, Chunk, ChunkBlockIndex}, data_extractor::MinecraftData, resource_location::location, world::{SharedWorldRef, World}};
 
 mod chunk;
 mod chunk_mesher;
@@ -31,11 +32,13 @@ mod utils;
 mod proc_gen;
 mod materials;
 mod chunk_thread;
+mod world;
 
 mod data_extractor;
 
+#[derive(Debug)]
 enum ToChunkThreadMessage {
-    RegenWithSeed(u64),
+    RemeshChunk(ISizeVec3),
 }
 
 #[expect(clippy::struct_excessive_bools, reason = "todo")]
@@ -50,6 +53,10 @@ struct App {
     mc_data: Arc<MinecraftData>,
     previous_update: Option<Instant>,
     to_chunk_thread: Option<Sender<ToChunkThreadMessage>>,
+
+    world: SharedWorldRef,
+
+    block_selection_material: Option<MaterialHandle<materials::block_selection::BlockSelection>>,
 }
 
 impl App {
@@ -78,10 +85,11 @@ impl engine::App for App {
             let device = ctx.renderer.device().clone();
             let queue = ctx.renderer.queue().clone();
             let materials = Arc::clone(ctx.materials_arc);
+            let world = Arc::clone(&self.world);
             std::thread::Builder::new()
                 .name("chunk thread".to_string())
                 .spawn(move || {
-                    chunk_thread::chunk_thread(0, &to_chunk_thread_receiver, mcdata, device, queue, materials);
+                    chunk_thread::chunk_thread(0, &to_chunk_thread_receiver, mcdata, world, device, queue, materials);
                 }).unwrap();
         }
         self.to_chunk_thread = Some(to_chunk_thread);
@@ -89,6 +97,8 @@ impl engine::App for App {
         ctx.world.clear_color = Vec4::new(0., 0., 0., 1.);
         self.set_enable_wireframe(ctx.renderer.render_graph(), self.enable_wireframe);
         self.set_enable_vsync(ctx.renderer.render_graph(), self.vsync);
+
+        self.block_selection_material = Some(ctx.materials.add_material(materials::block_selection::BlockSelection::new()));
         
         Ok(())
     }
@@ -97,7 +107,7 @@ impl engine::App for App {
         let delta_t = self.previous_update.map_or(f32::INFINITY, |i| i.elapsed().as_secs_f32());
         self.previous_update = Some(Instant::now());
 
-        let window_size = ctx.renderer.window().outer_size();
+        let window_size = ctx.renderer.window().inner_size();
         #[expect(clippy::cast_precision_loss, reason = "")]
         let aspect_ratio = window_size.width as f32 / window_size.height as f32;
 
@@ -128,11 +138,6 @@ impl engine::App for App {
         }
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyC) {
             self.pause_clipping = !self.pause_clipping;
-        }
-        if ctx.inputs_state.just_pressed(engine::KeyCode::KeyS) {
-            let seed = rand::random::<u64>();
-            tracing::info!(seed, "Changind seed");
-            self.to_chunk_thread.as_ref().unwrap().send(ToChunkThreadMessage::RegenWithSeed(seed)).unwrap();
         }
         let speed_mult = if ctx.inputs_state.pressed(engine::KeyCode::ShiftLeft) {
             2.
@@ -169,8 +174,48 @@ impl engine::App for App {
             self.camera_autorotate = !self.camera_autorotate;
         }
         if ctx.inputs_state.just_pressed(engine::KeyCode::KeyF) {
-            let facing = ctx.world.camera_transform.transform_vector3(Vec3::NEG_Z).xz().round();
-            tracing::info!(%facing, camera_position = %self.camera_position, camera_dist = self.camera_position.length());
+            let facing_ = ctx.world.camera_transform.transform_vector3(Vec3::NEG_Z);
+            let facing = facing_.xz().round();
+            tracing::info!(%facing_, %facing, camera_position = %self.camera_position, camera_dist = self.camera_position.length());
+        }
+
+        'block_selection: {
+            let window_size = UVec2::new(window_size.width, window_size.height).as_vec2();
+            let cursor_pos = ctx.inputs_state.mouse_position().as_vec2() / window_size;
+            let cursor_pos = (cursor_pos - Vec2::splat(0.5)) * Vec2::new(1., -1.) * 2.;
+            let origin = ctx.world.camera_transform.transform_point3(Vec3::ZERO);
+
+            let direction = ctx.world.camera_projection.inverse()
+                .transform_point3(Vec3::new(cursor_pos.x, cursor_pos.y, 0.5));
+            let direction = ctx.world.camera_transform
+                .transform_vector3(direction).normalize();
+
+            let mut world = self.world.write();
+            let t = world.cast_ray(origin, direction, 250.);
+            ctx.materials.get_material_mut(self.block_selection_material.unwrap()).unwrap().set_position(t.map(|t| t.pos.as_vec3()));
+            let Some(result) = t
+            else { break 'block_selection; };
+            if ctx.inputs_state.just_pressed(engine::MouseButton::Left) {
+                let pos = result.pos;
+                tracing::info!(%cursor_pos, %origin, %direction, result = ?t.map(|h| h.block.id), "left click");
+                world.set_block(pos, &chunk::BlockData { id: location!("air"), state: String::new() });
+                let tct = self.to_chunk_thread.as_ref().unwrap();
+                let cp = pos.div_euclid(CHUNK_SIZE.as_isizevec3());
+                tct.send(ToChunkThreadMessage::RemeshChunk(cp)).unwrap();
+                for n in Chunk::blocks_touches_neighbors(ChunkBlockIndex::from_pos_rem_euclid(pos)) {
+                    tct.send(ToChunkThreadMessage::RemeshChunk(cp + n)).unwrap();
+                }
+            }
+            else if ctx.inputs_state.just_pressed(engine::MouseButton::Right) {
+                let pos = result.pos + result.normal;
+                world.set_block(pos, &chunk::BlockData { id: location!("dirt"), state: String::new() });
+                let tct = self.to_chunk_thread.as_ref().unwrap();
+                let cp = pos.div_euclid(CHUNK_SIZE.as_isizevec3());
+                tct.send(ToChunkThreadMessage::RemeshChunk(cp)).unwrap();
+                for n in Chunk::blocks_touches_neighbors(ChunkBlockIndex::from_pos_rem_euclid(pos)) {
+                    tct.send(ToChunkThreadMessage::RemeshChunk(cp + n)).unwrap();
+                }
+            }
         }
 
         Ok(())
@@ -234,9 +279,13 @@ async fn main() -> Result<()> {
         camera_autorotate: false,
         camera_position: Vec3::new(80., 25., 80.),
 
-        mc_data,
         previous_update: None,
         to_chunk_thread: None,
+
+        world: Arc::new(RwLock::new(World::new(Arc::clone(&mc_data)))),
+        mc_data,
+
+        block_selection_material: None,
     })?;
 
     Ok(())

@@ -1,6 +1,6 @@
 #![expect(unused_imports, reason = "wip")]
 
-use std::{cell::RefCell, collections::{HashMap, HashSet}, sync::Arc, time::Instant};
+use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, iter::zip, sync::Arc, time::Instant};
 
 use anyhow::{Context as _, Result};
 use crossbeam_channel::Receiver;
@@ -9,18 +9,12 @@ use enum_map::EnumMap;
 use glam::{ISizeVec3, U8Vec4, USizeVec3, Vec3, Vec4, Vec4Swizzles as _};
 use image::{EncodableLayout as _, Pixel as _};
 use itertools::Itertools as _;
-use ordermap::OrderMap;
+use ordermap::{OrderMap, OrderSet};
 use parking_lot::RwLock;
 use render_graph::RenderGraph;
 
 use crate::{
-    ToChunkThreadMessage,
-    chunk::{CHUNK_SIZE, Chunk},
-    chunk_mesher::{ChunkMesher, ChunkTransparencyMode},
-    data_extractor::MinecraftData,
-    materials::{ self, chunk::ChunkMaterial, chunk_full_face::ChunkFullFaceMaterial },
-    resource_location::{ResourceLocation, ResourceLocationMap},
-    utils::{CardinalDirection, TwentySixDirection}
+    ToChunkThreadMessage, chunk::{CHUNK_SIZE, Chunk}, chunk_mesher::{ChunkMesher, ChunkTransparencyMode}, data_extractor::MinecraftData, materials::{ self, chunk::ChunkMaterial, chunk_full_face::ChunkFullFaceMaterial }, resource_location::{ResourceLocation, ResourceLocationMap}, utils::{CardinalDirection, TwentySixDirection}, world::SharedWorldRef
 };
 
 const MIPMAP_LEVELS: u32 = 4;
@@ -38,6 +32,7 @@ struct ChunkMaterialKey {
 struct MeshingState {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    world: SharedWorldRef,
     texture: wgpu::Texture,
     texture_layers: EnumMap<u8, Option<ResourceLocation>>,
     mesher: ChunkMesher,
@@ -45,25 +40,16 @@ struct MeshingState {
     materials: Arc<RwLock<engine::MaterialStore>>,
     chunk_full_face_materials: HashMap<ChunkFullFaceMaterialKey, MaterialHandle<ChunkFullFaceMaterial>>,
     chunk_materials: HashMap<ChunkMaterialKey, MaterialHandle<ChunkMaterial>>,
-    chunks: HashMap<ISizeVec3, Chunk>,
 }
 
 impl MeshingState {
-    fn clear_all_chunks(&mut self) {
-        self.chunks.clear();
-        #[expect(clippy::iter_over_hash_type, reason = "me no care")]
-        for &handle in self.chunk_full_face_materials.values() {
-            self.materials.write().get_material_mut(handle).unwrap().clear_chunks();
-        }
-    }
-
-    fn get_chunk_full_face_material(&mut self, transparency: ChunkTransparencyMode) -> MaterialHandle<ChunkFullFaceMaterial> {
+    fn get_chunk_full_face_material(&mut self, materials: &mut MaterialStore, transparency: ChunkTransparencyMode) -> MaterialHandle<ChunkFullFaceMaterial> {
         let key = ChunkFullFaceMaterialKey { transparency };
         if let Some(&material) = self.chunk_full_face_materials.get(&key) {
             return material;
         }
 
-        let material = self.materials.write().add_material(ChunkFullFaceMaterial::new(materials::chunk_full_face::ChunkRenderConfig {
+        let material = materials.add_material(ChunkFullFaceMaterial::new(materials::chunk_full_face::ChunkRenderConfig {
             texture: self.texture.clone(),
             transparency,
         }));
@@ -72,13 +58,13 @@ impl MeshingState {
         material
     }
 
-    fn get_chunk_material(&mut self, transparency: ChunkTransparencyMode) -> MaterialHandle<ChunkMaterial> {
+    fn get_chunk_material(&mut self, materials: &mut MaterialStore, transparency: ChunkTransparencyMode) -> MaterialHandle<ChunkMaterial> {
         let key = ChunkMaterialKey { transparency };
         if let Some(&material) = self.chunk_materials.get(&key) {
             return material;
         }
 
-        let material = self.materials.write().add_material(ChunkMaterial::new(materials::chunk::RenderConfig {
+        let material = materials.add_material(ChunkMaterial::new(materials::chunk::RenderConfig {
             texture: self.texture.clone(),
             transparency,
         }));
@@ -88,45 +74,37 @@ impl MeshingState {
     }
 
     fn mesh_chunk(&mut self, chunk_pos: ISizeVec3) -> bool {
-        let chunk = &self.chunks[&chunk_pos];
-        let Ok(neighbors) = EnumMap::<TwentySixDirection, _>::try_from_fn(|direction| {
-            let new_pos = chunk_pos + direction;
-            self.chunks.get(&new_pos).ok_or(())
-        }) else { return false };
+        let world = self.world.read();
+        let Some(chunk) = world.get_chunk(chunk_pos).cloned()
+        else { return false };
+        let Ok(neighbors) = EnumMap::<TwentySixDirection, _>::try_from_fn(|direction| world.get_chunk(chunk_pos + direction).cloned().ok_or(())) else { return false };
+        drop(world);
 
-        let mesh = self.mesher.mesh_chunk(chunk_pos, chunk, neighbors);
-        for submesh in mesh.quad_submeshes {
-            let instances_bytes = bytemuck::cast_slice::<_, u8>(&submesh.instances);
-            let buffer = self.device.create_buffer(&wgpu::wgt::BufferDescriptor {
-                label: Some(&format!("chunk,{chunk_pos},{:?}", submesh.direction)),
-                size: instances_bytes.len().try_into().unwrap(),
-                usage: wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: true,
-            });
-            buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(instances_bytes);
-            buffer.unmap();
-            let material = self.get_chunk_full_face_material(submesh.transparency);
-            let chunk_render_data = materials::chunk_full_face::ChunkRenderData::upload(&self.device, chunk_pos, &submesh);
-            self.materials.write().get_material_mut(material).unwrap().push_chunk(chunk_render_data);
+        let mesh = self.mesher.mesh_chunk(chunk_pos, &chunk, EnumMap::from_fn(|dir| &*neighbors[dir]));
+        let quad_data = mesh.quad_submeshes.iter()
+            .map(|submesh| materials::chunk_full_face::ChunkRenderData::upload(&self.device, chunk_pos, submesh))
+            .collect_vec();
+        let normal_data = mesh.submeshes.iter()
+            .map(|submesh| materials::chunk::ChunkRenderData::upload(&self.device, chunk_pos, submesh))
+            .collect_vec();
+
+        let mut materials = self.materials.write_arc();
+        #[expect(clippy::iter_over_hash_type, reason = "order does not matter")]
+        for &material in self.chunk_full_face_materials.values() {
+            materials.get_material_mut(material).unwrap().remove_chunk(chunk_pos);
         }
-        for submesh in mesh.submeshes {
-            let vertices_bytes = bytemuck::cast_slice::<_, u8>(&submesh.vertices);
-            let buffer = self.device.create_buffer(&wgpu::wgt::BufferDescriptor {
-                label: Some(&format!("chunk,{chunk_pos}")),
-                size: vertices_bytes.len().try_into().unwrap(),
-                usage: wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: true,
-            });
-            buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(vertices_bytes);
-            buffer.unmap();
-            let material = self.get_chunk_material(submesh.transparency);
+        #[expect(clippy::iter_over_hash_type, reason = "order does not matter")]
+        for &material in self.chunk_materials.values() {
+            materials.get_material_mut(material).unwrap().remove_chunk(chunk_pos);
+        }
 
-            let mut materials = self.materials.write();
-            let material = materials.get_material_mut(material).unwrap();
-            material.chunk_list = material.chunk_list.iter().cloned().chain([materials::chunk::PerChunkRenderData {
-                position: (chunk_pos * CHUNK_SIZE.as_isizevec3()).as_vec3(),
-                vertex_buffer: buffer,
-            }]).collect();
+        for (submesh, chunk_render_data) in zip(&mesh.quad_submeshes, quad_data) {
+            let material = self.get_chunk_full_face_material(&mut materials, submesh.transparency);
+            materials.get_material_mut(material).unwrap().insert_chunk(chunk_render_data);
+        }
+        for (submesh, chunk_render_data) in zip(&mesh.submeshes, normal_data) {
+            let material = self.get_chunk_material(&mut materials, submesh.transparency);
+            materials.get_material_mut(material).unwrap().insert_chunk(chunk_render_data);
         }
 
         true
@@ -185,14 +163,14 @@ struct State {
     generator: crate::proc_gen::Generator,
     store: MeshingState,
 
-    mesh_queue: Vec<ISizeVec3>,
+    mesh_queue: OrderSet<ISizeVec3>,
 }
 
 impl State {
     fn gen_chunk(&mut self, chunk_pos: ISizeVec3) {
-        if self.store.chunks.contains_key(&chunk_pos) { return }
-        self.store.chunks.insert(chunk_pos, self.generator.generate_chunk(chunk_pos));
-        self.mesh_queue.push(chunk_pos);
+        let chunk = self.generator.generate_chunk(chunk_pos);
+        self.store.world.write().set_chunk(chunk_pos, Arc::new(chunk));
+        self.mesh_queue.insert(chunk_pos);
     }
 
     fn drain_mesh_queue(&mut self) {
@@ -200,7 +178,9 @@ impl State {
     }
 }
 
-pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata: Arc<MinecraftData>, device: wgpu::Device, queue: wgpu::Queue, materials: Arc<RwLock<engine::MaterialStore>>) {
+pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata: Arc<MinecraftData>, world: SharedWorldRef, device: wgpu::Device, queue: wgpu::Queue, materials: Arc<RwLock<engine::MaterialStore>>) {
+    let mut gen_queue = VecDeque::<ISizeVec3>::new();
+
     let texture = device.create_texture(&wgpu::wgt::TextureDescriptor {
         label: Some("Blocks texture"),
         size: wgpu::Extent3d { width: 16, height: 16, depth_or_array_layers: 256 },
@@ -217,6 +197,7 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
         store: MeshingState {
             device,
             queue,
+            world,
             texture,
             texture_layers: EnumMap::default(),
             mesher: ChunkMesher::new(Arc::clone(&mcdata)),
@@ -224,37 +205,40 @@ pub fn chunk_thread(seed: u64, receiver: &Receiver<ToChunkThreadMessage>, mcdata
             chunk_full_face_materials: Default::default(),
             chunk_materials: Default::default(),
             materials,
-            chunks: Default::default(),
         },
 
-        mesh_queue: vec![],
+        mesh_queue: OrderSet::new(),
     };
 
     let mut distance = 0isize;
     #[expect(clippy::infinite_loop, reason = "intended")]
     loop {
-        tracing::info!(distance);
-        for y in -5isize..5isize {
-            for dx in -distance..=distance {
-                state.gen_chunk(ISizeVec3::new(dx, y, -distance));
-                state.gen_chunk(ISizeVec3::new(dx, y, distance));
-            }
-            for dz in (-distance + 1)..distance {
-                state.gen_chunk(ISizeVec3::new(-distance, y, dz));
-                state.gen_chunk(ISizeVec3::new(distance, y, dz));
-            }
-            state.drain_mesh_queue();
-            state.store.update_textures();
+        if let Some(chunk_pos) = gen_queue.pop_front() {
+            state.gen_chunk(chunk_pos);
         }
-        distance += 1;
 
-        while let Some(msg) = if distance < 20 { receiver.try_recv().ok() } else { receiver.recv().ok() } {
+        if gen_queue.is_empty() && distance < 20 {
+            tracing::info!(distance);
+            for y in -5isize..5isize {
+                for dx in -distance..=distance {
+                    gen_queue.push_back(ISizeVec3::new(dx, y, -distance));
+                    gen_queue.push_back(ISizeVec3::new(dx, y, distance));
+                }
+                for dz in (-distance + 1)..distance {
+                    gen_queue.push_back(ISizeVec3::new(-distance, y, dz));
+                    gen_queue.push_back(ISizeVec3::new(distance, y, dz));
+                }
+            }
+            distance += 1;
+        }
+
+        state.drain_mesh_queue();
+        state.store.update_textures();
+
+        if let Some(msg) = if !gen_queue.is_empty() { receiver.try_recv().ok() } else { receiver.recv().ok() } {
             match msg {
-                ToChunkThreadMessage::RegenWithSeed(new_seed) => {
-                    state.generator = crate::proc_gen::Generator::new(new_seed);
-                    state.mesh_queue.clear();
-                    state.store.clear_all_chunks();
-                    distance = 0;
+                ToChunkThreadMessage::RemeshChunk(pos) => {
+                    state.mesh_queue.insert(pos);
                 },
             }
         }

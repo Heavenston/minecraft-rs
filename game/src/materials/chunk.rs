@@ -1,13 +1,14 @@
-use std::sync::Arc;
 use crevice::std140::AsStd140;
 use engine::{ wgpu, Material, render_graph_nodes as engine_graph, renderer::resources as render_res };
-use glam::Vec3;
+use glam::{ISizeVec3, Vec3};
+use ordermap::{OrderMap, OrderSet};
 use render_graph::ResourceHandle;
 use resource::resource_str;
 
-use super::{ test_aabb_against_frustum, EnableWireframes, CutoutRenderStep, OpaqueRenderStep, TranslucentRenderStep };
+use super::{ EnableWireframes, CutoutRenderStep, OpaqueRenderStep, TranslucentRenderStep };
 use crate::chunk_mesher::ChunkTransparencyMode;
 use crate::chunk::CHUNK_SIZE;
+use crate::utils::AABB3;
 
 render_graph::graph_resource!(struct ShaderSourceCode(wgpu::naga::Module); permanent);
 render_graph::graph_resource!(struct ShaderModule(wgpu::ShaderModule); permanent);
@@ -25,13 +26,39 @@ struct Immediates {
 }
 
 #[derive(Debug, Clone)]
-pub struct PerChunkRenderData {
-    pub position: Vec3,
-    pub vertex_buffer: wgpu::Buffer,
+#[expect(clippy::module_name_repetitions, reason = "Used elsewere, more clear that it is per-chunk")]
+pub struct ChunkRenderData {
+    chunk_pos: ISizeVec3,
+    position: Vec3,
+    vertex_buffer: wgpu::Buffer,
+}
+
+impl ChunkRenderData {
+    pub fn upload(
+        device: &wgpu::Device,
+        chunk_pos: ISizeVec3,
+        submesh: &crate::chunk_mesher::SubMesh,
+    ) -> Self {
+            let vertices_bytes = bytemuck::cast_slice::<_, u8>(&submesh.vertices);
+            let buffer = device.create_buffer(&wgpu::wgt::BufferDescriptor {
+                label: Some(&format!("chunk,{chunk_pos},{:?}", submesh.vertices)),
+                size: vertices_bytes.len().try_into().unwrap(),
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: true,
+            });
+            buffer.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(vertices_bytes);
+            buffer.unmap();
+
+            Self {
+                chunk_pos,
+                position: (chunk_pos * CHUNK_SIZE.as_isizevec3()).as_vec3(),
+                vertex_buffer: buffer,
+            }
+    }
 }
 
 struct ChunkList {
-    chunks: Arc<[PerChunkRenderData]>,
+    chunks: OrderMap<ISizeVec3, Vec<ChunkRenderData>>,
 }
 
 fn register_global(render_graph: &mut engine::RenderGraphWrapper<'_>) {
@@ -123,7 +150,7 @@ impl engine::GlobalMaterial for GlobalMaterial {
 fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_>) -> ResourceHandle<ChunkList> {
     use render_graph::ResourceConfig as Cfg;
     render_graph::node_helper!(into render_graph;
-        using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::new());
+        using @chunk_list: ChunkList = render_graph.create_resource("chunk_material::chunk_list", Cfg::permanent());
 
         using @transparency: ChunkTransparencyMode = render_graph.create_resource("chunk_material::transparency", Cfg::permanent());
         using @texture: wgpu::Texture = render_graph.create_resource("chunk_material::texture", Cfg::permanent());
@@ -249,7 +276,7 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
             world: ref engine_graph::WorldResource,
             bind_group: ref @bind_group,
             render_pipeline: ref @render_pipeline,
-            chunk_list: @chunk_list,
+            chunk_list: ref @chunk_list,
 
             &transparency: ref @transparency,
             _: ref @draw_step,
@@ -259,9 +286,8 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
             render_pass.push_debug_group(&format!("{transparency:?} Chunk renderer"));
             render_pass.set_pipeline(render_pipeline);
             render_pass.set_bind_group(1, bind_group, &[]);
-            for chunk in &*chunk_list.chunks {
-                let max_pos = chunk.position + CHUNK_SIZE.as_vec3();
-                if !test_aabb_against_frustum(&view_projection, chunk.position, max_pos) { continue }
+            for chunk in chunk_list.chunks.values().flatten() {
+                if !(AABB3 { min: chunk.position, max: chunk.position + CHUNK_SIZE.as_vec3() }).frustrum_test(&view_projection) { continue }
                 render_pass.set_immediates(0, Immediates {
                     position: chunk.position,
                 }.as_std140().as_bytes());
@@ -284,7 +310,8 @@ fn register(cfg: &RenderConfig, render_graph: &mut engine::RenderGraphWrapper<'_
 #[expect(clippy::module_name_repetitions, reason = "Needed here to not clash with Material trait")]
 pub struct ChunkMaterial {
     pub cfg: RenderConfig,
-    pub chunk_list: Arc<[PerChunkRenderData]>,
+    remove_chunks: OrderSet<ISizeVec3>,
+    new_chunks: OrderMap<ISizeVec3, Vec<ChunkRenderData>>,
     chunk_list_resource: Option<ResourceHandle<ChunkList>>,
 }
 
@@ -292,9 +319,20 @@ impl ChunkMaterial {
     pub fn new(cfg: RenderConfig) -> Self {
         Self {
             cfg,
-            chunk_list: Default::default(),
+            remove_chunks: OrderSet::new(),
+            new_chunks: OrderMap::new(),
             chunk_list_resource: None,
         }
+    }
+
+    pub fn remove_chunk(&mut self, pos: ISizeVec3) {
+        self.remove_chunks.insert(pos);
+        self.new_chunks.remove(&pos);
+    }
+
+    pub fn insert_chunk(&mut self, data: ChunkRenderData) {
+        self.new_chunks.entry(data.chunk_pos)
+            .or_default().push(data);
     }
 }
 
@@ -310,6 +348,17 @@ impl Material for ChunkMaterial {
     }
 
     fn update(&mut self, render_graph: &mut render_graph::RenderGraph) {
-        render_graph.set_resource_input(self.chunk_list_resource.unwrap(), ChunkList { chunks: Arc::clone(&self.chunk_list) });
+        let chunk_list_resource = self.chunk_list_resource.unwrap();
+        let chunk_list = render_graph.compute_resource(chunk_list_resource).into_mut();
+        let changed = !self.remove_chunks.is_empty() || !self.new_chunks.is_empty();
+        if !changed { return; }
+        for pos in self.remove_chunks.drain(..) {
+            chunk_list.chunks.remove(&pos);
+        }
+        for new in self.new_chunks.drain(..).flat_map(|(_,c)| c) {
+            chunk_list.chunks.entry(new.chunk_pos)
+                .or_default().push(new);
+        }
+        render_graph.mark_resource_input_dirty(chunk_list_resource);
     }
 }

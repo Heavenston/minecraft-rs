@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use glam::USizeVec3;
 use ordermap::{OrderSet, orderset};
 
-use crate::{resource_location::{ResourceLocation, location}, utils::RefOrOwned};
+use crate::{resource_location::{ResourceLocation, location}, utils::{Axis, CardinalDirection, EnumSet, RefOrOwned, Sign}};
 
 mod block_index;
 pub use block_index::*;
@@ -132,6 +132,16 @@ impl Chunk {
         &VALUE
     }
 
+    pub fn blocks_touches_neighbors(idx: ChunkBlockIndex) -> EnumSet<CardinalDirection> {
+        let pos = idx.as_pos();
+        let mut set = EnumSet::empty();
+        for axis in Axis::VALUES {
+            set = if pos[axis] == 0 { set.with(CardinalDirection { sign: Sign::Negative, axis }) } else { set };
+            set = if pos[axis] == 15 { set.with(CardinalDirection { sign: Sign::Positive, axis }) } else { set };
+        }
+        set
+    }
+
     pub fn new() -> Self {
         Self::new_filled(BlockData {
             id: location!("minecraft:air"),
@@ -186,7 +196,6 @@ impl Chunk {
         self.blocks.set(idx, palette_idx);
     }
 
-    #[expect(dead_code, reason = "yet-unused util")]
     pub fn set_data(&mut self, idx: ChunkBlockIndex, val: &BlockData) {
         let palette_idx = self.palette_insert(val);
         self.set(idx, palette_idx);

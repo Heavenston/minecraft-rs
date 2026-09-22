@@ -1,7 +1,7 @@
 use std::{hint::likely, ops::{Index, IndexMut}};
 
 use super::{CHUNK_SIZE, CHUNK_BLOCK_COUNT};
-use glam::USizeVec3;
+use glam::{ ISizeVec3, USizeVec3 };
 use static_assertions as sa;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -13,6 +13,13 @@ impl ChunkBlockIndex {
             // SAFETY: `pos.cmplt(CHUNK_SIZE)` 
             unsafe { Self::from_pos_unchecked(pos) }
         })
+    }
+
+    pub fn from_pos_rem_euclid(pos: ISizeVec3) -> Self {
+        // Sanity check, required for the safety to uphold
+        debug_assert_eq!(CHUNK_SIZE.as_isizevec3().as_usizevec3(), CHUNK_SIZE);
+        // SAFETY: rem_euclid leads to a value < CHUNK_SIZE
+        unsafe { Self::from_pos_unchecked(pos.rem_euclid(CHUNK_SIZE.as_isizevec3()).as_usizevec3()) }
     }
 
     pub fn from_usize(val: usize) -> Option<Self> {

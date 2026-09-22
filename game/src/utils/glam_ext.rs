@@ -38,6 +38,8 @@ pub const trait ConstVec {
     fn const_cmpge(self, other: Self) -> Self::BVec;
     fn const_cmplt(self, other: Self) -> Self::BVec;
     fn const_cmple(self, other: Self) -> Self::BVec;
+    fn const_cmpeq(self, other: Self) -> Self::BVec;
+    fn const_cmpne(self, other: Self) -> Self::BVec;
 }
 
 pub const trait AxisVec2Ext: Vec2Swizzles {
@@ -140,6 +142,14 @@ macro_rules! impl_for_glam_vecs {
             fn const_cmple(self, other: Self) -> Self::BVec {
                 BVec3::new(self.x.le(&other.x), self.y.le(&other.y), self.z.le(&other.z))
             }
+
+            fn const_cmpeq(self, other: Self) -> Self::BVec {
+                BVec3::new(self.x.eq(&other.x), self.y.eq(&other.y), self.z.eq(&other.z))
+            }
+
+            fn const_cmpne(self, other: Self) -> Self::BVec {
+                BVec3::new(self.x.ne(&other.x), self.y.ne(&other.y), self.z.ne(&other.z))
+            }
         }
 
         const impl ConstVec for $vec2 {
@@ -167,6 +177,14 @@ macro_rules! impl_for_glam_vecs {
 
             fn const_cmple(self, other: Self) -> Self::BVec {
                 BVec2::new(self.x.le(&other.x), self.y.le(&other.y))
+            }
+
+            fn const_cmpeq(self, other: Self) -> Self::BVec {
+                BVec2::new(self.x.eq(&other.x), self.y.eq(&other.y))
+            }
+
+            fn const_cmpne(self, other: Self) -> Self::BVec {
+                BVec2::new(self.x.ne(&other.x), self.y.ne(&other.y))
             }
         }
 

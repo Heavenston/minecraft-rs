@@ -13,6 +13,8 @@ mod gather;
 pub use gather::Gather;
 mod ref_or_owned;
 pub use ref_or_owned::*;
+pub mod dda;
+pub use dda::Dda;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vec3Range(pub USizeVec3, pub USizeVec3);
